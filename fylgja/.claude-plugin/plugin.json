@@ -1,0 +1,8 @@
+{
+  "name": "fylgja",
+  "description": "Fylgja operational memory: injects the repo's memory bucket at session start, checks risky commands against stored hazards, and registers the fylgja MCP server everywhere.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lukasknb"
+  }
+}

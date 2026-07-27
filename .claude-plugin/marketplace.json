@@ -1,0 +1,13 @@
+{
+  "name": "fylgja",
+  "owner": {
+    "name": "Lukasknb"
+  },
+  "plugins": [
+    {
+      "name": "fylgja",
+      "source": "./fylgja",
+      "description": "Fylgja operational memory: session-start recall, command-hazard precheck, and the fylgja MCP server in every project."
+    }
+  ]
+}
