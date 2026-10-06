@@ -3,11 +3,14 @@
   "owner": {
     "name": "Lukasknb"
   },
+  "metadata": {
+    "description": "Fylgja for Claude Code."
+  },
   "plugins": [
     {
       "name": "fylgja",
       "source": "./fylgja",
-      "description": "Fylgja operational memory: session-start recall, command-hazard precheck, and the fylgja MCP server in every project."
+      "description": "Fylgja in every Claude Code session: the knowledge-base tools in every project, pasted record references and links drawn as what they are, one-line receipts for writes, and a line when sign-in is needed. It never adds to what Claude reads and never delays a prompt."
     }
   ]
 }

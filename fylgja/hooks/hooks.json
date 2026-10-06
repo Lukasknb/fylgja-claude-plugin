@@ -1,30 +1,3 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|clear",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/fylgja-context.sh",
-            "timeout": 15,
-            "statusMessage": "Fetching Fylgja operational memory..."
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/fylgja-precheck.sh",
-            "timeout": 8,
-            "statusMessage": "Checking Fylgja hazard notes..."
-          }
-        ]
-      }
-    ]
-  }
+  "modules": ["./register.ts"]
 }

@@ -1,7 +1,7 @@
 {
   "name": "fylgja",
-  "description": "Fylgja operational memory: injects the repo's memory bucket at session start, checks risky commands against stored hazards, and registers the fylgja MCP server everywhere.",
-  "version": "0.1.0",
+  "description": "Fylgja in every Claude Code session: the knowledge-base tools in every project, pasted record references and links drawn as what they are, one-line receipts for writes, and a line when sign-in is needed. It never adds to what Claude reads and never delays a prompt.",
+  "version": "0.2.0",
   "author": {
     "name": "Lukasknb"
   }
