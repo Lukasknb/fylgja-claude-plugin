@@ -1,0 +1,8 @@
+{
+  "name": "fylgja-lab-map",
+  "description": "Experiment: /map opens the Fylgja project tree as Miller columns you move through with the arrow keys, with what is known at each place one key away. Read-only; it never adds to what Claude reads.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lukasknb"
+  }
+}

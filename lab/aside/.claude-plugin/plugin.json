@@ -1,0 +1,8 @@
+{
+  "name": "fylgja-lab-aside",
+  "description": "Experiment: /aside <question> answers a quick question from Fylgja in a pane of its own while Claude keeps working. It starts no turn and adds nothing to the conversation. The answer is written by a small model from the records the mod read, so it spends your own Claude usage.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lukasknb"
+  }
+}

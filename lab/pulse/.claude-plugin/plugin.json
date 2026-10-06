@@ -1,0 +1,8 @@
+{
+  "name": "fylgja-lab-pulse",
+  "description": "Experiment: /pulse opens a picture of where the work has been. A heatmap of a project's children over days or weeks, and a constellation of the same subtree, drawn from Fylgja's timeline. Read-only; it never adds to what Claude reads.",
+  "version": "0.0.1",
+  "author": {
+    "name": "Lukasknb"
+  }
+}

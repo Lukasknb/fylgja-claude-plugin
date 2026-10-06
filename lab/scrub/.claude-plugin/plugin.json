@@ -1,0 +1,8 @@
+{
+  "name": "fylgja-lab-scrub",
+  "description": "Experiment: /scrub opens a meeting's transcript as a timeline you move through with the keyboard or the mouse, replay like a chat, and quote from. Read-only; nothing is added to what Claude reads.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lukasknb"
+  }
+}

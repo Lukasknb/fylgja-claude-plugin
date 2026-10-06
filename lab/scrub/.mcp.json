@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fylgja": {
+      "type": "http",
+      "url": "https://fylgja.lknblab.dev/mcp"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "fylgja-lab-peek",
+  "description": "Experiment: read a Fylgja record without leaving the conversation. Links to records in Claude's replies and pasted references get a chip with a hover card, a click opens the record in a pane beside the transcript, and /peek opens the same pane by hand. It only draws and reads: nothing is added to what Claude reads and no prompt is delayed.",
+  "version": "0.0.1",
+  "author": {
+    "name": "Lukasknb"
+  },
+  "userConfig": {
+    "replyLinks": {
+      "type": "string",
+      "title": "Links in replies",
+      "description": "\"pressable\" (default): a reply that cites Fylgja records is drawn by this plugin, so a click on a citation opens the peek pane. \"engine\": Claude Code keeps drawing the reply and its links open as they always do; only the chips under the reply open the pane.",
+      "required": false,
+      "default": "pressable",
+      "options": ["pressable", "engine"]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "fylgja-lab-browse",
+  "description": "Experiment: /fylgja opens the Fylgja knowledge base as a pane beside the conversation, with search as you type, tabs, and a reference you can drop into the prompt box. It only reads, and never adds to what Claude reads.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lukasknb"
+  },
+  "types": "./types/index.d.ts"
+}

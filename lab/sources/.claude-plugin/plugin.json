@@ -1,0 +1,25 @@
+{
+  "name": "fylgja-lab-sources",
+  "description": "Experiment: /sources shows which Fylgja records the last answer rests on, how Claude reached each, and whether every record the answer cites was really read in this session. It watches Claude's Fylgja reads without changing them, and never adds to what Claude reads.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lukasknb"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "markUnreadCitations": {
+      "type": "boolean",
+      "title": "Mark citations that were not read",
+      "description": "In Claude's replies, put a small ◌ after a link to a Fylgja record that no Fylgja tool returned in this session. Drawn only; the reply itself is not changed.",
+      "required": false,
+      "default": true
+    },
+    "turnSummary": {
+      "type": "boolean",
+      "title": "One line after an answer that used Fylgja",
+      "description": "After an answer for which Claude read Fylgja records, show one line with the count, such as \"3 records read · /sources\". Never a title.",
+      "required": false,
+      "default": false
+    }
+  }
+}

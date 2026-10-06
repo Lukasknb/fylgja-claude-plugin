@@ -1,0 +1,8 @@
+{
+  "name": "fylgja-lab-picker",
+  "description": "Experiment: mention a Fylgja meeting the way you mention a file. Type @@ or {{ and a few letters in the prompt box; matching records are listed above the prompt and one keystroke puts the reference in. /pick opens the same list in a pane. It never adds to what Claude reads and never delays a keystroke.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lukasknb"
+  }
+}
