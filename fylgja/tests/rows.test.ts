@@ -459,7 +459,7 @@ describe('what is known, and for how long', () => {
 })
 
 describe('what the plugin never does', () => {
-  test('it leaves a prompt exactly as it came, with nothing added for Claude, and asks nothing for it', async ($, on) => {
+  test('it leaves a prompt with a reference written out exactly as it came, with nothing added for Claude, and asks nothing for it', async ($, on) => {
     const started = scene(on, { resolve: FOUND })
     const prompt = { text: `about ${MEETING}`, wait: false, origin: { kind: 'composer' }, context: ['from elsewhere'] } as const
 

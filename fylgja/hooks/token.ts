@@ -77,3 +77,11 @@ export function distinctById(tokens: readonly Token[]): Token[] {
     return true
   })
 }
+
+/**
+ * The title written inside a token, or '' when it has none. Whatever the
+ * person pasted: nothing checks it against the record.
+ */
+export function titleOf(token: Token): string {
+  return token.text.slice(HEAD_LENGTH + token.kind.length, token.bar - token.start).trim()
+}

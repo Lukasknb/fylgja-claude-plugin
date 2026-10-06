@@ -1,7 +1,7 @@
 {
   "name": "fylgja",
   "description": "Fylgja in every Claude Code session: the knowledge-base tools in every project, pasted record references and links drawn as what they are, one-line receipts for writes, and a line when sign-in is needed. It never adds to what Claude reads and never delays a prompt.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": {
     "name": "Lukasknb"
   }

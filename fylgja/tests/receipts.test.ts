@@ -231,11 +231,11 @@ describe('what the plugin hooks', () => {
     }
   })
 
-  test('it hooks no prompt on its way to Claude, no tool call, and nothing that rewrites the conversation', () => {
+  test('it hooks the prompt box and the prompt as sent, no tool call, and nothing that rewrites the conversation', () => {
     expect(
       hooked()
         .map(hook => hook.event)
         .filter(event => event !== 'ui.render'),
-    ).toEqual(['session.start', 'classic.SessionStart', 'prompt.edit'])
+    ).toEqual(['session.start', 'classic.SessionStart', 'prompt.edit', 'prompt.submit'])
   })
 })
