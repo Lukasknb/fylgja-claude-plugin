@@ -19,7 +19,7 @@ import * as Band from './band'
 import { isPrompt, observe, pathsOf, plain } from './delta'
 import type { Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
-import { REFUSED } from './grant'
+import { OWN_SERVER, REFUSED } from './grant'
 import { WAKE_DEADLINE_MS, wake } from './loop'
 import type { LoopHost } from './loop'
 import * as Plans from './plans'
@@ -129,6 +129,8 @@ export type Scribe = {
   commits: Set<string>
   /** Whether a call of Scribe's own has got through to Fylgja in this session. */
   isGranted: boolean
+  /** Whether Fylgja has been asked at all in this session, got through or not. */
+  hasAsked: boolean
   /** Things said once: in the debug log, or on the status line. */
   said: Set<string>
   /** Counts the times the session started over; an answer from before is dropped. */
@@ -174,6 +176,10 @@ export const MAX_PAST_CHARS = 3000
 /** What the status line says, until the next prompt, when Scribe's calls are not let through. */
 export const OFF_STATUS = 'Scribe is off in this session: its calls to Fylgja are not let through here'
 
+/** What the status line says when Fylgja runs under a connection that is not the plugin's own. */
+export const TWIN_STATUS =
+  'Scribe is off in this session: Fylgja is also set up outside the plugin here, and Scribe only works through the connection the plugin itself declares'
+
 const HOUR_MS = 3_600_000
 const MAX_LOOKUP_PATHS = 30
 const MAX_DEFERRED = 10
@@ -209,6 +215,7 @@ export function create(options: Options): Scribe {
     deferred: [],
     commits: new Set(),
     isGranted: false,
+    hasAsked: false,
     said: new Set(),
     epoch: 0,
     refused: 0,
@@ -253,6 +260,7 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   startOver(scribe)
   scribe.carry = undefined
   scribe.isGranted = false
+  scribe.hasAsked = false
   scribe.isInteractive = isInteractive && (surface === 'terminal' || surface === 'desktop')
 }
 
@@ -361,9 +369,26 @@ async function identityOf(host: ScribeHost, scribe: Scribe): Promise<Identity | 
   return scribe.identity
 }
 
-/** The name Fylgja's server goes by, or undefined when it is not connected or does not say in time. */
-function connected(host: ScribeHost): Promise<string | undefined> {
-  return limited(host.after, host.server(), CALL_TIMEOUT_MS).catch(() => undefined)
+/**
+ * The name the plugin's own server goes by, or undefined when it is not
+ * connected or does not say in time.
+ *
+ * Any other name ends Scribe for the session, before it has asked Fylgja or
+ * a model anything: the same address is then also configured outside the
+ * plugin, the engine runs the two as one under that other entry, and that
+ * entry's credentials are whoever wrote it, which a cloned repository's
+ * `.mcp.json` can be. Scribe writes only through the plugin's own connection.
+ */
+async function connected(host: ScribeHost, scribe: Scribe): Promise<string | undefined> {
+  const server = await limited(host.after, host.server(), CALL_TIMEOUT_MS).catch(() => undefined)
+
+  if (server !== undefined && server !== OWN_SERVER) {
+    switchOff(host, scribe, 'twin')
+
+    return undefined
+  }
+
+  return server
 }
 
 function once(scribe: Scribe, what: string): boolean {
@@ -385,13 +410,24 @@ async function call(
   tool: string,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown> | undefined> {
-  const server = await connected(host)
+  const server = await connected(host, scribe)
 
   if (server === undefined) {
     throw new Error('Fylgja is not connected')
   }
 
-  const answer = payloadOf(await limited(host.after, host.call(server, tool, args), CALL_TIMEOUT_MS))
+  const answer = payloadOf(
+    await limited(host.after, host.call(server, tool, args), CALL_TIMEOUT_MS).catch((error: unknown) => {
+      // A call that is not let through, whichever it is, ends Scribe for
+      // the session: it does not go on reading and asking a model for
+      // records it may not write.
+      if (error instanceof Error && error.message === REFUSED) {
+        switchOff(host, scribe, 'refused')
+      }
+
+      throw error
+    }),
+  )
 
   scribe.isGranted = true
 
@@ -405,19 +441,22 @@ async function call(
 }
 
 /**
- * Scribe's own calls are not let through in this session: a rule refuses
- * them, or the server is one the plugin's permission rule does not cover.
- * It stops for the session, before it has asked a model anything, and says
- * so once where the developer can see it.
+ * Scribe stops for the session: a call of its own was not let through, or
+ * Fylgja is connected through something other than the plugin's own entry.
+ * It says why once, on the line under the prompt, and does nothing more.
  */
-function switchOff(host: ScribeHost, scribe: Scribe): void {
+function switchOff(host: ScribeHost, scribe: Scribe, why: 'refused' | 'twin'): void {
   scribe.identity = null
   scribe.band = { ...Band.create(), kept: scribe.band.kept }
   scribe.deferred = []
 
-  if (once(scribe, 'refused')) {
-    host.status(OFF_STATUS)
-    host.debug('Scribe: its own call to Fylgja was refused; off for this session')
+  if (once(scribe, 'off')) {
+    host.status(why === 'twin' ? TWIN_STATUS : OFF_STATUS)
+    host.debug(
+      why === 'twin'
+        ? 'Scribe: Fylgja is connected through an entry the plugin does not declare; off for this session'
+        : 'Scribe: its own call to Fylgja was refused; off for this session',
+    )
   }
 
   host.redraw()
@@ -427,12 +466,22 @@ function defer(scribe: Scribe, work: Deferred): void {
   scribe.deferred = [...scribe.deferred, work].slice(-MAX_DEFERRED)
 }
 
-/** A change to a record the developer asked for: made now, or at the next turn when it cannot be made here. */
-async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unknown>): Promise<void> {
+/**
+ * A change to a record the developer asked for: made now, or at the next
+ * turn when it cannot be made here. Whether it was made now.
+ */
+async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unknown>): Promise<boolean> {
   try {
     await call(host, scribe, 'amend_memory', args)
+
+    return true
   } catch {
-    defer(scribe, { tool: 'amend_memory', args })
+    // Off for the session, nothing is kept to try again.
+    if (scribe.identity !== null) {
+      defer(scribe, { tool: 'amend_memory', args })
+    }
+
+    return false
   }
 }
 
@@ -677,13 +726,6 @@ async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe =
   settle(host, scribe)
 }
 
-/** A lookup that failed. One that was not let through ends Scribe for the session; any other is let go. */
-function failed(host: ScribeHost, scribe: Scribe, error: unknown): void {
-  if (error instanceof Error && error.message === REFUSED) {
-    switchOff(host, scribe)
-  }
-}
-
 /** Waits for `work`, but no longer than `ms`. `work` goes on either way. */
 function within(host: ScribeHost, work: Promise<unknown>, ms: number): Promise<void> {
   return limited(host.after, work, ms).then(
@@ -725,13 +767,13 @@ export async function stepped(
 
   wanted(scribe, pathsOf(uses, who.root))
 
-  if ((index + 1) % LOOKUP_EVERY !== 0 || scribe.paths.length === 0 || (await connected(host)) === undefined) {
+  if ((index + 1) % LOOKUP_EVERY !== 0 || scribe.paths.length === 0 || (await connected(host, scribe)) === undefined) {
     return
   }
 
   await within(
     host,
-    lookUp(host, scribe, who).catch((error: unknown) => failed(host, scribe, error)),
+    lookUp(host, scribe, who).catch(() => undefined),
     LOOKUP_WAIT_MS,
   )
 }
@@ -837,7 +879,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   const who = await identityOf(host, scribe)
 
   // Signed out, nothing is read and no model is asked.
-  if (who === null || (await connected(host)) === undefined) {
+  if (who === null || (await connected(host, scribe)) === undefined) {
     return
   }
 
@@ -859,17 +901,31 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
 
   wanted(scribe, seen.touched)
 
+  // The developer's rows are told from every other by the prompt they sent.
+  // Where no row holds it, their words are not labelled as theirs; that is
+  // worth knowing, and says nothing of what was written.
+  if (scribe.hasPrompt && seen.developer === '' && once(scribe, 'no-prompt-row')) {
+    host.debug(
+      'Scribe: a prompt was sent and no row of the conversation holds it; the turn is read without what the developer wrote',
+    )
+  }
+
   // The first call of a session is waited for: whether it gets through
   // decides whether Scribe runs at all. After that a slow lookup does not
   // hold the turn's end.
   if (scribe.isGranted) {
     await within(
       host,
-      lookUp(host, scribe, who).catch((error: unknown) => failed(host, scribe, error)),
+      lookUp(host, scribe, who).catch(() => undefined),
       LOOKUP_WAIT_MS,
     )
   } else {
-    await lookUp(host, scribe, who, true).catch((error: unknown) => failed(host, scribe, error))
+    const first = lookUp(host, scribe, who, true).catch(() => undefined)
+
+    // Waited for in full once. A server that did not answer then is not
+    // given more than a moment at each later turn's end.
+    await (scribe.hasAsked ? within(host, first, LOOKUP_WAIT_MS) : first)
+    scribe.hasAsked = true
   }
 
   if (scribe.identity === null || !scribe.isGranted) {
@@ -980,7 +1036,7 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
   }
 
   // What was said once on the status line has been there long enough.
-  if (scribe.said.has('refused') && once(scribe, 'refused-cleared')) {
+  if (scribe.said.has('off') && once(scribe, 'off-cleared')) {
     host.status(undefined)
   }
 
@@ -1098,6 +1154,27 @@ async function pressedTell(host: ScribeHost, scribe: Scribe, item: Band.Tell, ke
   }
 }
 
+/** Saves the developer's answer to "why" on the record it was asked about, and shows that it was saved. */
+async function reasoned(
+  host: ScribeHost,
+  scribe: Scribe,
+  item: Band.ReasonQuestion,
+  answer: { detail?: string; reason_status: 'stated' | 'no_strong_reason' },
+): Promise<void> {
+  if (await amend(host, scribe, { atom_id: item.id, op: 'fix', ...answer })) {
+    Band.receive(scribe.band, [
+      {
+        id: item.id,
+        kind: 'decision',
+        content: item.content,
+        reasonStatus: answer.reason_status,
+        outcome: 'reasoned',
+        replaced: null,
+      },
+    ])
+  }
+}
+
 async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, item: Band.Question, key: string): Promise<void> {
   const { band } = scribe
 
@@ -1106,12 +1183,12 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
 
     if (option !== undefined) {
       Band.clear(band)
-      await amend(host, scribe, { atom_id: item.id, op: 'fix', detail: option, reason_status: 'stated' })
+      await reasoned(host, scribe, item, { detail: option, reason_status: 'stated' })
     } else if (key === 'other') {
       band.editing = { what: 'reason' }
     } else if (key === 'no-reason') {
       Band.clear(band)
-      await amend(host, scribe, { atom_id: item.id, op: 'fix', reason_status: 'no_strong_reason' })
+      await reasoned(host, scribe, item, { reason_status: 'no_strong_reason' })
     } else if (key === 'skip') {
       band.unanswered += 1
       Band.clear(band)
@@ -1159,9 +1236,15 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
   }
 }
 
-/** Whether a key undoes or settles something for good, and so acts only on its second press. */
-function isForGood(key: string): boolean {
-  return key === 'knew' || key === 'off' || key.startsWith('remove:')
+/**
+ * Whether a key writes to Fylgja or settles something for good, and so acts
+ * only on its second press: removing a record, silencing one for good,
+ * turning Scribe off, making a decision the replacement of a recorded one,
+ * and saving a reason the model proposed. Keys that only open, skip, dismiss
+ * or fill the prompt box act at once.
+ */
+function needsSecondPress(key: string): boolean {
+  return key === 'knew' || key === 'off' || key === 'replaces' || key === 'no-reason' || /^(?:remove|reason):/.test(key)
 }
 
 /** A key of the band was pressed. */
@@ -1173,16 +1256,15 @@ export async function pressed(host: ScribeHost, scribe: Scribe, key: string): Pr
     return
   }
 
-  const isKeptChanged = Band.touch(band)
-  const known = band.kept.known.length
-  const item = band.current
-
-  if (isForGood(key)) {
+  if (needsSecondPress(key)) {
     if (!Band.confirmed(band, key, await host.now())) {
+      const { armed } = band
+
       // The first press only makes the key say what a second will do, for a
-      // few seconds.
+      // few seconds. It is no sign of attention either: a stray digit is
+      // exactly what it guards against.
       host.after(Band.ARM_MS, () => {
-        if (scribe.band === band && band.armed?.key === key) {
+        if (scribe.band === band && band.armed === armed) {
           band.armed = null
           host.redraw()
         }
@@ -1194,6 +1276,10 @@ export async function pressed(host: ScribeHost, scribe: Scribe, key: string): Pr
   } else {
     band.armed = null
   }
+
+  const isKeptChanged = Band.touch(band)
+  const known = band.kept.known.length
+  const item = band.current
 
   if (key === 'about') {
     band.isAboutOpen = true
@@ -1259,18 +1345,13 @@ export async function entered(host: ScribeHost, scribe: Scribe, key: string, val
       return
     }
 
-    const { id } = band.current
+    const asked = band.current
 
     Band.clear(band)
 
     // "No idea" is an answer too: it is kept as one, in their words, and
     // never passed off as a reason.
-    await amend(host, scribe, {
-      atom_id: id,
-      op: 'fix',
-      detail: text,
-      reason_status: saysNoReason(text) ? 'no_strong_reason' : 'stated',
-    })
+    await reasoned(host, scribe, asked, { detail: text, reason_status: saysNoReason(text) ? 'no_strong_reason' : 'stated' })
   }
 
   settle(host, scribe)

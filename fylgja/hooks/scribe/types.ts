@@ -63,8 +63,8 @@ export type Written = {
   kind: RecordKind
   content: string
   reasonStatus: ReasonStatus | null
-  /** Whether it is new, or one that had been removed and is back. */
-  outcome: 'created' | 'restored'
+  /** Whether it is new, one that had been removed and is back, or one whose reason the developer just gave. */
+  outcome: 'created' | 'restored' | 'reasoned'
   /** The sentence of the recorded decision it replaced, when it replaced one. */
   replaced: string | null
 }

@@ -1,13 +1,13 @@
 // Grades a scenario run against what each scenario expects and prints its
 // tables, as RESULTS.md holds them.
 //
-//   node report.mjs <out-dir>
+//   node report.mjs <out-dir> [set]
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { SCENARIOS } from './scenarios.mjs'
-
 const out = process.argv[2]
+// The second argument names the set that was run: `heldout` for scenarios-heldout.mjs.
+const { SCENARIOS } = await import(process.argv[3] === undefined ? './scenarios.mjs' : `./scenarios-${process.argv[3]}.mjs`)
 const outcomes = readdirSync(join(out, 'results'))
   .filter(name => name.endsWith('.json'))
   .flatMap(name => JSON.parse(readFileSync(join(out, 'results', name), 'utf8')))

@@ -352,12 +352,13 @@ describe('Scribe’s own calls to Fylgja', () => {
     expect(verdictFor({ decision: 'ask' }, OWN, 'fylgja', SERVER).decision).toBe('allow')
   })
 
-  test('where the person runs the same endpoint under their own name, the engine answers that name and its tools are the ones let through', () => {
-    const theirs = { ...OWN, tool: 'mcp__fylgja__recall' }
-
-    expect(isOwnCall(theirs, 'fylgja', 'fylgja')).toBe(true)
-    expect(isOwnCall(OWN, 'fylgja', 'fylgja'), 'and the plugin’s own name is then nobody’s').toBe(false)
-    expect(isOwnCall(theirs, 'fylgja', SERVER), 'a server of the same name that the engine did not answer').toBe(false)
+  test('where the same address is configured outside the plugin, the engine answers that entry’s name, and nothing of it is let through', () => {
+    // A repository's `.mcp.json` can name the plugin's address with any account's token.
+    for (const theirs of ['fylgja', 'kb']) {
+      expect(isOwnCall({ ...OWN, tool: `mcp__${theirs}__recall` }, 'fylgja', theirs), theirs).toBe(false)
+      expect(isOwnCall(OWN, 'fylgja', theirs), 'nor the plugin’s own tools while it is the one connected').toBe(false)
+      expect(isOwnCall({ ...OWN, tool: `mcp__${theirs}__recall` }, 'fylgja', SERVER)).toBe(false)
+    }
   })
 
   test('a refusal is never turned into anything else, and an allow is left as it came', () => {
@@ -633,7 +634,7 @@ describe('what Scribe keeps', () => {
     await turn($, set, dev('SECRET-PROMPT in src/mail/send.ts'), claude('SECRET-REPLY', edit(FILE)))
     await pressTwice($, 'knew')
     await turn($, set, dev('SECRET-PROMPT-TWO'), claude('SECRET-REPLY-TWO', edit('src/SECRET-PATH.ts')))
-    await press($, 'reason:0')
+    await pressTwice($, 'reason:0')
     await turn($, set, dev('SECRET-PROMPT-THREE'), claude('SECRET-REPLY-THREE', edit(FILE)))
     await set.clock.advance(30_000)
 

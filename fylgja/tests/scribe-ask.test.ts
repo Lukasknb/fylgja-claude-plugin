@@ -1,7 +1,22 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { answer, idOf } from './fixtures'
-import { band, claude, decision, dev, edit, fact, NOTHING, press, shown, stage, START, turn, verdict } from './scribe-fixtures'
+import {
+  band,
+  claude,
+  decision,
+  dev,
+  edit,
+  fact,
+  NOTHING,
+  press,
+  pressTwice,
+  shown,
+  stage,
+  START,
+  turn,
+  verdict,
+} from './scribe-fixtures'
 
 const TALK = [dev('Use Postgres for the queue lock.'), claude('Done.', edit('src/queue/lock.ts'))]
 
@@ -43,12 +58,14 @@ describe('Scribe asks why', () => {
 
     await $.session.start(START)
     await turn($, set, ...TALK)
-    await press($, 'reason:1')
+    await pressTwice($, 'reason:1')
 
     expect(set.of('amend_memory')).toEqual([
       { atom_id: idOf(101), op: 'fix', detail: 'Redis was flaky in CI', reason_status: 'stated' },
     ])
-    expect(await shown($)).toMatch('✓ Recorded')
+    expect(await shown($)).toBe(
+      '✓ Reason saved · Use Postgres advisory locks for the job queue, not Redis. [1 Fix] [2 Remove] [0 OK]',
+    )
   })
 
   test('Skip saves nothing: the record stays without a reason', async ($, on) => {
@@ -67,7 +84,7 @@ describe('Scribe asks why', () => {
 
     await $.session.start(START)
     await turn($, set, ...TALK)
-    await press($, 'no-reason')
+    await pressTwice($, 'no-reason')
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'fix', reason_status: 'no_strong_reason' }])
   })
@@ -186,7 +203,7 @@ describe('Scribe asks why', () => {
       seen.push((await shown($)).includes('? Why'))
 
       if (seen.at(-1) === true) {
-        await press($, 'reason:0')
+        await pressTwice($, 'reason:0')
       }
 
       await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
@@ -214,7 +231,7 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
 
     await $.session.start(START)
     await turn($, set, ...TALK)
-    await press($, 'replaces')
+    await pressTwice($, 'replaces')
 
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5), reason_status: 'stated' }])
     expect(await shown($)).toMatch('· replaces: Use Redis with Redlock for the job queue.')
@@ -225,14 +242,14 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
 
     await $.session.start(START)
     await turn($, set, ...TALK)
-    await press($, 'replaces')
+    await pressTwice($, 'replaces')
 
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5), reason_status: 'not_stated' }])
     expect(await shown($)).toBe(
       '? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Other] [3 No particular reason] [0 Skip]',
     )
 
-    await press($, 'no-reason')
+    await pressTwice($, 'no-reason')
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'fix', reason_status: 'no_strong_reason' }])
   })
@@ -293,7 +310,7 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
     expect(set.of('remember')).toEqual([])
     expect(await shown($)).toMatch('? This looks like it replaces a recorded decision.')
 
-    await press($, 'replaces')
+    await pressTwice($, 'replaces')
 
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5) }])
     expect(await shown($)).toBe(

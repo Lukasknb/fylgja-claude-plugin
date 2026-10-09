@@ -25,6 +25,8 @@ export type Session = {
    * has connected, and again while the person has to sign in.
    */
   server: string | undefined
+  /** A line of Scribe's for the status line, shown while the sign-in line is not up. */
+  notice: string | undefined
   /** Runs while the sign-in line is up, and only then. */
   recheck: { cancel: () => void } | undefined
   /**
@@ -43,6 +45,7 @@ export function create(): Session {
     isLooking: false,
     signIn: SignIn.create(),
     server: undefined,
+    notice: undefined,
     recheck: undefined,
     epoch: 0,
   }

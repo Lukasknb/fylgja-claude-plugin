@@ -390,6 +390,7 @@ describe('Scribe records', () => {
     ['with nothing to commit', 'git commit -m x', 'nothing to commit, working tree clean'],
     ['in another repository by -C', 'git -C /work/other commit -m x', '[main 9f9f9f9] x'],
     ['in another repository by cd', 'cd /work/other && git commit -m x', '[main 9f9f9f9] x'],
+    ['in a folder of the tree, which may be a repository of its own', 'cd vendor/lib && git commit -m x', '[main 9f9f9f9] x'],
     ['in a place the command does not say', 'cd "$OTHER" && git commit -m x', '[main 9f9f9f9] x'],
     ['with another git directory', 'git --git-dir=/work/other/.git commit -m x', '[main 9f9f9f9] x'],
   ] as const) {
@@ -407,7 +408,7 @@ describe('Scribe records', () => {
     const set = stage(on)
 
     await $.session.start(START)
-    await turn($, set, dev('commit it'), committed(`cd ${ROOT}/sub && git -C ${ROOT} commit -m x`, '[main 7a7a7a7] x'))
+    await turn($, set, dev('commit it'), committed(`cd ${ROOT} && git -C ${ROOT} commit -m x`, '[main 7a7a7a7] x'))
 
     expect(set.of('attach_commit').map(args => args.sha)).toEqual(['7a7a7a7'])
   })

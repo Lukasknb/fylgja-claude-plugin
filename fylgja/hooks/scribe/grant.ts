@@ -19,46 +19,44 @@ export const REFUSED = 'refused'
 export type Checked = { tool: string; tool_use_id?: string; agentId?: string; ceiling?: string }
 
 /**
- * The start of the name every tool of `server` goes by: `mcp__`, the
- * server's name with everything but letters, digits, `_` and `-` made `_`,
- * and `__`.
+ * The name the plugin's own server goes by once the engine has connected it:
+ * the plugin's name and the server's as `.mcp.json` declares it.
  */
-export function toolPrefixOf(server: string): string {
-  return `mcp__${server.replace(/[^a-zA-Z0-9_-]/g, '_')}__`
-}
+export const OWN_SERVER = 'plugin:fylgja:fylgja'
+
+/** The start of the name every tool of the plugin's own server goes by. */
+const OWN_TOOL = 'mcp__plugin_fylgja_fylgja__'
 
 /**
  * Whether a call being checked is this plugin's own call of one of its
- * listed tools on Fylgja's server.
+ * listed tools on its own server.
  *
  * All of it must hold: the call was raised by this plugin (the engine names
  * who raised it, and gives such a call an id of its own kind), in no agent's
- * loop, the tool is one of the few listed, and it is a tool of the server
- * the engine connected for the one this plugin declares. An organization's
- * limit on the tool is never lifted.
+ * loop, the tool is one of the few listed, it is a tool of the plugin's own
+ * server, and that server is the one the engine connected when asked for
+ * the plugin's. An organization's limit on the tool is never lifted.
  *
- * The server is known by the name `$.mcp.connect` answered for the plugin's
- * own declared server, and by nothing else. That is the plugin's own server,
- * or, where the person already runs the very same endpoint under a name of
- * their own, that one: the engine then runs the two as one and answers with
- * the person's name for it. A server that merely has the same name and
- * points somewhere else is not answered, and its tools are not let through.
+ * Only the plugin's own server counts. Where a server with the same address
+ * is configured anywhere else (the person's settings, a repository's
+ * `.mcp.json`), the engine runs the two as one under that other entry, with
+ * that entry's credentials: a cloned repository could name any account
+ * there. Its tools are never let through, and Scribe does not run on it.
  *
  * @param raisedBy the plugin whose hook raised the call, as the engine names it
  * @param server the name the engine last answered for the plugin's own server; undefined when it is not connected
  */
 export function isOwnCall(e: Checked, raisedBy: string | undefined, server: string | undefined): boolean {
   const isOurs = raisedBy === 'fylgja' || raisedBy?.startsWith('fylgja@') === true
-  const prefix = server === undefined ? undefined : toolPrefixOf(server)
 
   return (
     isOurs &&
-    prefix !== undefined &&
+    server === OWN_SERVER &&
     e.agentId === undefined &&
     e.tool_use_id?.startsWith(OWN_CALL) === true &&
     (e.ceiling === undefined || e.ceiling === 'allow') &&
-    e.tool.startsWith(prefix) &&
-    OWN_TOOLS.includes(e.tool.slice(prefix.length))
+    e.tool.startsWith(OWN_TOOL) &&
+    OWN_TOOLS.includes(e.tool.slice(OWN_TOOL.length))
   )
 }
 

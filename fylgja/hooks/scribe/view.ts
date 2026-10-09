@@ -6,6 +6,7 @@
 
 import { glyphOf } from '../glyphs'
 import { drawn } from '../plain'
+import { armOf } from './band'
 import type { Band, Item, Receipt } from './band'
 import type { Fact, Written } from './types'
 
@@ -155,7 +156,7 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
         },
       ],
       keys: withAbout(band, [
-        { key: 'replaces', hotkey: '1', label: 'Yes, it replaces it' },
+        twice(band, 'replaces', '1', 'Yes, it replaces it', 'Press again to replace it'),
         { key: 'tell-claude', hotkey: '2', label: 'No, tell Claude' },
         { key: 'different', hotkey: '3', label: 'Different case' },
         { key: 'skip', hotkey: '0', label: 'Skip' },
@@ -172,25 +173,21 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
       },
     ],
     keys: withAbout(band, [
-      ...options.map((label, index) => ({
-        key: `reason:${index}`,
-        hotkey: String(index + 1),
-        label,
-      })),
+      ...options.map((label, index) =>
+        twice(band, `reason:${index}`, String(index + 1), label, 'Press again to save this reason'),
+      ),
       { key: 'other', hotkey: String(options.length + 1), label: 'Other' },
-      {
-        key: 'no-reason',
-        hotkey: String(options.length + 2),
-        label: 'No particular reason',
-      },
+      twice(band, 'no-reason', String(options.length + 2), 'No particular reason', 'Press again to save “no reason”'),
       { key: 'skip', hotkey: '0', label: 'Skip' },
     ]),
   }
 }
 
+const HEADS = { created: 'Recorded · ', restored: 'Restored · ', reasoned: 'Reason saved · ' } as const
+
 /** A key that acts only when pressed twice: what it says before, and once it is waiting for the second press. */
 function twice(band: Band, key: string, hotkey: string, label: string, again: string): Key {
-  return { key, hotkey, label: band.armed?.key === key ? again : label }
+  return { key, hotkey, label: band.armed?.key === armOf(band, key) ? again : label }
 }
 
 /** What one written record's line says: that it is new or back, its sentence, and what it replaced. */
@@ -208,11 +205,7 @@ function receipt(band: Band, shown: Receipt): View {
     return {
       rows: [
         {
-          parts: [
-            mark('✓'),
-            { text: only.outcome === 'restored' ? 'Restored · ' : 'Recorded · ', tone: 'good' },
-            ...written(only),
-          ],
+          parts: [mark('✓'), { text: HEADS[only.outcome], tone: 'good' }, ...written(only)],
         },
       ],
       keys: withAbout(band, [
@@ -241,7 +234,10 @@ function receipt(band: Band, shown: Receipt): View {
     rows: [
       head,
       ...shown.records.map((record, index) => ({
-        parts: [...(record.outcome === 'restored' ? [{ text: 'Restored · ', tone: 'dim' } as const] : []), ...written(record)],
+        parts: [
+          ...(record.outcome === 'created' ? [] : [{ text: HEADS[record.outcome], tone: 'dim' } as const]),
+          ...written(record),
+        ],
         keys: [
           { key: `fix:${index}`, hotkey: String(index * 2 + 1), label: 'Fix' },
           twice(band, `remove:${index}`, String(index * 2 + 2), 'Remove', 'Press again to remove'),

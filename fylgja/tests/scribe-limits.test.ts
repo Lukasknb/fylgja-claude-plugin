@@ -6,8 +6,9 @@ import { register } from '../hooks/register'
 import { factsOf } from '../hooks/scribe/facts'
 import { MAX_RESULT_CHARS } from '../hooks/scribe/loop'
 import { MAX_PLANS_CHARS } from '../hooks/scribe/prompt'
-import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS } from '../hooks/scribe/scribe'
-import { answer, CONNECTED, idOf } from './fixtures'
+import * as Band from '../hooks/scribe/band'
+import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS, TWIN_STATUS } from '../hooks/scribe/scribe'
+import { answer, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
   claude,
   decision,
@@ -17,6 +18,7 @@ import {
   finish,
   NOTHING,
   press,
+  pressTwice,
   ROOT,
   send,
   shown,
@@ -194,7 +196,8 @@ describe('nothing Scribe waits for can wait for ever', () => {
 
 describe('whether Scribe’s calls get through is settled before a model is asked', () => {
   const REFUSED: StageOptions['refused'] = {
-    recall: 'Claude requested permissions to use mcp__fylgja__recall, but you haven’t granted it yet.',
+    recall:
+      'fylgja: $.mcp.call(plugin:fylgja:fylgja, recall) refused: Claude requested permissions to use mcp__plugin_fylgja_fylgja__recall, but you haven’t granted it yet.',
   }
 
   test('a first call that is not let through ends Scribe for the session: no model call, one line of status, nothing more', async ($, on) => {
@@ -222,7 +225,7 @@ describe('whether Scribe’s calls get through is settled before a model is aske
       tools: {
         recall: () => {
           if (isDown) {
-            throw new Error('ECONNRESET')
+            throw new Error('connect ECONNREFUSED: connection refused; access denied by upstream')
           }
 
           return answer({ facts: [] })
@@ -305,8 +308,13 @@ describe('whether Scribe’s calls get through is settled before a model is aske
   test('the permission hook lets the plugin’s own call through on the server the engine connected for it', async () => {
     expect(await checked('plugin:fylgja:fylgja', 'fylgja', 'mcp__plugin_fylgja_fylgja__remember')).toBe('allow')
     expect(await checked('plugin:fylgja:fylgja', 'fylgja@inline', 'mcp__plugin_fylgja_fylgja__recall')).toBe('allow')
-    // The person runs the same endpoint under their own name; the engine answers that name.
-    expect(await checked('fylgja', 'fylgja', 'mcp__fylgja__remember')).toBe('allow')
+  })
+
+  test('the permission hook lets nothing through where the engine answered another entry for the plugin’s server', async () => {
+    for (const theirs of ['fylgja', 'kb']) {
+      expect(await checked(theirs, 'fylgja', `mcp__${theirs}__remember`), theirs).toBe('ask')
+      expect(await checked(theirs, 'fylgja', 'mcp__plugin_fylgja_fylgja__remember'), theirs).toBe('ask')
+    }
   })
 
   test('the permission hook leaves everything else as it came', async () => {
@@ -324,6 +332,273 @@ describe('whether Scribe’s calls get through is settled before a model is aske
       'deny',
     )
     expect(await checked('plugin:fylgja:fylgja', 'fylgja', 'Bash'), 'a built-in').toBe('ask')
+  })
+})
+
+describe('Scribe works only through the plugin’s own connection', () => {
+  const RECORDING = verdict({ records: [decision()] })
+
+  for (const theirs of ['fylgja', 'kb']) {
+    test(`Fylgja connected as “${theirs}”, an entry outside the plugin: nothing is asked of it or of a model, and one line says why`, async ($, on) => {
+      const set = stage(on, { connect: () => ({ isConnected: true, server: theirs }), replies: [RECORDING] })
+
+      await $.session.start(START)
+      await turn($, set, ...WORK)
+      await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
+
+      expect(set.asked, 'no model call').toEqual([])
+      expect(
+        set.calls.filter(call => call.tool !== 'resolve'),
+        'no call of Scribe’s to the knowledge base',
+      ).toEqual([])
+      expect(set.statuses.filter(line => line !== undefined)).toEqual([TWIN_STATUS])
+      expect(set.logged).toEqual([
+        'Scribe: Fylgja is connected through an entry the plugin does not declare; off for this session',
+      ])
+      expect(await shown($)).toBe('engine: AbovePrompt')
+    })
+  }
+
+  test('a write that is not let through ends Scribe for the session too, whichever call it is', async ($, on) => {
+    const set = stage(on, {
+      replies: [RECORDING, RECORDING],
+      refused: { remember: 'fylgja: $.mcp.call(plugin:fylgja:fylgja, remember) refused: a rule of yours denies it' },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+
+    expect(set.statuses.filter(line => line !== undefined)).toEqual([OFF_STATUS])
+    expect(await shown($)).toBe('engine: AbovePrompt')
+
+    await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
+
+    expect([set.asked.length, set.of('remember').length], 'nothing more is spent').toEqual([1, 1])
+  })
+
+  test('a Remove that is not let through ends it as well, and nothing is kept to try again', async ($, on) => {
+    const set = stage(on, {
+      replies: [RECORDING, NOTHING],
+      refused: { amend_memory: 'fylgja: $.mcp.call(plugin:fylgja:fylgja, amend_memory) refused: not granted' },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await pressTwice($, 'remove:0')
+    await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
+
+    expect(set.statuses.filter(line => line !== undefined)).toEqual([OFF_STATUS])
+    expect([set.asked.length, set.of('amend_memory').length]).toEqual([1, 1])
+  })
+
+  test('Scribe’s line and the sign-in line share the line under the prompt without taking each other down', async ($, on) => {
+    let isSignedIn = true
+    const set = stage(on, {
+      connect: () => (isSignedIn ? CONNECTED : NEEDS_SIGN_IN),
+      refused: { recall: 'fylgja: $.mcp.call(plugin:fylgja:fylgja, recall) refused: not granted' },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+
+    expect(set.statuses.at(-1)).toBe(OFF_STATUS)
+
+    // The person is signed out; a row with a reference makes the plugin ask.
+    isSignedIn = false
+
+    const row = await $.ui.mount({
+      plugin: 'fylgja',
+      component: 'UserMessage',
+      props: { text: `{{fylgja:meeting Standup|${idOf(7)}}}`, origin: { kind: 'composer' }, isExpanded: false },
+      surface: 'terminal',
+    })
+
+    await set.clock.settle()
+    await row.unmount()
+
+    expect(set.statuses.at(-1)).toBe('sign in with /mcp')
+
+    // The next prompt takes Scribe's line away, and leaves the sign-in line up.
+    await send($, 'next')
+
+    expect(set.statuses.at(-1)).toBe('sign in with /mcp')
+
+    isSignedIn = true
+    await set.clock.advance(5000)
+
+    expect(set.statuses.at(-1), 'and when sign-in is done, nothing of Scribe’s comes back').toBeUndefined()
+  })
+
+  test('after a first attempt that did not get through for want of an answer, later ones are given a moment only', async ($, on) => {
+    const set = stage(on, { tools: { recall: never } })
+
+    await $.session.start(START)
+    await endsInTime($, set, ...WORK)
+    await send($, 'and now the retry policy')
+
+    let isOver = false
+    const ending = finish($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts'))).then(
+      () => {
+        isOver = true
+      },
+    )
+
+    await set.clock.advance(1499)
+
+    expect(isOver).toBe(false)
+
+    await set.clock.advance(1)
+    await ending
+
+    expect(isOver).toBe(true)
+    expect(set.asked).toEqual([])
+  })
+})
+
+describe('a single press writes nothing', () => {
+  const WHY = { form: 'reason', record: 0, options: ['One less service to run', 'Redis was flaky in CI'] }
+  const ASKING = verdict({ records: [decision({ detail: '', reason_status: 'not_stated' })], question: WHY })
+
+  test('a reason the model proposed is saved only on the second press of its key', async ($, on) => {
+    const set = stage(on, { replies: [ASKING] })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+
+    // A developer answering Claude with "1" in an empty box presses this.
+    await press($, 'reason:0')
+
+    expect(set.of('amend_memory')).toEqual([])
+    expect(await shown($)).toMatch('[1 Press again to save this reason] [2 Redis was flaky in CI]')
+
+    await press($, 'no-reason')
+
+    expect(set.of('amend_memory'), 'another key is a first press of its own').toEqual([])
+    expect(await shown($)).toMatch('[4 Press again to save “no reason”]')
+
+    await press($, 'no-reason')
+
+    expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'fix', reason_status: 'no_strong_reason' }])
+  })
+
+  test('a recorded decision is replaced only on the second press', async ($, on) => {
+    const prior = fact(5, { content: 'Use Redis with Redlock for the job queue.', anchors: [{ path: FILE }] })
+    const set = stage(on, {
+      replies: [verdict({ records: [decision({ supersedes: idOf(5) })] })],
+      tools: { recall: () => answer({ facts: [prior] }) },
+      kept: { 'scribe.known': [idOf(5)] },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'replaces')
+
+    expect(set.of('remember')).toEqual([])
+    expect(await shown($)).toMatch('[1 Press again to replace it]')
+
+    await press($, 'replaces')
+
+    expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5) }])
+  })
+
+  test('a first press is no sign of attention: what was held back for being ignored stays held back', async ($, on) => {
+    const set = stage(on, {
+      tools: { recall: () => answer({ facts: [fact(1, { anchors: [{ path: FILE }] })] }) },
+      kept: { 'scribe.typedPast': 2, 'scribe.skip': 0 },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'knew')
+    await set.clock.settle()
+
+    expect(set.kept.get('scribe.typedPast')).toBe(2)
+
+    await press($, 'knew')
+    await set.clock.settle()
+
+    expect(set.kept.get('scribe.typedPast')).toBe(0)
+  })
+
+  test('Remove is armed for the record, not for its place in the list', () => {
+    const band = Band.create()
+    const written = (n: number) =>
+      ({ id: idOf(n), kind: 'decision', content: `Use ${n}.`, reasonStatus: null, outcome: 'created', replaced: null }) as const
+
+    Band.receive(band, [written(1), written(2)])
+    Band.settle(band)
+
+    expect(Band.confirmed(band, 'remove:1', 0)).toBe(false)
+    expect(band.armed?.key).toBe(`remove:${idOf(2)}`)
+
+    // Four more come in; the list holds four, so the armed record moves up a place.
+    Band.receive(band, [written(3), written(4), written(5)])
+    Band.settle(band)
+
+    expect(Band.confirmed(band, 'remove:1', 100), 'the same place is another record now').toBe(false)
+    expect(Band.confirmed(band, 'remove:1', 200)).toBe(true)
+  })
+})
+
+describe('whose words a row holds', () => {
+  test('a row that holds more than the prompt, as an editor or a hook leaves it, is still the developer’s', async ($, on) => {
+    const set = stage(on)
+
+    await $.session.start(START)
+    await send($, 'make the mailer retry three times')
+    await finish(
+      $,
+      set,
+      {
+        role: 'user',
+        text: '<ide_selection>src/mail/send.ts:12</ide_selection>\nmake the mailer retry three times\n[hook: lint passed]',
+        toolUses: [],
+      },
+      claude('Retrying three times now.', edit(FILE)),
+    )
+
+    expect(set.asked[0]?.prompt).toMatch(
+      '[developer] <ide_selection>src/mail/send.ts:12</ide_selection> make the mailer retry three times',
+    )
+    expect(set.logged).toEqual([])
+  })
+
+  test('a prompt no row holds is noted in the debug log, once, with nothing of what was written', async ($, on) => {
+    const set = stage(on)
+
+    await $.session.start(START)
+    await send($, 'SECRET-PROMPT as typed')
+    await finish($, set, { role: 'user', text: 'something else entirely', toolUses: [] }, claude('Done.', edit(FILE)))
+    await send($, 'SECRET-PROMPT again')
+    await finish($, set, claude('Done again.', edit(FILE)))
+
+    expect(set.logged).toEqual([
+      'Scribe: a prompt was sent and no row of the conversation holds it; the turn is read without what the developer wrote',
+    ])
+  })
+})
+
+describe('a tell from the wake', () => {
+  test('may be for a record anchored to a folder above, and still comes once a turn and never twice', async ($, on) => {
+    const above = fact(2, { anchors: [{ path: 'src/mail' }], content: 'Never log a recipient address.' })
+    const other = fact(3, { anchors: [{ path: 'src' }], content: 'Keep handlers thin.' })
+    const set = stage(on, {
+      tools: { recall: () => answer({ facts: [above, other] }) },
+      replies: [verdict({ tells: [idOf(2), idOf(3)] }), verdict({ tells: [idOf(2)] })],
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+
+    expect(await shown($)).toMatch('Never log a recipient address.')
+
+    await press($, 'dismiss')
+
+    expect(await shown($), 'one a turn').toBe('engine: AbovePrompt')
+
+    await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/mail/retry.ts')))
+
+    expect(await shown($), 'never the same one twice').toBe('engine: AbovePrompt')
   })
 })
 

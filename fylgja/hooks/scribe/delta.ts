@@ -86,19 +86,19 @@ function readText(text: string): string {
 const ELSEWHERE = /--git-dir|--work-tree|\bGIT_DIR\b|\bGIT_WORK_TREE\b|\bpushd\b/
 const DIRS = /(?:\bgit\s+(?:-c\s+\S+\s+)*-C|\bcd)\s+("[^"]*"|'[^']*'|[^\s;&|]+)/g
 
-/** Whether everything a command says about where it runs git lies in the tree at `root`. */
+/**
+ * Whether a command's own text shows that its git runs at the root of the
+ * tree at `root`: it names no other place, or names exactly that root. A
+ * folder inside the tree may be a repository of its own (a submodule, a
+ * nested checkout), so `cd sub && git commit` shows nothing.
+ */
 function isHere(command: string, root: string): boolean {
   if (ELSEWHERE.test(command)) {
     return false
   }
 
   for (const [, quoted = ''] of command.matchAll(DIRS)) {
-    const dir = quoted.replace(/^["']|["']$/g, '').replace(/\/+$/, '')
-    const isInside = dir.startsWith('/')
-      ? dir === root || dir.startsWith(`${root}/`)
-      : !/(?:^|\/)\.\.(?:\/|$)|^[~$-]|[$`]/.test(dir)
-
-    if (!isInside) {
+    if (quoted.replace(/^["']|["']$/g, '').replace(/\/+$/, '') !== root) {
       return false
     }
   }
@@ -112,8 +112,9 @@ function isHere(command: string, root: string): boolean {
  *
  * The line is the proof: a commit that failed prints none, and a command
  * that failed after its commit went through still printed it. A commit made
- * somewhere else (`git -C /other`, `cd /other && git commit`), or anywhere
- * the command's text cannot place, is nobody's to attach here.
+ * somewhere else (`git -C /other`, `cd sub && git commit`), or anywhere the
+ * command's text does not show to be this repository's root, is nobody's
+ * to attach here.
  *
  * @param root the working tree's root
  */
@@ -199,14 +200,38 @@ export function plain(text: string): string {
   return said(text).replace(/\s+/g, ' ').trim()
 }
 
+/** A prompt shorter than this is found only as the whole of a row, or at its start or end; a longer one anywhere in it. */
+const MIN_INSIDE = 12
+
 /**
  * Whether a user-role row holds the developer's own words: one of the
- * prompts they sent, as the plugin saw them sent. A background task's
- * notice, a skill's text, a summary after compaction and what a hook put in
- * are user-role rows too, and are nobody's prompt.
+ * prompts they sent, as the plugin saw them sent. The row may hold more than
+ * the prompt (what an editor or a hook put around it), so the prompt is
+ * looked for inside it. A background task's notice, a skill's text and a
+ * summary after compaction are user-role rows too, and are nobody's prompt.
  */
 export function isPrompt(row: Row, prompts: ReadonlySet<string>): boolean {
-  return row.role === 'user' && row.text !== '' && prompts.has(plain(row.text))
+  if (row.role !== 'user' || row.text === '') {
+    return false
+  }
+
+  const text = plain(row.text)
+
+  if (prompts.has(text)) {
+    return true
+  }
+
+  for (const prompt of prompts) {
+    const isInside =
+      prompt !== '' &&
+      (prompt.length >= MIN_INSIDE ? text.includes(prompt) : text.startsWith(`${prompt} `) || text.endsWith(` ${prompt}`))
+
+    if (isInside) {
+      return true
+    }
+  }
+
+  return false
 }
 
 /**

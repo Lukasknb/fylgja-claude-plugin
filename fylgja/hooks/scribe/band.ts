@@ -206,23 +206,39 @@ export function offerQuestion(band: Band, question: Question, about: string): bo
  * line can list.
  */
 export function receive(band: Band, records: readonly Written[]): void {
-  band.held = [...band.held, ...records].slice(-MAX_RECEIPT)
+  const again = new Set(records.map(record => record.id))
+
+  // A later word on a record takes the place of the earlier one.
+  band.held = [...band.held.filter(record => !again.has(record.id)), ...records].slice(-MAX_RECEIPT)
 }
 
 /** A key that needs a second press acts within this long of the first. */
 export const ARM_MS = 5000
 
 /**
- * Whether `key`, one that undoes or settles something for good, may act
- * now: only on its second press in a row, within `ARM_MS` of the first. The
- * first press changes nothing but what the key says. A digit typed alone
- * into an empty prompt box presses a key of the band, so a single press
- * must never be able to remove a record or silence one for good.
+ * What a key is armed under. A receipt's Remove is armed for the record it
+ * removes, not for its place in the list, which another record coming in
+ * could shift between the two presses.
+ */
+export function armOf(band: Band, key: string): string {
+  const record = key.startsWith('remove:') ? band.receipt?.records[Number(key.slice(7))] : undefined
+
+  return record === undefined ? key : `remove:${record.id}`
+}
+
+/**
+ * Whether `key`, one that writes to Fylgja or settles something for good,
+ * may act now: only on its second press in a row, within `ARM_MS` of the
+ * first. The first press changes nothing but what the key says. A digit
+ * typed alone into an empty prompt box presses a key of the band, and a
+ * question comes up just when a developer may be answering Claude with
+ * "1": so no single press may ever write, replace, remove or silence.
  */
 export function confirmed(band: Band, key: string, now: number): boolean {
-  const isSecond = band.armed?.key === key && now <= band.armed.until
+  const arm = armOf(band, key)
+  const isSecond = band.armed?.key === arm && now <= band.armed.until
 
-  band.armed = isSecond ? null : { key, until: now + ARM_MS }
+  band.armed = isSecond ? null : { key: arm, until: now + ARM_MS }
 
   return isSecond
 }
@@ -266,7 +282,10 @@ export function settle(band: Band): Settled {
   if (band.held.length > 0 && !band.isTyping) {
     band.receipts += 1
     band.receipt = {
-      records: [...(band.receipt?.records ?? []), ...band.held].slice(-MAX_RECEIPT),
+      records: [
+        ...(band.receipt?.records ?? []).filter(shown => !band.held.some(held => held.id === shown.id)),
+        ...band.held,
+      ].slice(-MAX_RECEIPT),
       isOpen: false,
       serial: band.receipts,
     }

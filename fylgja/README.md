@@ -105,7 +105,9 @@ at a time.
 
   `? Why: Use a sessions table, not signed cookies.   1 Sessions must be revocable  2 To list a user's devices  3 Other  4 No particular reason  0 Skip`
 
-  Pick one, type your own, or say there was none. "No particular reason" is
+  Pick one (press its key twice), type your own, or say there was none.
+  Then one line says the reason was saved, with Fix and Remove like any
+  record's. "No particular reason" is
   an answer and is kept as one, in your words if you typed some ("no idea,
   it just worked"): a later reader sees that nothing in particular decided
   it, which is not the same as nobody having asked. A typed answer counts
@@ -134,8 +136,10 @@ at a time.
   reader, so its reasoning is copied into the record.
 - **It notes the commit.** After a `git commit` in this repository, the
   commit is attached to what the session recorded, Claude's own records
-  included. A commit made somewhere else (`git -C /other`, `cd /other &&
-  git commit`) is not.
+  included. Only a commit the command itself shows to be this repository's:
+  a plain `git commit`, or one that names this repository's root. One made
+  after `cd` into another folder or with `git -C` elsewhere is not, since
+  a folder inside the tree may be a repository of its own.
 
 Staying out of the way is the point, and the limits are in the code:
 
@@ -144,13 +148,20 @@ Staying out of the way is the point, and the limits are in the code:
   when a turn ends, at most four in a session, and none at all once two
   went unanswered. It shows only when Claude has finished.
 - At most one tell per turn, never the same record twice in a session.
-  Unasked, only for a record anchored to the very file in hand.
+  From the lookup by path alone, only a record anchored to the very file
+  in hand. A record anchored to a folder above it is shown only when
+  Scribe's model, reading the turn, judged that it bears on the work; it
+  still counts as the turn's one tell.
 - Nothing new comes up while you are typing: not a tell, not a question,
   not a receipt. Nothing takes the keyboard by itself.
-- Remove, Knew this and Turn Scribe off act on the second press of the same
-  key within five seconds; the first only makes the key say so. A digit
-  typed alone into an empty prompt box presses a key of the band, so
-  answering Claude with "2" can never remove a record.
+- Every key that writes to Fylgja or settles something for good acts on
+  the second press of the same key within five seconds: Remove, Knew this,
+  Turn Scribe off, "Yes, it replaces it", a proposed reason and "No
+  particular reason". The first press only makes the key say so. A digit
+  typed alone into an empty prompt box presses a key of the band, and a
+  question comes up just when you may be answering Claude with "1": so no
+  single press ever writes, replaces, removes or silences. Keys that only
+  open, skip, dismiss or fill the prompt box act at once.
 - Type past what it offers three times in a row and it holds back the next
   offer, then two, then four, up to sixteen. Any key on an offer ends that.
 
@@ -160,10 +171,24 @@ outside a repository or signed out it does nothing at all: no model call,
 no call to Fylgja.
 
 Before it asks a model anything in a session, one call of its own has to
-get through to Fylgja. If it does not (a rule of yours or your
-organization's refuses it), Scribe is off for that session and says so once
-on the line under the prompt, until your next prompt:
+get through to Fylgja. That first call is waited for up to eight seconds;
+if it got no answer, the next turns try again and wait a second and a half
+at most. If any call of Scribe's is refused (a rule of yours or your
+organization's denies one of its tools), Scribe is off for that session and
+says so once on the line under the prompt, until your next prompt:
 `Scribe is off in this session: its calls to Fylgja are not let through here`.
+
+**If Fylgja is also set up outside the plugin.** Scribe works only through
+the connection this plugin declares. If the same Fylgja address is also
+configured anywhere else (your own settings, or a `.mcp.json` in the
+repository you are in), Claude Code runs the two as one under that other
+entry, with that entry's sign-in or token. A repository you cloned could
+ship such an entry with a token for somebody else's account, and what
+Scribe wrote would land there. So in that case Scribe does not run at all:
+no call to Fylgja, no model call, and one line under the prompt until your
+next prompt:
+`Scribe is off in this session: Fylgja is also set up outside the plugin here, and Scribe only works through the connection the plugin itself declares`.
+To use Scribe, remove the other entry and let the plugin provide Fylgja.
 
 ### What Scribe costs
 
@@ -174,7 +199,9 @@ cost line for these requests, so here is what they are.
   with a prompt. Not for a turn a background task or a hook started, not
   for a turn that changed no file and holds under 200 characters of talk
   (its lines are read with the next turn's), and no more than 30 times in
-  any hour; past that Scribe is quiet until the hour has rolled on.
+  any hour; past that Scribe is quiet until the hour has rolled on. The
+  count is kept by each running Claude Code, so two sessions open at once
+  have 30 each.
 - **Usually:** one request per turn of about 2,500 input tokens, of
   which about 2,200 are read from the prompt cache, and
   15 to 320 output tokens, in one to four seconds (measured over the
@@ -228,12 +255,11 @@ Everything else in this README goes on working with Scribe off.
   `attach_commit`) on the Fylgja server this plugin declares, and never past
   a rule of yours or your organization's that refuses them. Claude's calls
   to the very same tools, and every other tool call, are decided as they
-  always were. If you already run that same Fylgja endpoint as a server of
-  your own, Claude Code runs the two as one under your name for it, and
-  that is then the server meant. A server that only shares the name and
-  points somewhere else is never covered.
-- Nothing recorded is replaced without your key, and nothing is removed or
-  silenced for good on a single press.
+  always were. Only the plugin's own connection (`plugin:fylgja:fylgja`)
+  counts: the same address configured anywhere else is never covered, and
+  Scribe does not run on it.
+- Nothing is written, replaced, removed or silenced for good on a single
+  press of a key.
 - It does not redraw Claude's searches and reads of your knowledge base, open
   a pane, or pop up a notice. A failure anywhere in Scribe is silent and
   leaves the session as it is without it.
@@ -327,22 +353,24 @@ run is headless. What only a signed-in interactive session can show:
    the prompt box takes typing and a sent prompt starts at once meanwhile.
 5. The same for the lookup on every fourth step of a long turn, which may
    hold that step for up to a second and a half, and for the first lookup
-   of a session, which is waited for up to eight seconds.
+   of a session, which is waited for up to eight seconds, once.
 6. The permission rule on the live server: that Scribe's own `recall`,
    `remember`, `amend_memory` and `attach_commit` go through with no dialog,
    that Claude's own `remember` still asks as before, and that a deny rule
-   of yours for one of these tools still refuses Scribe and turns it off
-   with the one line of status.
-7. The same where Fylgja is also configured as a server of your own (a
-   `fylgja` entry in your settings or `.mcp.json`). Headless, with a
-   stand-in over stdio, Claude Code ran the two as one under the person's
-   name and Scribe's calls went through; a server of the same name with
-   another command stayed apart. Confirm both with the real server over
-   HTTP: same URL, calls go through with no dialog; another URL under the
-   same name, the plugin's own server is used.
+   of yours for any one of these tools still refuses Scribe and turns it
+   off with the one line of status.
+7. Fylgja configured both ways: add an entry with the same address to your
+   settings or to a repository's `.mcp.json`, under any name. Scribe must
+   stay off with its line of status, and nothing must reach that entry's
+   account: no lookup, no record. (Headless, with a stand-in over stdio,
+   Claude Code answered the other entry's name and Scribe made no call.)
+   With another address under the name `fylgja`, the plugin's own server
+   is used and Scribe runs.
 8. Keys pressed in the band: that Fix, Remove and an answer reach Fylgja
-   from there. If the engine refuses a call made from a key press, Scribe
-   keeps it and makes it at the end of the next turn; check which happens.
+   from there with no dialog. If the engine refuses a call made from a key
+   press, Scribe takes that as a refusal like any other and is off for the
+   session; if it only fails, the change is made at the end of the next
+   turn. Check that neither happens in ordinary use.
 9. That a tell appears while Claude is still working, a question only once
    it has finished, and none of them, nor a receipt, while the box has text
    in it.

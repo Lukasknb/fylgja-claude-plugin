@@ -153,10 +153,9 @@ describe('what Scribe is told of a turn', () => {
     const HERE: readonly (readonly [string, string])[] = [
       ['git commit -m x', '[main 1a2b3c4] x'],
       ['git add . && git commit -m x', 'hint\n[feat/a (root-commit) 1a2b3c4] x'],
-      ['git -C sub commit --amend', '[detached HEAD 1a2b3c4] x'],
       [`git -C ${ROOT} commit -m x`, '[main 1a2b3c4] x'],
-      [`cd ${ROOT}/packages/api && git commit -m x`, '[main 1a2b3c4] x'],
-      ['cd packages/api && git commit -m x', '[main 1a2b3c4] x'],
+      [`cd ${ROOT} && git commit --amend`, '[detached HEAD 1a2b3c4] x'],
+      [`cd "${ROOT}/" && git commit -m x`, '[main 1a2b3c4] x'],
       // The commit went through; what failed came after it.
       ['git commit -m x && npm run deploy', '[main 1a2b3c4] x\nnpm ERR! missing script'],
     ]
@@ -167,6 +166,10 @@ describe('what Scribe is told of a turn', () => {
       ['git commit -m x', undefined],
       ['git commit -m x', '[main 1A2B3C4] upper case is no sha git prints'],
       ['git -C /work/other commit -m x', '[main 1a2b3c4] x'],
+      // A folder inside the tree may be a repository of its own.
+      ['git -C sub commit -m x', '[main 1a2b3c4] x'],
+      [`cd ${ROOT}/packages/api && git commit -m x`, '[main 1a2b3c4] x'],
+      ['cd vendor/lib && git commit -m x', '[main 1a2b3c4] x'],
       ['git -C ../other commit -m x', '[main 1a2b3c4] x'],
       [`git -C ${ROOT}-other commit -m x`, '[main 1a2b3c4] x'],
       ['cd /work/other && git commit -m x', '[main 1a2b3c4] x'],

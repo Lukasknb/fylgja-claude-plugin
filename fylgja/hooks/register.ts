@@ -24,11 +24,17 @@ const MAX_LINE = 200
  * to the plugin's other files as plain functions. Every line shown passes
  * the same sanitiser the chips do.
  */
-function hostOf($: EngineInterface): Host {
+function hostOf($: EngineInterface, session: Session.Session): Host {
   return {
     connect: () => $.mcp.connect('fylgja'),
     call: (server, tool, args) => $.mcp.call(server, tool, args),
-    status: text => $.ui.status(text === undefined ? undefined : drawn(text, MAX_LINE)),
+    // The line under the prompt has one owner. Sign-in comes first; when it
+    // has nothing to say, the line shows what Scribe left there, if anything.
+    status: text => {
+      const line = text ?? session.notice
+
+      $.ui.status(line === undefined ? undefined : drawn(line, MAX_LINE))
+    },
     redraw: () => $.ui.invalidate('ui.render'),
     every: (ms, fn) => $.clock.every(ms, fn),
   }
@@ -41,7 +47,7 @@ function hostOf($: EngineInterface): Host {
  */
 function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost {
   return {
-    server: () => Session.serverOf(hostOf($), session),
+    server: () => Session.serverOf(hostOf($, session), session),
     // Why a call failed is kept as one word: whether it was not let
     // through, or anything else. The engine's own words are not handed on.
     call: (server, tool, args) =>
@@ -49,7 +55,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost 
         throw new Error(error instanceof Error && REFUSAL.test(error.message) ? REFUSED : 'failed')
       }),
     lookup: async (tool, args) => {
-      const server = await Session.serverOf(hostOf($), session)
+      const server = await Session.serverOf(hostOf($, session), session)
 
       if (server === undefined) {
         throw new Error('Fylgja is not connected')
@@ -81,7 +87,14 @@ function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost 
     after: (ms, fn) => $.clock.after(ms, fn),
     redraw: () => $.ui.invalidate('ui.render'),
     toast: text => $.ui.toast(drawn(text, MAX_LINE)),
-    status: text => $.ui.status(text === undefined ? undefined : drawn(text, MAX_LINE)),
+    // Scribe's line is kept beside the sign-in line and shown only while that one is not up.
+    status: text => {
+      session.notice = text
+
+      if (!session.signIn.isShown) {
+        $.ui.status(text === undefined ? undefined : drawn(text, MAX_LINE))
+      }
+    },
     debug: text => $.ui.log(drawn(text, MAX_LINE), { to: 'debug' }),
     box: async () => (await $.prompt.read()).text,
     fill: async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled,
@@ -100,8 +113,11 @@ function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost 
   }
 }
 
-// How the engine words a call it did not let through. Only whether it does is read; the words go no further.
-const REFUSAL = /\brefused\b|\bdenied\b|requested permissions|haven['’]t granted/i
+// How the engine words a call of a plugin's that it did not let through:
+// `<plugin>: $.mcp.call(<server>, <tool>) refused: <why>`. A server's own
+// error may say "connection refused" or "access denied" and is not that.
+// Only whether it is one is read; the words go no further.
+const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
 
 const TONES: Readonly<Record<string, { color?: 'success' | 'inactive'; dimColor?: boolean; bold?: boolean }>> = {
   dim: { dimColor: true },
@@ -151,7 +167,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     // Not waited on: the session starts whether or not Fylgja answers. The
     // line's state is written whatever the answer, because a plugin that was
     // just loaded cannot know whether an earlier load left the line up.
-    void Session.serverOf(hostOf($), session, true).catch(() => undefined)
+    void Session.serverOf(hostOf($, session), session, true).catch(() => undefined)
 
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -244,7 +260,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     // A row handed the text as it was typed is drawn from what was sent for it.
     const sent = e.props.origin.kind === 'composer' ? restored(draft.known, e.props.text) : e.props.text
 
-    want(hostOf($), session, referencesIn(sent))
+    want(hostOf($, session), session, referencesIn(sent))
 
     const text = rowTextOf(sent, session.memory)
 
