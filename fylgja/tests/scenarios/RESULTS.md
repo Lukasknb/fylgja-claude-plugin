@@ -66,6 +66,17 @@ Nothing.
 
 The three runs above were made a minute or two before their commit and two commits before the last change to the plugin. The ten sessions were run once more on the tree at commit `c279421` (15 model calls): 10 of 10, no false record, no false question, zero questions and zero tells in the silent sessions, the same four questions and the one expected tell, a median of 2.0 s a call.
 
+### After the sync to the server's contract
+
+The stand-in server now answers in the real server's shapes and refuses what the real server's gate refuses, and the plugin holds every record to the same rules before it sends it (one sentence; an opening word from the server's list of about eighty, or a statement with "is", "are" or "must"; no status talk). The ten sessions were run once on the tree at commit `de5b991` (15 model calls in 17 turns): **8 of 10**, no false record, no false question, zero questions and zero tells in the silent sessions, and no write the server refused.
+
+The two that failed, both by the same rule:
+
+- "A way of paging is chosen without a word of why": no record. The model wrote "Page `/audit-log` with `offset` and `limit` …", an order in every sense, and "page" is not on the server's list of opening words. Told so once, it answered "Page GET /audit-log with …". The record was left out, as the server would have refused it, and with it the question.
+- "A fix found by trial is kept": recorded, but not asked about. The first sentence opened with "Launch", which is not on the list either. Put right, it opened with "Start" and had gained a clause ("because it was the only fix that stopped …") and a detail, so the record went in as one with a reason and no question was due.
+
+Nothing was tuned after this run. It is one run of ten sessions; what it shows is where the contract costs records: a fixed list of verbs decides whether a decision that is plainly worded as an instruction is kept.
+
 What the table does not say:
 
 - Thirty runs of ten sessions is a small sample, and the sessions and what counts as right were written by the same hand as the prompt. It is a first measurement, not a rate to plan on.
@@ -160,4 +171,4 @@ Each cell: correct runs, then records written / questions shown / tells shown ov
 
 ## Model calls spent in this round
 
-223 in all: 25 on Haiku (19 before the harness was corrected, 6 after), 48 on the first full Sonnet run, 75 on the second and 75 on the one reported above. The held-out run added 45, and its rerun on the committed tree 15.
+223 in all: 25 on Haiku (19 before the harness was corrected, 6 after), 48 on the first full Sonnet run, 75 on the second and 75 on the one reported above. The held-out run added 45, and its rerun on the committed tree 15. The run after the contract sync added another 15.
