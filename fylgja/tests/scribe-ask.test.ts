@@ -264,7 +264,8 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
     expect(set.of('remember')).toEqual([])
     expect(set.fills.length).toBe(1)
     expect(set.fills[0]).toMatch('> Decision: Use Redis with Redlock for the job queue.')
-    expect(set.fills[0]).toMatch(`> https://fylgja.lknblab.dev/open/atom/${idOf(5)}`)
+    expect(set.fills[0]).toMatch('> Fylgja record 00000000, written down by Scribe')
+    expect(set.fills[0]).not.toMatch('https://')
     expect(await shown($)).toBe('engine: AbovePrompt')
   })
 

@@ -95,8 +95,9 @@ at a time.
   most twelve of them. Fylgja takes a record only in a certain form (one
   sentence, worded as a rule) and refuses rather than trims, saying why.
   When it refuses one for its form, Scribe hands its model that record and
-  the refusal once, takes only the part the refusal was about from the
-  answer, so a reworded sentence brings no new reason with it, and sends
+  the refusal once (the refusal names the word it did not take and shows
+  how the sentence could open), takes only the part the refusal was about
+  from the answer, so a reworded sentence brings no new reason with it, and sends
   it once more. Refused again, the record is let go. Then one line:
 
   `✓ Recorded · Use Postgres advisory locks for the job queue, not Redis.   1 Fix  2 Remove  0 OK`
@@ -133,11 +134,19 @@ at a time.
 
   `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12   1 Open  2 Tell Claude  3 Knew this  0 Dismiss`
 
-  Open shows the reason, what was rejected and where (a place another
-  member than the record's author added says so), with a link to the
-  record. Tell Claude puts a quoted note in your prompt box for you to send
-  or not; it sends nothing, and leaves a box with text in it alone. Knew
-  this keeps that record away on this machine for good.
+  Open opens the record inside the band and goes nowhere else: the
+  reason, what was rejected, where (a place another member than the
+  record's author added says so), who wrote it down (Scribe, Claude or a
+  person) and the account it is in. A record written down in a session,
+  which is every record Scribe or Claude makes, has no page in the Fylgja
+  app, so there is no link to follow. Only a record read out of a meeting
+  or a session carries one, and then one more row, `Open where it came
+  from`, leads to that meeting or session. Tell Claude puts a quoted note
+  in your prompt box for you to send or not: the record's sentence, its
+  reason, and `Fylgja record 1a2b3c4d` with who wrote it down, so Claude
+  can open it by that id; the link follows only where the record has one.
+  It sends nothing, and leaves a box with text in it alone. Knew this
+  keeps that record away on this machine for good.
 - **It reads the plan.** If the session works from a plan (plan mode's own,
   or a markdown file that calls itself a plan, a design, a spec, an RFC, an
   ADR or a work package), that is where Scribe looks first for the reason.
@@ -497,11 +506,19 @@ run is headless. What only a signed-in interactive session can show:
     with text is left alone with the notice.
 14. What a `/clear` does to the session's id: Scribe reads it again and
     carries the session's question counts over only if it is the same.
-15. A record's link: the tell's `Open in Fylgja` and the link in a `Tell
-    Claude` note come from the `link` a recalled record carries. Check
-    that it opens the record in the Fylgja app; a record that comes
-    without one shows neither.
+15. A record with no link, which is the usual case: a record Scribe or
+    Claude wrote comes back from `recall` with `link` null. Check that
+    `Open` shows it inside the band with who wrote it down and the
+    account, that no link row is drawn, and that the `Tell Claude` note
+    carries the sentence and `Fylgja record <first eight of its id>` and
+    no link. Then a record read out of a meeting: that `Open where it
+    came from` is there and opens that meeting in the Fylgja app.
 16. A refused record: word a decision so that Fylgja refuses its sentence
-    and check that one more model call puts it right, that the receipt
-    shows the sentence as written, and that a question, if one was due, is
-    about that sentence.
+    (`refused:not_imperative`, naming the opening word) and check that
+    one more model call puts it right, that the receipt shows the
+    sentence as written, and that a question, if one was due, is about
+    that sentence. Every refusal of the live server opens with
+    `refused:<code>`; Scribe reads the code and never shows the server's
+    words. Check `atom_content_taken` on a Fix (the line says another
+    record already says this) and `not_found` on a Remove of a record
+    that is gone.

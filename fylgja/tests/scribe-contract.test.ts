@@ -26,7 +26,7 @@ const TALK = [dev('Use Postgres for the queue lock.'), claude('Done.', edit('src
 const refused = (text: string) => ({ content: [{ type: 'text', text }], isError: true })
 const created = (n: number) => answer({ atom_id: idOf(n), outcome: 'created', supersede: 'not_requested', note: null })
 const NOT_IMPERATIVE =
-  'refused:not_imperative — content must start with an instruction (Use, Never, Always, Run, Check, Before, When …)'
+  'refused:not_imperative — content opens with "Paginate", which is not an instruction word this server knows; open with one (Use, Never, Always, Run, Check, Before, When …), e.g. "Use offset and limit to paginate /audit-log." or "Always paginate /audit-log with offset and limit."'
 
 /** A server that refuses a sentence opening with `opener` and takes every other. */
 function refusing(opener: string, refusal = NOT_IMPERATIVE) {
@@ -47,7 +47,7 @@ function refusing(opener: string, refusal = NOT_IMPERATIVE) {
 
 describe('a refusal that says what is wrong is used once', () => {
   const PAGED = decision({
-    content: 'Page /audit-log with offset and limit, not a cursor.',
+    content: 'Paginate /audit-log with offset and limit, not a cursor.',
     detail: '',
     reason_status: 'not_stated',
     alternatives: ['a cursor'],
@@ -58,7 +58,7 @@ describe('a refusal that says what is wrong is used once', () => {
   test('the model is handed the refused record and the refusal, and nothing of the session; what it puts right is sent once', async ($, on) => {
     const set = stage(on, {
       replies: [verdict({ records: [PAGED] }), JSON.stringify({ record: MENDED })],
-      tools: refusing('Page'),
+      tools: refusing('Paginate'),
     })
 
     await $.session.start(START)
@@ -68,8 +68,13 @@ describe('a refusal that says what is wrong is used once', () => {
 
     expect(set.asked.length).toBe(2)
     expect(correction?.system).toMatch('A knowledge base refused one record.')
-    expect(correction?.prompt).toMatch('"content":"Page /audit-log with offset and limit, not a cursor."')
+    expect(correction?.prompt).toMatch('"content":"Paginate /audit-log with offset and limit, not a cursor."')
     expect(correction?.prompt).toMatch('refused:not_imperative')
+    expect(correction?.prompt, 'the word the server named reaches the model').toMatch('opens with "Paginate"')
+    expect(correction?.prompt, 'and so do both of its examples, whole').toMatch(
+      '"Always paginate /audit-log with offset and limit."',
+    )
+    expect(correction?.system).toMatch('When the refusal names the word it did not accept')
     expect(correction?.prompt).not.toMatch('SESSION-TEXT')
     expect(correction?.prompt.match(/^<<< /gm)?.length, 'both are fenced as data').toBe(2)
     expect(set.of('remember').map(args => args.content)).toEqual([PAGED.content, MENDED.content])
@@ -79,7 +84,7 @@ describe('a refusal that says what is wrong is used once', () => {
   test('the question about a record that had to be put right is asked about the record as written', async ($, on) => {
     const set = stage(on, {
       replies: [verdict({ records: [PAGED], question: WHY }), JSON.stringify({ record: MENDED })],
-      tools: refusing('Page'),
+      tools: refusing('Paginate'),
     })
 
     await $.session.start(START)
@@ -104,7 +109,7 @@ describe('a refusal that says what is wrong is used once', () => {
     }
     const set = stage(on, {
       replies: [verdict({ records: [PAGED], question: WHY }), JSON.stringify({ record: smuggling })],
-      tools: refusing('Page'),
+      tools: refusing('Paginate'),
     })
 
     await $.session.start(START)
@@ -121,7 +126,7 @@ describe('a refusal that says what is wrong is used once', () => {
 
   test('a model that thinks again and answers twice is taken at its last whole answer', async ($, on) => {
     const twice = `${JSON.stringify({ record: PAGED })}\n\nWait, that leaves the content unchanged. Corrected answer:\n\n${JSON.stringify({ record: MENDED })}`
-    const set = stage(on, { replies: [verdict({ records: [PAGED] }), twice], tools: refusing('Page') })
+    const set = stage(on, { replies: [verdict({ records: [PAGED] }), twice], tools: refusing('Paginate') })
 
     await $.session.start(START)
     await turn($, set, ...TALK)
@@ -130,10 +135,10 @@ describe('a refusal that says what is wrong is used once', () => {
   })
 
   test('refused a second time, the record is let go quietly: no third try, nothing shown', async ($, on) => {
-    const again = { ...PAGED, content: 'Page GET /audit-log with offset and limit.' }
+    const again = { ...PAGED, content: 'Paginate GET /audit-log with offset and limit.' }
     const set = stage(on, {
       replies: [verdict({ records: [PAGED], question: WHY }), JSON.stringify({ record: again }), NOTHING],
-      tools: refusing('Page'),
+      tools: refusing('Paginate'),
     })
 
     await $.session.start(START)
@@ -155,7 +160,7 @@ describe('a refusal that says what is wrong is used once', () => {
     ],
   ] as const) {
     test(`a model that ${what} costs no second write`, async ($, on) => {
-      const set = stage(on, { replies: [verdict({ records: [PAGED] }), reply], tools: refusing('Page') })
+      const set = stage(on, { replies: [verdict({ records: [PAGED] }), reply], tools: refusing('Paginate') })
 
       await $.session.start(START)
       await turn($, set, ...TALK)
@@ -171,7 +176,7 @@ describe('a refusal that says what is wrong is used once', () => {
     )
     const set = stage(on, {
       replies: [...looking, verdict({ records: [PAGED] }), JSON.stringify({ record: MENDED })],
-      tools: refusing('Page'),
+      tools: refusing('Paginate'),
     })
 
     await $.session.start(START)
@@ -185,7 +190,7 @@ describe('a refusal that says what is wrong is used once', () => {
     const prior = fact(5, { content: 'Use a cursor to page the audit log.', anchors: { paths: [{ path: 'src/queue/lock.ts' }] } })
     const set = stage(on, {
       replies: [verdict({ records: [{ ...PAGED, supersedes: idOf(5) }] }), JSON.stringify({ record: MENDED })],
-      tools: { ...refusing('Page'), recall: () => answer({ facts: [prior] }) },
+      tools: { ...refusing('Paginate'), recall: () => answer({ facts: [prior] }) },
       kept: { 'scribe.known': [idOf(5)] },
     })
 
@@ -209,7 +214,7 @@ describe('a refusal that says what is wrong is used once', () => {
     test(`${code} is taught back once, and mends the ${part}`, async ($, on) => {
       const set = stage(on, {
         replies: [verdict({ records: [PAGED] }), JSON.stringify({ record: MENDED })],
-        tools: refusing('Page', `refused:${code} — what to do about it`),
+        tools: refusing('Paginate', `refused:${code} — what to do about it`),
       })
 
       await $.session.start(START)
@@ -501,36 +506,47 @@ describe('a record as the server returns it', () => {
   })
 })
 
-describe('a record’s link', () => {
+describe('where a record came from', () => {
   const FILE = 'src/queue/lock.ts'
+  const PAGE = `https://fylgja.lknblab.dev/open/meeting/${idOf(900)}`
 
-  test('the link the server gives opens the record, and goes into the note for Claude', async ($, on) => {
-    const set = stage(on, { tools: { recall: () => answer({ facts: [fact(1, { anchors: { paths: [{ path: FILE }] } })] }) } })
+  test('a record that was remembered directly has no page: it is opened in the band, and named by its short id for Claude', async ($, on) => {
+    const remembered = fact(1, {
+      id: 'ab12cd34-0000-4000-8000-000000000001',
+      anchors: { paths: [{ path: FILE }] },
+      origin: 'assistant',
+      link: null,
+      source_id: null,
+    })
+    const set = stage(on, { tools: { recall: () => answer({ facts: [remembered] }) } })
 
     await $.session.start(START)
     await turn($, set, ...TALK)
     await press($, 'open')
 
-    expect(await shown($)).toMatch('[Open in Fylgja]')
+    const opened = await shown($)
+
+    expect(opened).toMatch('In: src/queue/lock.tsFylgja record ab12cd34, written down by Claude [2 Tell Claude]')
+    expect(opened).not.toMatch('Open where it came from')
 
     await press($, 'tell-claude')
 
-    expect(set.fills[0]).toMatch(`> https://fylgja.lknblab.dev/open/atom/${idOf(1)}`)
+    expect(set.fills[0]).toMatch('> Fylgja record ab12cd34, written down by Claude\n\n')
+    expect(set.fills[0]).not.toMatch('https://')
   })
 
-  test('with no link there is nothing to open, and the note carries none', async ($, on) => {
-    const set = stage(on, {
-      tools: { recall: () => answer({ facts: [fact(1, { anchors: { paths: [{ path: FILE }] }, link: undefined })] }) },
-    })
+  test('a record read out of a meeting or a session links to that page, in the band and in the note', async ($, on) => {
+    const extracted = fact(1, { anchors: { paths: [{ path: FILE }] }, origin: 'extraction', link: PAGE, source_id: idOf(900) })
+    const set = stage(on, { tools: { recall: () => answer({ facts: [extracted] }) } })
 
     await $.session.start(START)
     await turn($, set, ...TALK)
     await press($, 'open')
 
-    expect(await shown($)).not.toMatch('Open in Fylgja')
+    expect(await shown($)).toMatch('Fylgja record 00000000, read out of a meeting or session [Open where it came from]')
 
     await press($, 'tell-claude')
 
-    expect(set.fills[0]).not.toMatch('https://')
+    expect(set.fills[0]).toMatch(`> Fylgja record 00000000, read out of a meeting or session\n> ${PAGE}`)
   })
 })

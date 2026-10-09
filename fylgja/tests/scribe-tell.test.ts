@@ -183,7 +183,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     expect(await shown($, true)).toBe(TELL)
   })
 
-  test('Open shows the reason, what was rejected and where, with a link to the record', async ($, on) => {
+  test('Open shows the reason, what was rejected, where, and which record it is, all inside the band', async ($, on) => {
     const set = stage(on, { tools: found(fact(1, { anchors: [{ path: FILE, symbol: 'send' }] })) })
 
     await $.session.start(START)
@@ -195,7 +195,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
       const ui = await band($, surface)
 
       expect(await ui.text(), surface).toBe(
-        `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12Why: Direct calls dropped mail when the provider throttled.Rejected: direct SMTP callIn: src/mail/send.ts (send) [Open in Fylgja] [2 Tell Claude] [3 Knew this] [0 Dismiss]`,
+        `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12Why: Direct calls dropped mail when the provider throttled.Rejected: direct SMTP callIn: src/mail/send.ts (send)Fylgja record 00000000, written down by Scribe [2 Tell Claude] [3 Knew this] [0 Dismiss]`,
       )
       await ui.unmount()
     }
@@ -225,7 +225,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     })
   }
 
-  test('Tell Claude puts a quoted note with the link in an empty prompt box, and sends nothing', async ($, on) => {
+  test('Tell Claude puts a quoted note naming the record in an empty prompt box, and sends nothing', async ($, on) => {
     const set = stage(on, { tools: found(fact(1)) })
     await $.session.start(START)
     await turn($, set, ...WORK)
@@ -241,7 +241,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
         '> Decision: Use the queue for outbound mail, never a direct SMTP call.',
         '> Why: Direct calls dropped mail when the provider throttled.',
         '> Rejected: direct SMTP call',
-        `> https://fylgja.lknblab.dev/open/atom/${idOf(1)}`,
+        '> Fylgja record 00000000, written down by Scribe',
         '',
         '',
       ].join('\n'),

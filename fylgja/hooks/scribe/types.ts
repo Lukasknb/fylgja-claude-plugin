@@ -55,7 +55,13 @@ export type Fact = {
   reasonStatus: ReasonStatus | null
   /** The day it was last confirmed or written, `YYYY-MM-DD`. */
   date: string | null
-  /** The address that opens the record in Fylgja, when the server gave one on its own host. */
+  /** Who wrote it down, as the server names them: `scribe`, `assistant`, `person` or `extraction`. */
+  origin: string
+  /**
+   * The page of the meeting or session the record was read out of, on
+   * Fylgja's own host. Null for a record that was remembered directly, which
+   * is most of what Scribe shows: such a record has no page of its own.
+   */
   link: string | null
 }
 

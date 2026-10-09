@@ -4,9 +4,8 @@
 // (`MemoryContextResponse`, `MemoryRememberResponse`, `MemoryAmendResponse`,
 // `CommitAttachResponse`, `WhoAmIResponse`) and refuses what the real
 // server's gate and anchor rules refuse, every refusal opening with its code
-// (`refused:<code> — <what to do>`), as the server's do. The rule for how a
-// sentence may open is the server's as it stood when this was written: a
-// list of verbs, or a statement.
+// (`refused:<code> — <what to do>`), as the server's do. Contracts, anchor rules and refusal codes are
+// the server's at commit 94b96b85.
 // It holds the records the scenarios give it, keeps what is written in
 // memory, and appends one line per call to the file named in
 // SCRIBE_STUB_LOG. It reaches no network and no real knowledge base.
@@ -38,11 +37,13 @@ const failed = text => ({ content: [{ type: 'text', text }], isError: true })
 const everything = () => [...held.values()].flat()
 
 // ---- the server's gate (domain/services/memory_gate.py) ----
+// How a sentence may open is a list of words, as the server announced it: the list it had before commit 94b96b85 with
+// `launch` and `page` added, and a refusal that names the word it did not know and shows two ways to say it.
 const OPENERS = [
   'after', 'always', 'before', 'do not', "don't", 'for', 'if', 'never', 'on', 'only', 'when',
   'add', 'assume', 'avoid', 'bind', 'build', 'call', 'cap', 'check', 'confirm', 'configure', 'copy', 'delete', 'deploy',
-  'disable', 'drop', 'enable', 'ensure', 'expect', 'export', 'fetch', 'grant', 'install', 'keep', 'kill', 'label', 'leave',
-  'limit', 'log', 'make', 'merge', 'mount', 'move', 'pass', 'pin', 'point', 'prefer', 'put', 'query', 'read', 'rebuild',
+  'disable', 'drop', 'enable', 'ensure', 'expect', 'export', 'fetch', 'grant', 'install', 'keep', 'kill', 'label', 'launch', 'leave',
+  'limit', 'log', 'make', 'merge', 'mount', 'move', 'page', 'pass', 'pin', 'point', 'prefer', 'put', 'query', 'read', 'rebuild',
   'reboot', 'reindex', 'remove', 'rename', 'restart', 'restore', 'retry', 'reuse', 'revoke', 'rotate', 'route', 'run', 'send',
   'set', 'skip', 'split', 'stamp', 'start', 'stop', 'store', 'tag', 'treat', 'update', 'use', 'verify', 'wait', 'wrap', 'write',
 ] // prettier-ignore
@@ -58,7 +59,6 @@ const HINTS = {
   not_one_sentence: 'content is ONE sentence — everything after the first full stop belongs in detail',
   status_not_memory:
     'this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing',
-  not_imperative: 'content must start with an instruction (Use, Never, Always, Run, Check, Before, When …)',
   no_trigger:
     'a runbook or gotcha nobody can be warned about is unreachable — pass the verbatim command or error keywords in triggers',
   burst: 'batch settled findings at the end of the task; one atom per fact',
@@ -70,7 +70,18 @@ const HINTS = {
     'detail and reason_status disagree: stated needs a reason in detail, and not_stated means there is no reason to put in detail',
   alternatives_too_many: 'alternatives holds at most 6 options of at most 220 characters each',
 }
-const refusal = rule => failed(`refused:${rule} — ${HINTS[rule]}`)
+
+/** What the gate says of a sentence whose opening word it does not know: the word, and two ways to say it. */
+function unknownOpener(sentence) {
+  const word = sentence.match(/[A-Za-z][A-Za-z'-]*/)?.[0] ?? sentence.split(/\s+/)[0]
+  const rest = sentence.replace(/[.!?]\s*$/, '')
+  const lowered = rest.charAt(0).toLowerCase() + rest.slice(1)
+
+  return `content opens with "${word}", which is not an instruction word this server knows; open with one (Use, Never, Always, Run, Check, Before, When …), e.g. "Use ${lowered}." or "Always ${lowered}."`
+}
+
+const refusal = (rule, content) =>
+  failed(`refused:${rule} — ${rule === 'not_imperative' ? unknownOpener(String(content ?? '').trim()) : HINTS[rule]}`)
 
 function readsAsStatus(text) {
   if (STATUS.test(text)) {
@@ -203,7 +214,12 @@ function anchorsOut(record, matched = []) {
   const shown =
     paths.length <= 12 ? paths : [...paths.filter(anchor => matched.includes(anchor.path)), ...paths.slice(-12)].slice(0, 12)
 
-  return { paths: shown, commits: record.commits.slice(-5), paths_total: paths.length, commits_total: record.commits.length }
+  return {
+    paths: shown,
+    commits: record.commits.slice(-5).map(sha => ({ sha, added_by: 'author' })),
+    paths_total: paths.length,
+    commits_total: record.commits.length,
+  }
 }
 
 function asFact(record, asked) {
@@ -212,7 +228,14 @@ function asFact(record, asked) {
     asked === undefined ? null : asked.filter(path => record.anchors.some(anchor => dirs(path).includes(anchor.path)))
   const { commits, written_by, link, ...rest } = record
 
-  return { ...rest, ...(link === undefined ? {} : { link }), anchors: anchorsOut(record, matched ?? []), matched_paths: matched }
+  // A record that was remembered has no page of its own: only one read out of a meeting or session has a link.
+  return {
+    ...rest,
+    link: link ?? null,
+    source_id: record.source_id ?? null,
+    anchors: anchorsOut(record, matched ?? []),
+    matched_paths: matched,
+  }
 }
 
 const bursts = new Map()
@@ -226,8 +249,11 @@ function call(name, args) {
 
   if (name === 'recall') {
     if (Array.isArray(args.paths)) {
-      const fault =
-        args.paths.length > 30 ? 'paths holds too many entries' : args.paths.map(pathFault).find(found => found !== undefined)
+      if (args.paths.length > 30) {
+        return failed(`refused:paths_too_many — paths holds ${args.paths.length} entries; at most 30: ask for their directory`)
+      }
+
+      const fault = args.paths.map(pathFault).find(found => found !== undefined)
 
       if (fault !== undefined) {
         return failed(`refused:anchor_invalid — paths ${fault}: ${PATH_RULE}`)
@@ -266,7 +292,7 @@ function call(name, args) {
     const rule = gate(args.kind ?? 'gotcha', args.content, args.detail, args.triggers, args.reason_status, args.alternatives)
 
     if (rule !== undefined) {
-      return refusal(rule)
+      return refusal(rule, args.content)
     }
 
     // Scribe may write twelve records a session in ten minutes; the thirteenth is refused.
@@ -378,18 +404,24 @@ function call(name, args) {
     )
 
     if (rule !== undefined) {
-      return refusal(rule)
+      return refusal(rule, content)
     }
 
+    const gone = args.remove_anchors ?? []
+    const anchors = record.anchors.filter(
+      anchor => !gone.some(one => one.path === anchor.path && (one.symbol ?? null) === (anchor.symbol ?? null)),
+    )
     const isChanged =
       content !== record.content ||
       detail !== record.detail ||
       args.reason_status !== undefined ||
-      args.alternatives !== undefined
+      args.alternatives !== undefined ||
+      anchors.length !== record.anchors.length
 
     Object.assign(record, {
       content,
       detail,
+      anchors,
       alternatives: args.alternatives ?? record.alternatives,
       reason_status:
         record.type === 'decision'
@@ -403,7 +435,7 @@ function call(name, args) {
   if (name === 'attach_commit') {
     if (!/^[0-9a-f]{7,40}$/.test(String(args.sha))) {
       return failed(
-        "refused:sha_invalid — a commit is its lowercase hex sha, 7 to 40 characters, e.g. '4d9da09a' (git rev-parse HEAD)",
+        "refused:commit_invalid — a commit is its lowercase hex sha, 7 to 40 characters, e.g. '4d9da09a' (git rev-parse HEAD)",
       )
     }
 

@@ -30,7 +30,8 @@ const record = (n, content, anchors, more = {}) => ({
   reason_status: 'stated',
   origin: 'scribe',
   last_verified: '2026-08-03T09:00:00Z',
-  link: `https://fylgja.lknblab.dev/open/atom/${id(n)}`,
+  link: null,
+  source_id: null,
   ...more,
 })
 

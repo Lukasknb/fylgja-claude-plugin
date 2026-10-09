@@ -443,7 +443,9 @@ export function fact(n: number, overrides: Record<string, unknown> = {}): Record
     reason_status: 'stated',
     origin: 'scribe',
     last_verified: '2026-09-12T10:00:00Z',
-    link: `https://fylgja.lknblab.dev/open/atom/${idOf(n)}`,
+    // Remembered directly, as most records are: it has no page of its own.
+    link: null,
+    source_id: null,
     ...overrides,
   }
 }

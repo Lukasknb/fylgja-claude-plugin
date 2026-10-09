@@ -31,7 +31,7 @@ import { CALL_TIMEOUT_MS, limited } from './time'
 import type { Draft, Fact, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason } from './verdict'
 import type { Seen } from './verdict'
-import { NO_STRONG_REASON, NOT_STATED, viewOf } from './view'
+import { NO_STRONG_REASON, NOT_STATED, provenanceOf, viewOf } from './view'
 import type { View } from './view'
 
 /** The engine calls Scribe makes, bound from one hook's `$`. */
@@ -1246,7 +1246,9 @@ function noteOf(lead: string, fact: Fact): string {
           ? NOT_STATED
           : '',
     fact.alternatives.length === 0 ? '' : `Rejected: ${fact.alternatives.map(one => quoted(one, 80)).join('; ')}`,
-    // Its address was checked when the record was read: one line, on Fylgja's own host.
+    // Most records have no page of their own; the record is then named by its short id.
+    provenanceOf(fact),
+    // A page's address was checked when the record was read: one line, on Fylgja's own host.
     fact.link ?? '',
   ]
 

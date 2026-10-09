@@ -87,6 +87,25 @@ function why(fact: Fact): Row[] {
   return fact.kind === 'decision' ? [{ parts: [{ text: NOT_STATED, tone: 'dim' }] }] : []
 }
 
+const WRITERS: Readonly<Record<string, string>> = {
+  scribe: 'written down by Scribe',
+  assistant: 'written down by Claude',
+  person: 'written down by a person',
+  extraction: 'read out of a meeting or session',
+}
+
+/** A record's short id: the start of its id, as Fylgja's own tools show it. */
+export function shortId(id: string): string {
+  return id.slice(0, 8)
+}
+
+/** Which record this is and who wrote it down: what stands where a link would, for a record that has no page. */
+export function provenanceOf(fact: Fact): string {
+  const writer = Object.hasOwn(WRITERS, fact.origin) ? WRITERS[fact.origin] : undefined
+
+  return `Fylgja record ${shortId(fact.id)}${writer === undefined ? '' : `, ${writer}`}`
+}
+
 function tell(band: Band, item: Item & { kind: 'tell' }): View {
   const { fact } = item
   const rest: Key[] = [
@@ -128,7 +147,9 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
               parts: [{ text: 'In: ', tone: 'dim' } as const, { text: where.join(', ') }],
             },
           ]),
-      ...(fact.link === null ? [] : [{ parts: [{ link: fact.link, label: 'Open in Fylgja' }] }]),
+      { parts: [{ text: provenanceOf(fact), tone: 'dim' }] },
+      // Only a record read out of a meeting or a session has a page to open.
+      ...(fact.link === null ? [] : [{ parts: [{ link: fact.link, label: 'Open where it came from' }] }]),
     ],
     keys: rest,
   }

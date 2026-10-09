@@ -47,6 +47,9 @@ const PARTS: Readonly<Record<string, Part>> = {
   not_a_decision: 'reason',
   detail_too_long: 'reason',
   alternatives_too_many: 'alternatives',
+  anchor_invalid: 'anchors',
+  anchors_too_many: 'anchors',
+  anchor_cap: 'anchors',
 }
 
 /**
@@ -60,7 +63,7 @@ export function teaches(code: string | undefined): Part | undefined {
     return undefined
   }
 
-  return Object.hasOwn(PARTS, code) ? PARTS[code] : /^(?:anchor|path|symbol)s?_/.test(code) ? 'anchors' : undefined
+  return Object.hasOwn(PARTS, code) ? PARTS[code] : undefined
 }
 
 /** Refusals that are the server's trouble and not the record's: tried once more, later, as it is. */

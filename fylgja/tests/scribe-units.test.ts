@@ -342,7 +342,11 @@ describe('reading records', () => {
   test('a record is read from either shape of its anchors, and one that is no record is left out', () => {
     const facts = factsOf({
       facts: [
-        fact(1, { anchors: { paths: [{ path: 'src/a.ts', symbol: 'f' }], commits: ['1a2b3c4'] } }),
+        fact(1, {
+          anchors: { paths: [{ path: 'src/a.ts', symbol: 'f', added_by: 'author' }], commits: [{ sha: '1a2b3c4', added_by: 'author' }] },
+          link: `https://fylgja.lknblab.dev/open/session/${idOf(900)}`,
+          source_id: idOf(900),
+        }),
         fact(2, {
           anchors: [
             { kind: 'path', ref: 'src/b.ts' },
