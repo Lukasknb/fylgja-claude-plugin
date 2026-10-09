@@ -6,20 +6,18 @@
 
 import { isRecord } from '../payload'
 import { reasonStatusOf } from './facts'
+import { MAX_ALTERNATIVE_CHARS, MAX_ALTERNATIVES, MAX_ANCHORS, MAX_CONTENT_CHARS, MAX_DETAIL_CHARS, refusalOf } from './gate'
 import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
 import type { Anchor, Ask, Draft, Fact, ReasonStatus, RecordKind, Verdict } from './types'
 
 /** No record's sentence is longer than this; a longer one is not written at all. */
-export const MAX_CONTENT = 220
+export const MAX_CONTENT = MAX_CONTENT_CHARS
 
 export const MAX_RECORDS = 3
 export const MAX_TELLS = 2
 
-const MAX_DETAIL = 1500
-const MAX_ALTERNATIVES = 6
-const MAX_ANCHORS = 12
 const MAX_OPTION = 80
 
 /** What the model asked for: a lookup, or its verdict as written. */
@@ -129,7 +127,8 @@ function reasonOf(asked: ReasonStatus | null, detail: string, saidNoReason: bool
   return { status: 'stated', detail }
 }
 
-function draftOf(value: unknown, seen: Seen): Draft | undefined {
+/** A record as the plugin will write it; the name of the server's rule its text breaks; or undefined when it is no record. */
+function draftOf(value: unknown, seen: Seen): Draft | string | undefined {
   if (!isRecord(value) || typeof value.kind !== 'string' || !KINDS.has(value.kind)) {
     return undefined
   }
@@ -137,14 +136,22 @@ function draftOf(value: unknown, seen: Seen): Draft | undefined {
   const kind = value.kind as RecordKind
   const content = sentence(value.content)
 
-  // Over-long is left out whole: a sentence cut short says something else.
-  if (content === '' || content.length > MAX_CONTENT) {
+  if (content === '') {
     return undefined
   }
 
   const plan = planOf(value.plan, seen.plans)
   const anchors: Anchor[] = anchorsOf(value.anchors, MAX_ANCHORS - 1, seen.paths)
-  let detail = typeof value.detail === 'string' ? value.detail.trim().slice(0, MAX_DETAIL) : ''
+  const suffix =
+    plan === undefined ? '' : ` (per ${plan.doc.title}${plan.heading === undefined ? '' : `, section ${plan.heading}`})`
+  // Cut to what the server takes, with room for the plan's name after it.
+  let detail =
+    typeof value.detail === 'string'
+      ? value.detail
+          .trim()
+          .slice(0, MAX_DETAIL_CHARS - suffix.length)
+          .trim()
+      : ''
   let reasonStatus: ReasonStatus | null = null
 
   if (kind === 'decision') {
@@ -162,35 +169,43 @@ function draftOf(value: unknown, seen: Seen): Draft | undefined {
     }
 
     if (detail !== '' && !detail.includes(plan.doc.title)) {
-      detail = `${detail} (per ${plan.doc.title}${plan.heading === undefined ? '' : `, section ${plan.heading}`})`
+      detail = `${detail}${suffix}`
     }
   }
 
   const supersedes = idOf(value.supersedes)
+  const triggers = kind === 'gotcha' ? sentences(value.triggers, 5, 80) : []
+  // A sentence the server would refuse is left out whole, never cut or
+  // reworded here: a sentence cut short says something else.
+  const rule = refusalOf(kind, content, detail, triggers)
+
+  if (rule !== undefined) {
+    return rule
+  }
 
   return {
     kind,
     content,
     detail,
-    alternatives: kind === 'decision' ? sentences(value.alternatives, MAX_ALTERNATIVES, MAX_CONTENT) : [],
+    alternatives: kind === 'decision' ? sentences(value.alternatives, MAX_ALTERNATIVES, MAX_ALTERNATIVE_CHARS) : [],
     anchors,
-    triggers: kind === 'gotcha' ? sentences(value.triggers, 5, 80) : [],
+    triggers,
     reasonStatus,
     // Only a recorded decision a lookup of this wake returned can be replaced.
     supersedes: kind === 'decision' && supersedes !== null && seen.facts.get(supersedes)?.kind === 'decision' ? supersedes : null,
   }
 }
 
-function askOf(value: unknown, records: readonly (Draft | undefined)[], kept: readonly Draft[], seen: Seen): Ask | null {
+function askOf(value: unknown, records: readonly (Draft | string | undefined)[], kept: readonly Draft[], seen: Seen): Ask | null {
   if (!isRecord(value) || typeof value.record !== 'number') {
     return null
   }
 
   const draft = records[value.record]
-  const record = draft === undefined ? -1 : kept.indexOf(draft)
+  const record = draft === undefined || typeof draft === 'string' ? -1 : kept.indexOf(draft)
 
   // Only a decision is ever asked about.
-  if (draft === undefined || record === -1 || draft.kind !== 'decision') {
+  if (draft === undefined || typeof draft === 'string' || record === -1 || draft.kind !== 'decision') {
     return null
   }
 
@@ -221,11 +236,12 @@ function askOf(value: unknown, records: readonly (Draft | undefined)[], kept: re
  */
 export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
   if (value.outcome !== 'act') {
-    return { records: [], question: null, tells: [] }
+    return { records: [], question: null, tells: [], faults: [] }
   }
 
   const given = (Array.isArray(value.records) ? value.records : []).slice(0, MAX_RECORDS).map(record => draftOf(record, seen))
-  const records = given.filter((draft): draft is Draft => draft !== undefined)
+  const records = given.filter((draft): draft is Draft => draft !== undefined && typeof draft !== 'string')
+  const faults = given.flatMap((draft, record) => (typeof draft === 'string' ? [{ record, rule: draft }] : []))
   const tells: string[] = []
 
   for (const entry of Array.isArray(value.tells) ? value.tells : []) {
@@ -253,7 +269,7 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     }
   }
 
-  return { records, question, tells }
+  return { records, question, tells, faults }
 }
 
 // What a person says when there is no why: that they do not know, or that

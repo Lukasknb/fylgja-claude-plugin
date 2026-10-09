@@ -1,5 +1,6 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
+import { destinationOf } from './account'
 import { withGlyphs } from './citations'
 import * as Draft from './draft'
 import { restored } from './known'
@@ -45,6 +46,10 @@ function hostOf($: EngineInterface, session: Session.Session): Host {
       ),
     read: path => $.fs.read(path),
     declared: () => $.fs.read(`${$.plugin.root}/.mcp.json`),
+    now: () => $.clock.now(),
+    after: (ms, fn) => $.clock.after(ms, fn),
+    stored: key => $.store.get(key),
+    store: (key, value) => $.store.set(key, value),
   }
 }
 
@@ -112,6 +117,8 @@ function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost 
       ),
     surfaces: () => $.session.surfaces(),
     rows: () => $.session.messages(),
+    destination: () =>
+      session.account.state === 'pinned' && session.account.who !== undefined ? destinationOf(session.account.who) : undefined,
   }
 }
 
@@ -356,7 +363,18 @@ export function register(on: On, options: PluginOptions = {}): void {
 
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
     // The band is the survey's while one is up, and an agent's transcript is not Scribe's.
-    const shown = e.props.hasSurvey || e.props.view?.agentId !== undefined ? undefined : Scribe.view(scribe, e.props.isWorking)
+    // The question of which account is signed in comes before anything of Scribe's.
+    const shown =
+      e.props.hasSurvey || e.props.view?.agentId !== undefined
+        ? undefined
+        : (Session.accountView(session) ??
+          Scribe.view(
+            scribe,
+            e.props.isWorking,
+            session.account.state === 'pinned' && session.account.who !== undefined
+              ? destinationOf(session.account.who)
+              : undefined,
+          ))
 
     if (shown === undefined || (e.surface !== 'terminal' && e.surface !== 'desktop')) {
       return next(e)
@@ -416,7 +434,11 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     if (key !== undefined) {
       try {
-        await Scribe.pressed(scribeHostOf($, session), scribe, key)
+        if (key.startsWith('account-')) {
+          await Session.pressed(hostOf($, session), session, key)
+        } else {
+          await Scribe.pressed(scribeHostOf($, session), scribe, key)
+        }
       } catch {
         // The press is done with.
       }

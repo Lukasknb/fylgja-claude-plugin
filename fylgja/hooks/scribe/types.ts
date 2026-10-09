@@ -40,6 +40,8 @@ export type Verdict = {
   question: Ask | null
   /** Ids of records worth telling the developer about, each one a lookup returned. */
   tells: string[]
+  /** Records left out because Fylgja would refuse their text: which, and by which of its rules. */
+  faults: { record: number; rule: string }[]
 }
 
 /** A record as Fylgja returned it, as much as the band shows. Its texts are held as received and made safe where drawn. */
@@ -50,6 +52,8 @@ export type Fact = {
   detail: string
   alternatives: string[]
   anchors: Anchor[]
+  /** The paths among its anchors that another member than its author added: not the author's word on where it applies. */
+  addedByOthers: string[]
   reasonStatus: ReasonStatus | null
   /** The day it was last confirmed or written, `YYYY-MM-DD`. */
   date: string | null
@@ -63,8 +67,13 @@ export type Written = {
   kind: RecordKind
   content: string
   reasonStatus: ReasonStatus | null
-  /** Whether it is new, one that had been removed and is back, or one whose reason the developer just gave. */
-  outcome: 'created' | 'restored' | 'reasoned'
+  /**
+   * Whether it is new, one that had been removed and is back, one whose
+   * reason the developer just gave, or one another member of the team
+   * already holds: theirs to change, so it can be neither fixed nor removed
+   * from here.
+   */
+  outcome: 'created' | 'restored' | 'reasoned' | 'held'
   /** The sentence of the recorded decision it replaced, when it replaced one. */
   replaced: string | null
 }

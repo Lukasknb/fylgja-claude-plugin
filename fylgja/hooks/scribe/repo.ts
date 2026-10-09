@@ -3,13 +3,8 @@
  * and a file as its path from the root of the working tree.
  */
 
+import { isRepoPath, symbolOf, withoutLine } from './gate'
 import type { Anchor } from './types'
-
-/** No path longer than this is an anchor. */
-const MAX_PATH = 400
-
-/** No symbol longer than this is kept. */
-const MAX_SYMBOL = 200
 
 function tail(path: string): string {
   return (
@@ -55,20 +50,11 @@ export function repoNameOf(remote: string | null, root: string): string | undefi
 }
 
 /**
- * Whether `path` may be a record's anchor: relative, written with forward
- * slashes, and never leading out of the tree it is relative to.
+ * Whether `path` may be a record's anchor: a path of the repository as
+ * Fylgja's server takes one, never leading out of the tree it is relative to.
  */
 export function isAnchorPath(path: string): boolean {
-  return (
-    path !== '' &&
-    path.length <= MAX_PATH &&
-    !path.startsWith('/') &&
-    !path.endsWith('/') &&
-    !path.includes('\\') &&
-    !/^[a-zA-Z]:/.test(path) &&
-    !/[\u0000-\u001f]/.test(path) &&
-    path.split('/').every(part => part !== '' && part !== '.' && part !== '..')
-  )
+  return isRepoPath(path)
 }
 
 /**
@@ -93,10 +79,17 @@ export function relativeTo(root: string, path: string): string | undefined {
   return isAnchorPath(relative) ? relative : undefined
 }
 
+/** How exactly an anchor says where: a symbol in a file before a file, a file deep in the tree before a folder near its top. */
+function sharpness(anchor: Anchor): number {
+  return (anchor.symbol === undefined ? 0 : 1000) + anchor.path.split('/').length
+}
+
 /**
- * The anchors of `value` that may be written: each a path inside the tree,
- * each once, at most `max`. Anything else in the list is left out, so one
- * bad path never costs a record.
+ * The anchors of `value` that may be written: each a path inside the tree
+ * as the server takes one (a line number at its end is taken off), each
+ * once. Anything else in the list is left out, so one bad path never costs
+ * a record. The server refuses a write with more than it allows rather than
+ * cutting it, so with more than `max` the most exact ones are kept.
  *
  * @param known when given, only these paths are taken: the files the session
  *   itself touched, so a record never points at a file nobody opened
@@ -106,21 +99,27 @@ export function anchorsOf(value: unknown, max: number, known?: ReadonlySet<strin
   const seen = new Set<string>()
 
   for (const entry of Array.isArray(value) ? value : []) {
-    const path: unknown = typeof entry === 'string' ? entry : (entry as { path?: unknown } | null)?.path
-    const symbol: unknown = typeof entry === 'string' ? undefined : (entry as { symbol?: unknown } | null)?.symbol
+    const given: unknown = typeof entry === 'string' ? entry : (entry as { path?: unknown } | null)?.path
+    const path = typeof given === 'string' ? withoutLine(given.trim()) : ''
 
-    if (typeof path !== 'string' || !isAnchorPath(path) || (known !== undefined && !known.has(path))) {
+    if (!isAnchorPath(path) || (known !== undefined && !known.has(path))) {
       continue
     }
 
-    const named = typeof symbol === 'string' && symbol.trim() !== '' && symbol.length <= MAX_SYMBOL ? symbol.trim() : undefined
+    const named = typeof entry === 'string' ? undefined : symbolOf((entry as { symbol?: unknown } | null)?.symbol)
     const key = `${path}\u0000${named ?? ''}`
 
-    if (!seen.has(key) && anchors.length < max) {
+    if (!seen.has(key)) {
       seen.add(key)
       anchors.push(named === undefined ? { path } : { path, symbol: named })
     }
   }
 
-  return anchors
+  if (anchors.length <= max) {
+    return anchors
+  }
+
+  const kept = new Set([...anchors].sort((a, b) => sharpness(b) - sharpness(a)).slice(0, max))
+
+  return anchors.filter(anchor => kept.has(anchor))
 }

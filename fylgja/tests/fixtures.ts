@@ -34,6 +34,13 @@ export function answer(payload: unknown): Record<string, unknown> {
   return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false }
 }
 
+/** The account every test session is signed in as, as `whoami` answers. */
+export const ACCOUNT = {
+  user: { id: '11111111-0000-4000-8000-000000000001', display_name: 'Ada Lovelace' },
+  team: { id: '22222222-0000-4000-8000-000000000002', name: 'Acme' },
+  profile: { id: '33333333-0000-4000-8000-000000000003', name: 'Work' },
+}
+
 export const CONNECTED = { isConnected: true, server: 'plugin:fylgja:fylgja' }
 export const NEEDS_SIGN_IN = { isConnected: false, reason: 'auth', message: 'fylgja needs sign-in' }
 
@@ -43,8 +50,6 @@ type Call = { server: string; tool: string; args: Record<string, unknown> }
 const FORBIDDEN = [
   'ui.log',
   'ui.toast',
-  'store.get',
-  'store.set',
   'prompt.read',
   'process.run',
   'http.fetch',
@@ -86,6 +91,7 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
   const calls: Call[] = []
   const statuses: (string | undefined)[] = []
   const forbidden: string[] = []
+  const pinned = new Map<string, unknown>()
   const clock = mock.clock(on)
   let connects = 0
 
@@ -118,7 +124,30 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
     return { value: ((await options.connect?.(clock)) ?? CONNECTED) as never }
   })
 
+  // The one thing the plugin keeps on the machine here: which account it is set up for.
+  on('store.get', ($, e) => {
+    if (e.key !== 'fylgja.account') {
+      forbidden.push('store.get')
+    }
+
+    return { value: pinned.get(e.key) as never }
+  })
+  on('store.set', ($, e) => {
+    if (e.key !== 'fylgja.account') {
+      forbidden.push('store.set')
+    }
+
+    pinned.set(e.key, e.value)
+
+    return { value: undefined }
+  })
+
   on('mcp.call', async ($, e) => {
+    // Who is signed in is asked before anything else, and is not one of the lookups a test counts.
+    if (e.tool === 'whoami') {
+      return { value: answer(ACCOUNT) as never }
+    }
+
     calls.push({ server: e.server, tool: e.tool, args: e.args })
 
     if (e.tool !== 'resolve' || options.resolve === undefined) {

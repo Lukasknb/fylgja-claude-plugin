@@ -7,7 +7,16 @@
  */
 
 /** The tools of Fylgja this plugin calls itself. */
-export const OWN_TOOLS: readonly string[] = ['recall', 'search', 'open', 'resolve', 'remember', 'amend_memory', 'attach_commit']
+export const OWN_TOOLS: readonly string[] = [
+  'whoami',
+  'recall',
+  'search',
+  'open',
+  'resolve',
+  'remember',
+  'amend_memory',
+  'attach_commit',
+]
 
 /** The id the engine gives a call a plugin raised itself. */
 const OWN_CALL = 'toolu_plugin_'

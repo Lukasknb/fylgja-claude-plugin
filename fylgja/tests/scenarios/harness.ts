@@ -118,13 +118,21 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     exists: path => Promise.resolve(path === `${ROOT}/.git`),
     surfaces: () => Promise.resolve(['terminal']),
     rows: () => Promise.resolve(world.rows),
+    destination: () => undefined,
   }
 }
 
 /** The plugin's own calls for the check of its connection, as its own module binds them. */
-function probeHostOf($: EngineInterface, said: string[]): Host {
+function probeHostOf($: EngineInterface, said: string[], kept: Map<string, unknown>, own: { server: string | undefined }): Host {
   return {
-    connect: () => $.mcp.connect('fylgja'),
+    connect: async () => {
+      const connection = await $.mcp.connect('fylgja')
+
+      // What the permission rule goes by, as the plugin's own session keeps it.
+      own.server = connection.isConnected ? connection.server : undefined
+
+      return connection
+    },
     call: (server, tool, args) => $.mcp.call(server, tool, args),
     status: text => {
       if (text !== undefined) {
@@ -141,6 +149,15 @@ function probeHostOf($: EngineInterface, said: string[]): Host {
       ),
     read: path => $.fs.read(path),
     declared: () => $.fs.read(`${$.plugin.root}/.mcp.json`),
+    now: () => $.clock.now(),
+    after: (ms, fn) => $.clock.after(ms, fn),
+    // The pin is kept in the run's own memory, never on the machine.
+    stored: key => Promise.resolve(kept.get(key)),
+    store: (key, value) => {
+      kept.set(key, value)
+
+      return Promise.resolve()
+    },
   }
 }
 
@@ -326,7 +343,7 @@ export function register(on: On): void {
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'scribe-scenarios' }, async ($, e) => {
-    const [model = 'haiku', run = '1', from = '', to = ''] = e.args.trim().split(/\s+/)
+    const [model = 'haiku', run = '1', from = '', to = '', pinned = ''] = e.args.trim().split(/\s+/)
     const scenarios = JSON.parse(await $.fs.read(from)) as Scenario[]
     // With no scenario to run: what the plugin's own check of the connection
     // comes to in this project, and, where it holds, who served its call.
@@ -336,9 +353,11 @@ export function register(on: On): void {
 
       Session.located(session, await $.session.cwd())
 
-      const server = await Session.serverOf(probeHostOf($, said), session, true)
-
-      own.server = session.server
+      // A fifth word seeds the pin with another account than the stand-in answers, as a machine set up for someone else.
+      const kept = new Map<string, unknown>(
+        pinned === '' ? [] : [['fylgja.account', { user: pinned, team: null, profile: pinned }]],
+      )
+      const server = await Session.serverOf(probeHostOf($, said, kept, own), session, true)
 
       const served =
         server === undefined
@@ -348,7 +367,7 @@ export function register(on: On): void {
               () => 'refused',
             )
 
-      return { text: `own=${server ?? 'no'} status=${said.at(-1) ?? 'none'} served=${served}` }
+      return { text: `own=${server ?? 'no'} account=${session.account.state} status=${said.at(-1) ?? 'none'} served=${served}` }
     }
 
     const connection = await $.mcp.connect('fylgja')

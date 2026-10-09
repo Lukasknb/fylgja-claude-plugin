@@ -289,7 +289,7 @@ describe('Scribe records', () => {
     await ui.redraw()
 
     expect(await ui.text()).toBe(
-      '✓ Recorded 3Use A. [1 Fix] [2 Remove]Use B. [3 Fix] [4 Remove]Use C. [5 Fix] [6 Remove] [0 Close]',
+      '✓ Recorded 3Use A. [1 Fix] [2 Remove]Use B. [3 Fix] [4 Remove]Use C. [5 Fix] [6 Remove]Recorded to Acme as Ada Lovelace, profile Work [0 Close]',
     )
 
     await ui.press('remove:1')
@@ -297,7 +297,9 @@ describe('Scribe records', () => {
     await ui.redraw()
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(102), op: 'remove' }])
-    expect(await ui.text()).toBe('✓ Recorded 2Use A. [1 Fix] [2 Remove]Use C. [3 Fix] [4 Remove] [0 Close]')
+    expect(await ui.text()).toBe(
+      '✓ Recorded 2Use A. [1 Fix] [2 Remove]Use C. [3 Fix] [4 Remove]Recorded to Acme as Ada Lovelace, profile Work [0 Close]',
+    )
   })
 
   test('a gotcha is written with the words a later command would hold, and no reason status', async ($, on) => {

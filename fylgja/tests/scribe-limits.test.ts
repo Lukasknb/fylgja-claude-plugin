@@ -9,7 +9,7 @@ import { MAX_PLANS_CHARS } from '../hooks/scribe/prompt'
 import * as Band from '../hooks/scribe/band'
 import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS } from '../hooks/scribe/scribe'
 import { TWIN_STATUS } from '../hooks/session'
-import { answer, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { ACCOUNT, answer, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
   claude,
   decision,
@@ -286,9 +286,18 @@ describe('whether Scribe’s calls get through is settled before a model is aske
   ): Promise<unknown> {
     const plugin = hooks()
     const $ = {
-      mcp: { connect: () => Promise.resolve({ isConnected: true, server }) },
+      mcp: {
+        connect: () => Promise.resolve({ isConnected: true, server }),
+        // Who is signed in: the first account this machine sees.
+        call: () => Promise.resolve(answer(ACCOUNT)),
+      },
       ui: { status: () => undefined, invalidate: () => undefined },
-      clock: { every: () => ({ cancel: () => undefined }) },
+      clock: {
+        every: () => ({ cancel: () => undefined }),
+        now: () => Promise.resolve(0),
+        after: () => ({ cancel: () => undefined }),
+      },
+      store: { get: () => Promise.resolve(undefined), set: () => Promise.resolve() },
       // A project with no `.mcp.json` anywhere above it.
       fs: { stat: () => Promise.reject(new Error('no such file')), read: () => Promise.reject(new Error('no such file')) },
       plugin: { root: '/plugin' },

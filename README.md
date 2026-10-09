@@ -91,12 +91,20 @@ at a time.
   a workaround, a departure from the plan, a correction of yours, a gotcha
   that cost time: written to Fylgja at once, with the reason, what was
   rejected, and the files it concerns. Not naming, formatting, routine edits
-  or status. A record points only at files the session itself opened. Then
-  one line:
+  or status. A record points only at files the session itself opened, at
+  most twelve of them. Fylgja takes a record only as one sentence that
+  opens with an instruction word or says what is so (`Use …`, `Never …`,
+  `X is Y`) and refuses rather than trims; Scribe holds every record to
+  those rules before it sends it, asks its model once to put a sentence
+  right, and leaves out what still would be refused. Then one line:
 
   `✓ Recorded · Use Postgres advisory locks for the job queue, not Redis.   1 Fix  2 Remove  0 OK`
 
   Fix opens the sentence in a field. Remove takes the record away again.
+  A change Fylgja turns down is said in one line (`Not saved: another
+  record already says this.`) and not tried again. A decision a teammate
+  has already recorded is theirs to change: the line then reads `Already
+  recorded by someone else` and offers neither Fix nor Remove.
   Several records from one turn are one line, `✓ Recorded 3   1 Review`. A
   record you had removed and that is written again says `Restored`. The
   line goes by itself after twenty seconds, or when you send your next
@@ -123,7 +131,8 @@ at a time.
 
   `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12   1 Open  2 Tell Claude  3 Knew this  0 Dismiss`
 
-  Open shows the reason, what was rejected and where, with a link to the
+  Open shows the reason, what was rejected and where (a place another
+  member than the record's author added says so), with a link to the
   record. Tell Claude puts a quoted note in your prompt box for you to send
   or not; it sends nothing, and leaves a box with text in it alone. Knew
   this keeps that record away on this machine for good.
@@ -217,9 +226,42 @@ What this does not close, because nothing inside a plugin can:
   trust. An entry of your own at Fylgja's address under another name is
   caught by the name check and the plugin stays out; one you named
   `plugin:fylgja:fylgja` yourself is taken for the plugin's.
-- **Which account is signed in.** Fylgja's server has no tool yet that names
-  the signed-in account, so the plugin cannot hold the connection to one.
-  When it has, that check goes into the same place.
+- **The first account.** The plugin holds the connection to the first
+  account it ever sees on a machine (below). It has no way to know that
+  this first one is the right one.
+
+### The account this machine is set up for
+
+The first time the plugin connects to Fylgja on a machine it asks who is
+signed in (`whoami`) and keeps the ids of that user, team and profile: the
+pin. Names are not kept; they are asked for again and held in memory, to
+show.
+
+From then on, when a session starts and after `/clear`, a resume or a
+fork, the plugin asks who is signed in before it asks Fylgja anything
+else. While the answer is the pinned account, nothing changes, and
+Scribe's first line (`What is this`) and the opened list of what it
+recorded say where records go: `Recorded to Acme as Ada Lovelace, profile
+Work`.
+
+If another user, team or profile answers (you signed in as someone else,
+or something configured a token of its own), the plugin stays out
+altogether for the session: no lookup, no record, no model call. One line
+under the prompt names who is signed in, and a line above the prompt
+offers to accept it:
+
+`? Fylgja is signed in as another account than this machine is set up for. Now: Eve (Rival)   1 Use this account from now on   0 Not now`
+
+Accepting takes two presses of `1`. It replaces the pin, and the plugin
+works for that account from then on. `Not now` puts the question away
+until the next session; signing in as the pinned account with `/mcp` ends
+it too.
+
+If Fylgja does not say who is signed in (the call fails, takes more than
+eight seconds, or the server has no `whoami` yet), the plugin stays out
+for that conversation as well, with
+`Fylgja did not say which account is signed in, so the plugin stays out for now`.
+It asks again when the next conversation starts.
 
 ### What Scribe costs
 
@@ -281,9 +323,9 @@ Everything else in this README goes on working with Scribe off.
 - Text from the session, from a plan and from Fylgja is handed to the model
   fenced as data with the instruction that it is never to be followed. A
   record that says "ignore the above" is a record that says so.
-- It lets through, without asking you, exactly its own calls of seven
-  tools (`recall`, `search`, `open`, `resolve`, `remember`, `amend_memory`,
-  `attach_commit`) on the Fylgja server this plugin declares, and never past
+- It lets through, without asking you, exactly its own calls of eight
+  tools (`whoami`, `recall`, `search`, `open`, `resolve`, `remember`,
+  `amend_memory`, `attach_commit`) on the Fylgja server this plugin declares, and never past
   a rule of yours or your organization's that refuses them. Claude's calls
   to the very same tools, and every other tool call, are decided as they
   always were. Only the plugin's own connection (`plugin:fylgja:fylgja`)
@@ -331,6 +373,9 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   the Fylgja records Scribe looked up for that turn. This goes to your
   model provider through Claude Code, on your own Claude plan; how much,
   and how often, is under "What Scribe costs".
+- **Asked of Fylgja first:** who is signed in (`whoami`), once when a
+  session starts and once after each `/clear`, resume or fork. Nothing is
+  sent with the question.
 - **Sent to Fylgja, by Scribe:** the repository as `owner/name` and the
   paths of the files Claude touched, to look up what is recorded about
   them; at most three lookups a turn that the model asks for, one of them a
@@ -347,6 +392,9 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   bring back still carries its references. No prompt text is kept. What
   Scribe read of the session, the plan documents and the records are held
   in memory too and go with the conversation.
+- **Kept on this machine:** the pin, under `fylgja.account`: the ids of
+  the user, the team and the profile of the account this machine is set
+  up for. Three ids, no name, no token.
 - **Kept on this machine, by Scribe:** the ids of at most 500 records you
   marked `Knew this`, two counters for holding back after ignored offers,
   whether Scribe is switched off, and whether it has shown anything yet.
@@ -385,7 +433,16 @@ to see how often it is right and how often it speaks when it should not.
 The tests drive Scribe against a stand-in for Claude Code, and the scenario
 run is headless. What only a signed-in interactive session can show:
 
-1. First of all, the name of the plugin's connection in an installed copy.
+1. First of all, the pin on the real server: start a session signed in
+   to Fylgja with the plugin installed, and check that chips resolve and
+   Scribe runs (which means `whoami` answered and was let through with no
+   dialog, also when it is asked at session start and not at a turn's
+   end). Then sign in as another account with `/mcp`, start a new
+   session, and check the line under the prompt, the line above it, that
+   nothing is looked up or recorded, and that two presses of `1` accept
+   the new account. On a server that has no `whoami` yet the whole plugin
+   stays out: deploy the server before this plugin.
+2. The name of the plugin's connection in an installed copy.
    Type `/mcp` in a session with the plugin installed from the marketplace
    (not `--plugin-dir`) and read the name Fylgja is listed under. It must
    be exactly `plugin:fylgja:fylgja`, as it is under `--plugin-dir`. If an
@@ -394,25 +451,25 @@ run is headless. What only a signed-in interactive session can show:
    and the line about Fylgja being set up outside the plugin shows.
    `OWN_SERVER` in `fylgja/hooks/scribe/grant.ts` is the one place to
    change.
-2. The band: that each line draws above the prompt in the terminal and in
+3. The band: that each line draws above the prompt in the terminal and in
    the desktop app, wraps sensibly at a narrow width, and that the digit
    keys press (after ctrl+x tab or a click; a bare digit in an empty box).
-3. The two-press keys: that a single "2" or "3" typed into an empty box
+4. The two-press keys: that a single "2" or "3" typed into an empty box
    only changes what the key says, and that the second press acts.
-4. The field for Fix and for a typed reason: that it takes the keyboard
+5. The field for Fix and for a typed reason: that it takes the keyboard
    when its key is pressed, that Enter saves and Esc leaves.
-5. Whether the wait at the end of a turn is felt. Scribe works after the
+6. Whether the wait at the end of a turn is felt. Scribe works after the
    turn's own end is reported, usually for one to four seconds: check that
    the prompt box takes typing and a sent prompt starts at once meanwhile.
-6. The same for the lookup on every fourth step of a long turn, which may
+7. The same for the lookup on every fourth step of a long turn, which may
    hold that step for up to a second and a half, and for the first lookup
    of a session, which is waited for up to eight seconds, once.
-7. The permission rule on the live server: that Scribe's own `recall`,
+8. The permission rule on the live server: that Scribe's own `recall`,
    `remember`, `amend_memory` and `attach_commit` go through with no dialog,
    that Claude's own `remember` still asks as before, and that a deny rule
    of yours for any one of these tools still refuses Scribe and turns it
    off with the one line of status.
-8. Fylgja configured both ways: add an entry with the same address to your
+9. Fylgja configured both ways: add an entry with the same address to your
    settings or to a repository's `.mcp.json`, under any name, and once
    under the name `plugin:fylgja:fylgja`. The plugin
    must stay out with its one line of status, and nothing of it must reach
@@ -421,20 +478,24 @@ run is headless. What only a signed-in interactive session can show:
    Claude Code answered the other entry's name and Scribe made no call.)
    With another address under the name `fylgja`, the plugin's own server
    is used and Scribe runs.
-9. Keys pressed in the band: that Fix, Remove and an answer reach Fylgja
+10. Keys pressed in the band: that Fix, Remove and an answer reach Fylgja
    from there with no dialog. If the engine refuses a call made from a key
    press, Scribe takes that as a refusal like any other and is off for the
    session; if it only fails, the change is made at the end of the next
    turn. Check that neither happens in ordinary use.
-10. That a tell appears while Claude is still working, a question only once
+11. That a tell appears while Claude is still working, a question only once
    it has finished, and none of them, nor a receipt, while the box has text
    in it.
-11. What the conversation's rows hold in an interactive session: that a
+12. What the conversation's rows hold in an interactive session: that a
     prompt you typed is found again word for word (headless it is), so
     your words are told from a background task's report, and that `Read`,
     `Write` and `ExitPlanMode` carry a plan's text as the tests assume
     (`Read` and `Write` do, headless).
-12. `Tell Claude`: that the note lands in the box, unsent, and that a box
+13. `Tell Claude`: that the note lands in the box, unsent, and that a box
     with text is left alone with the notice.
-13. What a `/clear` does to the session's id: Scribe reads it again and
+14. What a `/clear` does to the session's id: Scribe reads it again and
     carries the session's question counts over only if it is the same.
+15. A record's link: the tell's `Open in Fylgja` and the link in a `Tell
+    Claude` note come from a `link` field on a recalled record. The
+    server's contract for `recall` carries none at the time of writing; if
+    it stays that way, both simply do not appear.

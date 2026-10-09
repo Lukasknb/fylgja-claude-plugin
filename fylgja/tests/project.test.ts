@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { standsIn } from '../hooks/project'
-import { accountPin, TWIN_STATUS } from '../hooks/session'
+import { TWIN_STATUS } from '../hooks/session'
 import { answer, MEETING_ID, meetingRecord, token } from './fixtures'
 import { claude, decision, dev, edit, ROOT, stage, START, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
@@ -235,9 +235,5 @@ describe('which entries could stand in', () => {
     ]) {
       expect(standsIn('kb', { url }, HOSTS), url).toBe(false)
     }
-  })
-
-  test('no account pin is available yet', () => {
-    expect(accountPin()).toBe('unavailable')
   })
 })

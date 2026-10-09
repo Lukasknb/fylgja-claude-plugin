@@ -18,7 +18,10 @@ function moved(count: unknown): string {
 function remembered(result: Record<string, unknown>): Receipt | undefined {
   const isPlain =
     (result.supersede === undefined || result.supersede === 'not_requested' || result.supersede === 'applied') &&
-    (result.grounding_flagged === undefined || result.grounding_flagged === false)
+    (result.grounding_flagged === undefined || result.grounding_flagged === false) &&
+    // Something that was sent was not applied, or the repository may be another's spelling: the row says which.
+    (result.note === undefined || result.note === null) &&
+    (result.repo_hint === undefined || result.repo_hint === null)
 
   // A replacement Fylgja refused, or a note it flagged for review, comes with
   // a reason the person should read in full.
@@ -33,6 +36,8 @@ function remembered(result: Record<string, unknown>): Receipt | undefined {
       return { line: `Remembered.${replaced}`, isChange: true }
     case 'reconfirmed':
       return { line: `Already known — confirmed again.${replaced}`, isChange: replaced !== '' }
+    case 'restored':
+      return { line: `Remembered again — it had been removed.${replaced}`, isChange: true }
     case 'duplicate':
       return { line: 'Already known — nothing new stored.', isChange: false }
     default:

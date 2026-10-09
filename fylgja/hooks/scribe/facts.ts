@@ -46,7 +46,7 @@ function paths(value: unknown): unknown[] {
       return []
     }
 
-    return [{ path: entry.path ?? entry.ref, symbol: entry.symbol }]
+    return [{ path: entry.path ?? entry.ref, symbol: entry.symbol, added_by: entry.added_by }]
   })
 }
 
@@ -77,6 +77,9 @@ function factOf(value: unknown): Fact | undefined {
     detail: typeof value.detail === 'string' ? value.detail : '',
     alternatives: strings(value.alternatives, 6),
     anchors: anchorsOf(paths(value.anchors), 12),
+    addedByOthers: paths(value.anchors).flatMap(anchor =>
+      isRecord(anchor) && anchor.added_by === 'other' && typeof anchor.path === 'string' ? [anchor.path] : [],
+    ),
     reasonStatus: reasonStatusOf(value.reason_status),
     date: day?.slice(0, 10) ?? null,
     link: typeof value.link === 'string' && LINK.test(value.link) ? value.link : null,

@@ -103,8 +103,11 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
   }
 
   const rejected = fact.alternatives.map(alternative => drawn(alternative, MAX_OPTION)).filter(text => text !== '')
-  const where = fact.anchors.map(anchor =>
-    drawn(anchor.symbol === undefined ? anchor.path : `${anchor.path} (${anchor.symbol})`, MAX_CONTENT),
+  // Anyone on the team may add a place to a record; one its author did not add says so.
+  const where = fact.anchors.map(
+    anchor =>
+      drawn(anchor.symbol === undefined ? anchor.path : `${anchor.path} (${anchor.symbol})`, MAX_CONTENT) +
+      (fact.addedByOthers.includes(anchor.path) ? ' (added by another member)' : ''),
   )
 
   return {
@@ -183,7 +186,12 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
   }
 }
 
-const HEADS = { created: 'Recorded · ', restored: 'Restored · ', reasoned: 'Reason saved · ' } as const
+const HEADS = {
+  created: 'Recorded · ',
+  restored: 'Restored · ',
+  reasoned: 'Reason saved · ',
+  held: 'Already recorded by someone else · ',
+} as const
 
 /** A key that acts only when pressed twice: what it says before, and once it is waiting for the second press. */
 function twice(band: Band, key: string, hotkey: string, label: string, again: string): Key {
@@ -198,7 +206,7 @@ function written(record: Written): Part[] {
   ]
 }
 
-function receipt(band: Band, shown: Receipt): View {
+function receipt(band: Band, shown: Receipt, destination: string | undefined): View {
   const [only] = shown.records
 
   if (shown.records.length === 1 && only !== undefined) {
@@ -208,9 +216,11 @@ function receipt(band: Band, shown: Receipt): View {
           parts: [mark('✓'), { text: HEADS[only.outcome], tone: 'good' }, ...written(only)],
         },
       ],
+      // A record another member holds is theirs to change: there is nothing to fix or remove from here.
       keys: withAbout(band, [
-        { key: 'fix:0', hotkey: '1', label: 'Fix' },
-        twice(band, 'remove:0', '2', 'Remove', 'Press again to remove'),
+        ...(only.outcome === 'held'
+          ? []
+          : [{ key: 'fix:0', hotkey: '1', label: 'Fix' }, twice(band, 'remove:0', '2', 'Remove', 'Press again to remove')]),
         { key: 'ok', hotkey: '0', label: 'OK' },
       ]),
     }
@@ -238,11 +248,17 @@ function receipt(band: Band, shown: Receipt): View {
           ...(record.outcome === 'created' ? [] : [{ text: HEADS[record.outcome], tone: 'dim' } as const]),
           ...written(record),
         ],
-        keys: [
-          { key: `fix:${index}`, hotkey: String(index * 2 + 1), label: 'Fix' },
-          twice(band, `remove:${index}`, String(index * 2 + 2), 'Remove', 'Press again to remove'),
-        ],
+        keys:
+          record.outcome === 'held'
+            ? []
+            : [
+                { key: `fix:${index}`, hotkey: String(index * 2 + 1), label: 'Fix' },
+                twice(band, `remove:${index}`, String(index * 2 + 2), 'Remove', 'Press again to remove'),
+              ],
       })),
+      ...(destination === undefined
+        ? []
+        : [{ parts: [{ text: `Recorded to ${drawn(destination, MAX_OPTION)}`, tone: 'dim' } as const] }]),
     ],
     keys: [{ key: 'ok', hotkey: '0', label: 'Close' }],
   }
@@ -277,11 +293,15 @@ const ABOUT_ROWS: Row[] = [
  * What the band shows now, or undefined for nothing.
  *
  * @param isWorking whether Claude is working: a question waits until it is not
+ * @param destination the team, person and profile records go to, when known
  */
-export function viewOf(band: Band, isWorking: boolean): View | undefined {
+export function viewOf(band: Band, isWorking: boolean, destination?: string): View | undefined {
   if (band.isAboutOpen) {
     return {
-      rows: ABOUT_ROWS,
+      rows: [
+        ...ABOUT_ROWS,
+        ...(destination === undefined ? [] : [{ parts: [{ text: `Records go to ${drawn(destination, MAX_OPTION)}.` }] }]),
+      ],
       keys: [
         twice(band, 'off', '1', 'Turn Scribe off', 'Press again to turn Scribe off'),
         { key: 'about-ok', hotkey: '0', label: 'OK' },
@@ -323,5 +343,5 @@ export function viewOf(band: Band, isWorking: boolean): View | undefined {
     return tell(band, item)
   }
 
-  return band.receipt === null ? undefined : receipt(band, band.receipt)
+  return band.receipt === null ? undefined : receipt(band, band.receipt, destination)
 }

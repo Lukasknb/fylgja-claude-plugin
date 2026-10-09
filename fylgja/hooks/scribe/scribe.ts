@@ -13,7 +13,7 @@
  * alone. What it keeps on the machine is ids, counters and two switches.
  */
 
-import { payloadOf } from '../payload'
+import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
 import * as Band from './band'
 import { isPrompt, observe, pathsOf, plain } from './delta'
@@ -70,6 +70,8 @@ export type ScribeHost = LoopHost & {
   surfaces: () => Promise<readonly string[]>
   /** `$.session.messages`: the main conversation's rows. */
   rows: () => Promise<readonly Row[]>
+  /** The team, person and profile the connection writes to, in words; undefined while not known. */
+  destination: () => string | undefined
 }
 
 /** The session as Fylgja is told of it. */
@@ -383,35 +385,34 @@ function once(scribe: Scribe, what: string): boolean {
   return isFirst
 }
 
+/** What one call to Fylgja came to: its answer, or the server's own words for why it did not do it. */
+type Tried = { answer: Record<string, unknown> | undefined; refusal: string | undefined }
+
 /**
  * One tool call on Fylgja, waited for no longer than a fixed time. Rejects
  * when Fylgja is not connected, when the call is not let through, when it
- * fails and when it does not answer in time.
+ * fails to get there and when it does not answer in time. A call the server
+ * itself turned down is no failure of the call: its words come back as the
+ * refusal, to be read here and shown to nobody.
  */
-async function call(
-  host: ScribeHost,
-  scribe: Scribe,
-  tool: string,
-  args: Record<string, unknown>,
-): Promise<Record<string, unknown> | undefined> {
+async function tried(host: ScribeHost, scribe: Scribe, tool: string, args: Record<string, unknown>): Promise<Tried> {
   const server = await connected(host)
 
   if (server === undefined) {
     throw new Error('Fylgja is not connected')
   }
 
-  const answer = payloadOf(
-    await limited(host.after, host.call(server, tool, args), CALL_TIMEOUT_MS).catch((error: unknown) => {
-      // A call that is not let through, whichever it is, ends Scribe for
-      // the session: it does not go on reading and asking a model for
-      // records it may not write.
-      if (error instanceof Error && error.message === REFUSED) {
-        switchOff(host, scribe)
-      }
+  const result = await limited(host.after, host.call(server, tool, args), CALL_TIMEOUT_MS).catch((error: unknown) => {
+    // A call that is not let through, whichever it is, ends Scribe for
+    // the session: it does not go on reading and asking a model for
+    // records it may not write.
+    if (error instanceof Error && error.message === REFUSED) {
+      switchOff(host, scribe)
+    }
 
-      throw error
-    }),
-  )
+    throw error
+  })
+  const answer = payloadOf(result)
 
   scribe.isGranted = true
 
@@ -421,7 +422,41 @@ async function call(
     host.debug(`Fylgja holds nothing under this repository's name and offers ${knownReposIn(answer)} it knows`)
   }
 
-  return answer
+  const blocks = isRecord(result) && result.isError === true && Array.isArray(result.content) ? result.content : []
+  const words = blocks.map(block => (isRecord(block) && typeof block.text === 'string' ? block.text : '')).join('')
+
+  return { answer, refusal: answer === undefined ? words : undefined }
+}
+
+/** One tool call on Fylgja, for its answer alone; see `tried`. */
+async function call(
+  host: ScribeHost,
+  scribe: Scribe,
+  tool: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown> | undefined> {
+  return (await tried(host, scribe, tool, args)).answer
+}
+
+/**
+ * What the developer is told when Fylgja turned a change to a record down,
+ * read from the server's own refusal: a short line of fixed words, never
+ * the server's text.
+ */
+export function refusalLine(refusal: string): string {
+  const rule = /^refused:([a-z_]{1,40})\b/.exec(refusal)?.[1]
+  const lines: readonly (readonly [RegExp, string])[] = [
+    [/already says this/, 'Not saved: another record already says this.'],
+    [/removed record on this topic/, 'Not saved: a record that was removed already holds this text.'],
+    [/was changed by someone else/, 'Not saved: the record was changed by someone else just now. Try again.'],
+    [/search index/, 'Not saved: Fylgja could not reach its search index, so nothing was changed. Try again in a moment.'],
+    [/record not found/, 'Not saved: the record is gone, or is not yours to change.'],
+  ]
+
+  return (
+    lines.find(([says]) => says.test(refusal))?.[1] ??
+    (rule === undefined ? 'Not saved: Fylgja turned the change down.' : `Not saved: Fylgja turned the new text down (${rule}).`)
+  )
 }
 
 /**
@@ -446,14 +481,21 @@ function defer(scribe: Scribe, work: Deferred): void {
 }
 
 /**
- * A change to a record the developer asked for: made now, or at the next
- * turn when it cannot be made here. Whether it was made now.
+ * A change to a record the developer asked for. Whether it was made.
+ *
+ * A change Fylgja turned down is said in one plain line and left at that:
+ * it is never tried again. One that did not reach Fylgja is tried once more
+ * at the end of the next turn.
  */
 async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unknown>): Promise<boolean> {
   try {
-    await call(host, scribe, 'amend_memory', args)
+    const { answer, refusal } = await tried(host, scribe, 'amend_memory', args)
 
-    return true
+    if (answer === undefined) {
+      host.toast(refusalLine(refusal ?? ''))
+    }
+
+    return answer !== undefined
   } catch {
     // Off for the session, nothing is kept to try again.
     if (scribe.identity !== null) {
@@ -504,8 +546,18 @@ async function record(host: ScribeHost, scribe: Scribe, who: Identity, draft: Dr
 
   scribe.recorded = [...scribe.recorded, draft.content].slice(-MAX_LISTED)
 
-  // Held already: nothing was written, so there is nothing to show or undo.
-  if ((outcome !== 'created' && outcome !== 'restored') || typeof answer?.atom_id !== 'string') {
+  if (typeof answer?.atom_id !== 'string') {
+    return undefined
+  }
+
+  // Fylgja says when what was sent was not applied because the record is
+  // another member's: theirs to change, so it is shown as held and offers
+  // neither Fix nor Remove.
+  const isTheirs = outcome !== 'created' && typeof answer.note === 'string' && answer.note.trim() !== ''
+
+  // Held already by the developer's own record: nothing was written, so
+  // there is nothing to show or undo.
+  if (!isTheirs && outcome !== 'created' && outcome !== 'restored') {
     return undefined
   }
 
@@ -514,8 +566,12 @@ async function record(host: ScribeHost, scribe: Scribe, who: Identity, draft: Dr
     kind: draft.kind,
     content: draft.content,
     reasonStatus: draft.reasonStatus,
-    outcome,
+    outcome: isTheirs || (outcome !== 'created' && outcome !== 'restored') ? 'held' : outcome,
     replaced: prior !== undefined && answer.supersede === 'applied' ? prior.content : null,
+  }
+
+  if (written.outcome === 'held') {
+    return written
   }
 
   scribe.written = [...scribe.written, written].slice(-MAX_LISTED)
@@ -641,7 +697,7 @@ async function apply(
 
     Band.receive(band, [one])
 
-    if (isAskedOf && question.form === 'reason' && one.reasonStatus === 'not_stated') {
+    if (isAskedOf && question.form === 'reason' && one.reasonStatus === 'not_stated' && one.outcome !== 'held') {
       Band.offerQuestion(
         band,
         {
@@ -1337,6 +1393,6 @@ export async function entered(host: ScribeHost, scribe: Scribe, key: string, val
 }
 
 /** What the band shows now; undefined for nothing, and always while Scribe is off. */
-export function view(scribe: Scribe, isWorking: boolean): View | undefined {
-  return scribe.identity === null || scribe.identity === undefined ? undefined : viewOf(scribe.band, isWorking)
+export function view(scribe: Scribe, isWorking: boolean, destination?: string): View | undefined {
+  return scribe.identity === null || scribe.identity === undefined ? undefined : viewOf(scribe.band, isWorking, destination)
 }

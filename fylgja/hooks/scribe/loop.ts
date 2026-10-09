@@ -86,7 +86,18 @@ export type Woken = {
   usage: Usage
 }
 
-const NOTHING: Verdict = { records: [], question: null, tells: [] }
+const NOTHING: Verdict = { records: [], question: null, tells: [], faults: [] }
+
+/** What the model is told about a record whose text Fylgja would refuse, by the server's name for the rule. */
+const RULES: Readonly<Record<string, string>> = {
+  too_long: 'its "content" is over 220 characters',
+  not_one_sentence: 'its "content" must be ONE sentence: one full stop, at the very end, and none inside it',
+  not_imperative:
+    'its "content" must open with an instruction word (Use, Do not, Never, Always, Keep, Store, Read, Send, Run, Set, Put, Before, After, When, Only) or say what is so with "is", "are" or "must"',
+  status_not_memory: 'it reads as a status report (a ticket, a date, "pending", "merged"): state the rule, or leave it out',
+  no_trigger: 'a gotcha needs "triggers"',
+  detail_too_long: 'its "detail" is too long',
+}
 
 function argsOf(tool: string, args: Record<string, unknown>, repo: string): Record<string, unknown> | undefined {
   const query = typeof args.query === 'string' ? args.query.trim().slice(0, 300) : ''
@@ -131,6 +142,7 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
   let lookups = 0
   let searches = 0
   let unreadable = 0
+  let hasCorrected = false
 
   try {
     const startedAt = await host.now()
@@ -177,7 +189,19 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
       unreadable = 0
 
       if (asked.kind === 'verdict') {
-        return ended('verdict', steps, lookups, verdictOf(asked.value, { ...input.seen, facts }))
+        const verdict = verdictOf(asked.value, { ...input.seen, facts })
+
+        // A record Fylgja would refuse is said back once, by the rule it
+        // breaks, for the model to put right; after that it is left out.
+        if (verdict.faults.length > 0 && !hasCorrected && steps < MAX_STEPS) {
+          hasCorrected = true
+          said += `\n\n[Your last answer was read, and Fylgja would refuse ${verdict.faults
+            .map(fault => `record ${fault.record}: ${RULES[fault.rule] ?? 'its text'}`)
+            .join('; ')}. Answer again with the whole verdict, those records put right.]`
+          continue
+        }
+
+        return ended('verdict', steps, lookups, verdict)
       }
 
       const args = LOOKUPS.has(asked.tool) ? argsOf(asked.tool, asked.args, input.repo) : undefined

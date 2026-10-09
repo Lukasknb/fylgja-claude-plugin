@@ -638,7 +638,13 @@ describe('what Scribe keeps', () => {
     await turn($, set, dev('SECRET-PROMPT-THREE'), claude('SECRET-REPLY-THREE', edit(FILE)))
     await set.clock.advance(30_000)
 
-    expect([...set.kept.keys()].sort()).toEqual(['scribe.hasShown', 'scribe.known', 'scribe.skip', 'scribe.typedPast'])
+    expect([...set.kept.keys()].sort()).toEqual([
+      'fylgja.account',
+      'scribe.hasShown',
+      'scribe.known',
+      'scribe.skip',
+      'scribe.typedPast',
+    ])
     expect(set.kept.get('scribe.known')).toEqual([idOf(1)])
     expect(JSON.stringify([...set.kept.entries()])).not.toMatch('SECRET')
     expect(set.logged.length, 'the debug log got its one line').toBe(1)

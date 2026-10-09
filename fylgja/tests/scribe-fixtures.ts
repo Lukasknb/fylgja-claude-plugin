@@ -3,7 +3,7 @@ import { mock } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
 import type { Row } from '../hooks/scribe/delta'
-import { answer, CONNECTED, idOf } from './fixtures'
+import { ACCOUNT, answer, CONNECTED, idOf } from './fixtures'
 
 export const ROOT = '/work/repo'
 export const REPO = 'acme/web'
@@ -30,6 +30,8 @@ export type StageOptions = {
   connect?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Tools the engine does not let the plugin call, each with the engine's words for it. */
   refused?: Readonly<Record<string, string>>
+  /** What `whoami` answers, when it is not the usual account. */
+  whoami?: (clock: MockClock) => unknown
   /** The text of the plugin's own `.mcp.json`. */
   declared?: string
   /** Where the session is now, when it moves. */
@@ -52,6 +54,8 @@ export type Stage = {
   toasts: string[]
   /** Every text put in the prompt box by the plugin. */
   fills: string[]
+  /** Each time Fylgja was asked who is signed in: how many other calls had been made by then. */
+  whoamis: number[]
   /** Every file the plugin read, in order. */
   reads: string[]
   /** Every line the plugin wrote to the debug log. */
@@ -83,6 +87,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const asked: Asked[] = []
   const toasts: string[] = []
   const fills: string[] = []
+  const whoamis: number[] = []
   const reads: string[] = []
   const logged: string[] = []
   const checks: string[] = []
@@ -120,6 +125,15 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
   on('mcp.connect', async () => ({ value: ((await options.connect?.()) ?? CONNECTED) as never }))
   on('mcp.call', async ($, e) => {
+    // Who is signed in is asked before anything else; it is counted apart from the calls a test lists.
+    if (e.tool === 'whoami') {
+      whoamis.push(calls.length)
+
+      return options.whoami === undefined
+        ? { value: answer(ACCOUNT) as never }
+        : { value: (await options.whoami(clock)) as never }
+    }
+
     calls.push({ tool: e.tool, args: e.args })
 
     const refusal = options.refused?.[e.tool]
@@ -232,6 +246,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     asked,
     toasts,
     fills,
+    whoamis,
     reads,
     logged,
     checks,

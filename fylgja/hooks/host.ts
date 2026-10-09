@@ -21,6 +21,14 @@ export type Host = {
   read: (path: string) => Promise<string>
   /** The text of the plugin's own `.mcp.json`. */
   declared: () => Promise<string>
+  /** `$.clock.now`. */
+  now: () => Promise<number>
+  /** `$.clock.after`: calls `fn` once, `ms` milliseconds on. */
+  after: (ms: number, fn: () => void) => { cancel: () => void }
+  /** `$.store.get`: a value kept on this machine. */
+  stored: (key: string) => Promise<unknown>
+  /** `$.store.set`. */
+  store: (key: string, value: unknown) => Promise<void>
 }
 
 export type Connection =
