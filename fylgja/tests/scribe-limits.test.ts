@@ -7,7 +7,8 @@ import { factsOf } from '../hooks/scribe/facts'
 import { MAX_RESULT_CHARS } from '../hooks/scribe/loop'
 import { MAX_PLANS_CHARS } from '../hooks/scribe/prompt'
 import * as Band from '../hooks/scribe/band'
-import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS, TWIN_STATUS } from '../hooks/scribe/scribe'
+import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS } from '../hooks/scribe/scribe'
+import { TWIN_STATUS } from '../hooks/session'
 import { answer, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
   claude,
@@ -347,14 +348,10 @@ describe('Scribe works only through the plugin’s own connection', () => {
       await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
 
       expect(set.asked, 'no model call').toEqual([])
-      expect(
-        set.calls.filter(call => call.tool !== 'resolve'),
-        'no call of Scribe’s to the knowledge base',
-      ).toEqual([])
-      expect(set.statuses.filter(line => line !== undefined)).toEqual([TWIN_STATUS])
-      expect(set.logged).toEqual([
-        'Scribe: Fylgja is connected through an entry the plugin does not declare; off for this session',
-      ])
+      expect(set.calls, 'no call to the knowledge base at all').toEqual([])
+      // Said once, by the plugin as a whole, and gone with the next prompt.
+      expect(set.statuses.filter((line, at) => at > 0)).toEqual([TWIN_STATUS, undefined])
+      expect(set.logged).toEqual([])
       expect(await shown($)).toBe('engine: AbovePrompt')
     })
   }

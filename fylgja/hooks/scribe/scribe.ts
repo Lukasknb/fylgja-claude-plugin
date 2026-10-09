@@ -19,7 +19,7 @@ import * as Band from './band'
 import { isPrompt, observe, pathsOf, plain } from './delta'
 import type { Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
-import { OWN_SERVER, REFUSED } from './grant'
+import { REFUSED } from './grant'
 import { WAKE_DEADLINE_MS, wake } from './loop'
 import type { LoopHost } from './loop'
 import * as Plans from './plans'
@@ -175,10 +175,6 @@ export const MAX_PAST_CHARS = 3000
 
 /** What the status line says, until the next prompt, when Scribe's calls are not let through. */
 export const OFF_STATUS = 'Scribe is off in this session: its calls to Fylgja are not let through here'
-
-/** What the status line says when Fylgja runs under a connection that is not the plugin's own. */
-export const TWIN_STATUS =
-  'Scribe is off in this session: Fylgja is also set up outside the plugin here, and Scribe only works through the connection the plugin itself declares'
 
 const HOUR_MS = 3_600_000
 const MAX_LOOKUP_PATHS = 30
@@ -370,25 +366,15 @@ async function identityOf(host: ScribeHost, scribe: Scribe): Promise<Identity | 
 }
 
 /**
- * The name the plugin's own server goes by, or undefined when it is not
- * connected or does not say in time.
- *
- * Any other name ends Scribe for the session, before it has asked Fylgja or
- * a model anything: the same address is then also configured outside the
- * plugin, the engine runs the two as one under that other entry, and that
- * entry's credentials are whoever wrote it, which a cloned repository's
- * `.mcp.json` can be. Scribe writes only through the plugin's own connection.
+ * The name Fylgja's server is called under, or undefined when Scribe is not
+ * to call it: not connected, connected through an entry that is not the
+ * plugin's own (which the session decides, for the whole plugin), or not
+ * saying in time.
  */
-async function connected(host: ScribeHost, scribe: Scribe): Promise<string | undefined> {
-  const server = await limited(host.after, host.server(), CALL_TIMEOUT_MS).catch(() => undefined)
+function connected(host: ScribeHost, scribe: Scribe): Promise<string | undefined> {
+  void scribe
 
-  if (server !== undefined && server !== OWN_SERVER) {
-    switchOff(host, scribe, 'twin')
-
-    return undefined
-  }
-
-  return server
+  return limited(host.after, host.server(), CALL_TIMEOUT_MS).catch(() => undefined)
 }
 
 function once(scribe: Scribe, what: string): boolean {
@@ -422,7 +408,7 @@ async function call(
       // the session: it does not go on reading and asking a model for
       // records it may not write.
       if (error instanceof Error && error.message === REFUSED) {
-        switchOff(host, scribe, 'refused')
+        switchOff(host, scribe)
       }
 
       throw error
@@ -441,22 +427,17 @@ async function call(
 }
 
 /**
- * Scribe stops for the session: a call of its own was not let through, or
- * Fylgja is connected through something other than the plugin's own entry.
- * It says why once, on the line under the prompt, and does nothing more.
+ * Scribe stops for the session: a call of its own was not let through. It
+ * says so once, on the line under the prompt, and does nothing more.
  */
-function switchOff(host: ScribeHost, scribe: Scribe, why: 'refused' | 'twin'): void {
+function switchOff(host: ScribeHost, scribe: Scribe): void {
   scribe.identity = null
   scribe.band = { ...Band.create(), kept: scribe.band.kept }
   scribe.deferred = []
 
   if (once(scribe, 'off')) {
-    host.status(why === 'twin' ? TWIN_STATUS : OFF_STATUS)
-    host.debug(
-      why === 'twin'
-        ? 'Scribe: Fylgja is connected through an entry the plugin does not declare; off for this session'
-        : 'Scribe: its own call to Fylgja was refused; off for this session',
-    )
+    host.status(OFF_STATUS)
+    host.debug('Scribe: its own call to Fylgja was refused; off for this session')
   }
 
   host.redraw()

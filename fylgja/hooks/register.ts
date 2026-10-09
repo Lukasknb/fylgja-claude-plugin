@@ -29,7 +29,7 @@ function hostOf($: EngineInterface, session: Session.Session): Host {
     connect: () => $.mcp.connect('fylgja'),
     call: (server, tool, args) => $.mcp.call(server, tool, args),
     // The line under the prompt has one owner. Sign-in comes first; when it
-    // has nothing to say, the line shows what Scribe left there, if anything.
+    // has nothing to say, the line shows what the plugin left there, if anything.
     status: text => {
       const line = text ?? session.notice
 
@@ -87,14 +87,8 @@ function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost 
     after: (ms, fn) => $.clock.after(ms, fn),
     redraw: () => $.ui.invalidate('ui.render'),
     toast: text => $.ui.toast(drawn(text, MAX_LINE)),
-    // Scribe's line is kept beside the sign-in line and shown only while that one is not up.
-    status: text => {
-      session.notice = text
-
-      if (!session.signIn.isShown) {
-        $.ui.status(text === undefined ? undefined : drawn(text, MAX_LINE))
-      }
-    },
+    // Scribe's line goes where every line of the plugin's goes, behind the sign-in line.
+    status: text => Session.say(hostOf($, session), session, text),
     debug: text => $.ui.log(drawn(text, MAX_LINE), { to: 'debug' }),
     box: async () => (await $.prompt.read()).text,
     fill: async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled,
@@ -226,6 +220,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       // A prompt sent from the person's phone or browser is theirs too.
       if (isOwnPrompt(e.origin)) {
         try {
+          Session.prompted(hostOf($, session), session)
           Scribe.prompted(scribeHostOf($, session), scribe, e.text)
         } catch {
           // The prompt goes on as it was sent.
@@ -242,6 +237,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     // Work on what is already in hand, and nothing awaited: an offer the
     // developer typed past is taken down.
     try {
+      Session.prompted(hostOf($, session), session)
       Scribe.prompted(scribeHostOf($, session), scribe, text)
     } catch {
       // The prompt goes on as it was entered.

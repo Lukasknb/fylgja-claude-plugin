@@ -178,17 +178,20 @@ organization's denies one of its tools), Scribe is off for that session and
 says so once on the line under the prompt, until your next prompt:
 `Scribe is off in this session: its calls to Fylgja are not let through here`.
 
-**If Fylgja is also set up outside the plugin.** Scribe works only through
-the connection this plugin declares. If the same Fylgja address is also
-configured anywhere else (your own settings, or a `.mcp.json` in the
+**If Fylgja is also set up outside the plugin.** The plugin works only
+through the connection it declares itself. If the same Fylgja address is
+also configured anywhere else (your own settings, or a `.mcp.json` in the
 repository you are in), Claude Code runs the two as one under that other
 entry, with that entry's sign-in or token. A repository you cloned could
 ship such an entry with a token for somebody else's account, and what
-Scribe wrote would land there. So in that case Scribe does not run at all:
-no call to Fylgja, no model call, and one line under the prompt until your
-next prompt:
-`Scribe is off in this session: Fylgja is also set up outside the plugin here, and Scribe only works through the connection the plugin itself declares`.
-To use Scribe, remove the other entry and let the plugin provide Fylgja.
+Scribe wrote would land there. So in that case the plugin stays out
+altogether: Scribe does not run (no call to Fylgja, no model call), no
+pasted reference is looked up, and one line under the prompt says so until
+your next prompt:
+`Fylgja is also set up outside the plugin here, so the plugin stays out: it only works through the connection it declares itself`.
+Claude can still use the Fylgja tools of that other entry, as you set it
+up. To use Scribe and the chips, remove the other entry and let the plugin
+provide Fylgja.
 
 ### What Scribe costs
 
@@ -269,6 +272,16 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
 
 ## What leaves your machine, and what is kept
 
+- **Only through the plugin's own connection.** Everything below goes to
+  Fylgja through the connection this plugin declares
+  (`plugin:fylgja:fylgja` in `/mcp`), and through no other. If the same
+  Fylgja address is also set up outside the plugin, in your settings or in
+  a `.mcp.json` of the repository you are in, Claude Code runs the two as
+  one under that other entry and with its sign-in or token, which a cloned
+  repository can set to somebody else's account. The plugin then sends
+  nothing at all: no reference is looked up (its chip stays
+  `[◉ meeting · 45ada8aa]`), Scribe does not run, and one line under the
+  prompt says so until your next prompt.
 - **Sent to Fylgja:** the id of each reference in a message of yours that is
   drawn (one you typed or sent yourself), to look up its title, date and
   visibility for the chip. Nothing else of the message is sent, and a prompt
@@ -341,45 +354,55 @@ to see how often it is right and how often it speaks when it should not.
 The tests drive Scribe against a stand-in for Claude Code, and the scenario
 run is headless. What only a signed-in interactive session can show:
 
-1. The band: that each line draws above the prompt in the terminal and in
+1. First of all, the name of the plugin's connection in an installed copy.
+   Type `/mcp` in a session with the plugin installed from the marketplace
+   (not `--plugin-dir`) and read the name Fylgja is listed under. It must
+   be exactly `plugin:fylgja:fylgja`, as it is under `--plugin-dir`. If an
+   installed copy lists it under any other form, the plugin takes its own
+   connection for an outside one: no chip is looked up, Scribe never runs,
+   and the line about Fylgja being set up outside the plugin shows.
+   `OWN_SERVER` in `fylgja/hooks/scribe/grant.ts` is the one place to
+   change.
+2. The band: that each line draws above the prompt in the terminal and in
    the desktop app, wraps sensibly at a narrow width, and that the digit
    keys press (after ctrl+x tab or a click; a bare digit in an empty box).
-2. The two-press keys: that a single "2" or "3" typed into an empty box
+3. The two-press keys: that a single "2" or "3" typed into an empty box
    only changes what the key says, and that the second press acts.
-3. The field for Fix and for a typed reason: that it takes the keyboard
+4. The field for Fix and for a typed reason: that it takes the keyboard
    when its key is pressed, that Enter saves and Esc leaves.
-4. Whether the wait at the end of a turn is felt. Scribe works after the
+5. Whether the wait at the end of a turn is felt. Scribe works after the
    turn's own end is reported, usually for one to four seconds: check that
    the prompt box takes typing and a sent prompt starts at once meanwhile.
-5. The same for the lookup on every fourth step of a long turn, which may
+6. The same for the lookup on every fourth step of a long turn, which may
    hold that step for up to a second and a half, and for the first lookup
    of a session, which is waited for up to eight seconds, once.
-6. The permission rule on the live server: that Scribe's own `recall`,
+7. The permission rule on the live server: that Scribe's own `recall`,
    `remember`, `amend_memory` and `attach_commit` go through with no dialog,
    that Claude's own `remember` still asks as before, and that a deny rule
    of yours for any one of these tools still refuses Scribe and turns it
    off with the one line of status.
-7. Fylgja configured both ways: add an entry with the same address to your
-   settings or to a repository's `.mcp.json`, under any name. Scribe must
-   stay off with its line of status, and nothing must reach that entry's
-   account: no lookup, no record. (Headless, with a stand-in over stdio,
+8. Fylgja configured both ways: add an entry with the same address to your
+   settings or to a repository's `.mcp.json`, under any name. The plugin
+   must stay out with its one line of status, and nothing of it must reach
+   that entry's account: no lookup of a pasted reference, no lookup or
+   record of Scribe's. (Headless, with a stand-in over stdio,
    Claude Code answered the other entry's name and Scribe made no call.)
    With another address under the name `fylgja`, the plugin's own server
    is used and Scribe runs.
-8. Keys pressed in the band: that Fix, Remove and an answer reach Fylgja
+9. Keys pressed in the band: that Fix, Remove and an answer reach Fylgja
    from there with no dialog. If the engine refuses a call made from a key
    press, Scribe takes that as a refusal like any other and is off for the
    session; if it only fails, the change is made at the end of the next
    turn. Check that neither happens in ordinary use.
-9. That a tell appears while Claude is still working, a question only once
+10. That a tell appears while Claude is still working, a question only once
    it has finished, and none of them, nor a receipt, while the box has text
    in it.
-10. What the conversation's rows hold in an interactive session: that a
+11. What the conversation's rows hold in an interactive session: that a
     prompt you typed is found again word for word (headless it is), so
     your words are told from a background task's report, and that `Read`,
     `Write` and `ExitPlanMode` carry a plan's text as the tests assume
     (`Read` and `Write` do, headless).
-11. `Tell Claude`: that the note lands in the box, unsent, and that a box
+12. `Tell Claude`: that the note lands in the box, unsent, and that a box
     with text is left alone with the notice.
-12. What a `/clear` does to the session's id: Scribe reads it again and
+13. What a `/clear` does to the session's id: Scribe reads it again and
     carries the session's question counts over only if it is the same.
