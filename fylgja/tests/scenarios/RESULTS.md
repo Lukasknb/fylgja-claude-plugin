@@ -77,6 +77,14 @@ The two that failed, both by the same rule:
 
 Nothing was tuned after this run. It is one run of ten sessions; what it shows is where the contract costs records: a fixed list of verbs decides whether a decision that is plainly worded as an instruction is kept.
 
+### With a refused record put right once
+
+The plugin no longer holds a sentence to the server's rules itself. It sends the record; when the server refuses it for its form, the model is handed that record and the refusal once and what it puts right is sent once more. The stand-in refuses by the server's rules as they stood (a sentence opens with one of a list of verbs, or states what is so). The ten sessions, once, on the tree at commit `7d33aa4` (17 model calls in 17 turns): **9 of 10**, no false record, no false question, zero questions and zero tells in the silent sessions.
+
+- Two records were refused and handed back. "Page `/audit-log` with …" came back as "Use `offset` and `limit` to page `/audit-log` …", was written, and its question was asked about the sentence as written.
+- The other was lost, and with it the one session that failed: in the reversal, "Generate the 160, 480 and 1280 image sizes …" was refused when the developer's key wrote it. The model answered the correction twice in one reply (the record unchanged, then "Wait, that leaves the content unchanged. Corrected answer:" and a second one), and the reply was read as one object and so as none. The reading has since been changed to take the last whole answer; the sessions were not run again after that.
+- A run just before this one, at `494d06b`, is not reported as a number: it counted a refused write as a record.
+
 What the table does not say:
 
 - Thirty runs of ten sessions is a small sample, and the sessions and what counts as right were written by the same hand as the prompt. It is a first measurement, not a rate to plan on.
@@ -171,4 +179,4 @@ Each cell: correct runs, then records written / questions shown / tells shown ov
 
 ## Model calls spent in this round
 
-223 in all: 25 on Haiku (19 before the harness was corrected, 6 after), 48 on the first full Sonnet run, 75 on the second and 75 on the one reported above. The held-out run added 45, and its rerun on the committed tree 15. The run after the contract sync added another 15.
+223 in all: 25 on Haiku (19 before the harness was corrected, 6 after), 48 on the first full Sonnet run, 75 on the second and 75 on the one reported above. The held-out run added 45, and its rerun on the committed tree 15. The run after the contract sync added another 15. The two runs with the correction step added 34.

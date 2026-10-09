@@ -119,6 +119,16 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(await shown($), 'and the question still stands').toMatch('? Why')
   })
 
+  test('a model that thinks again and answers twice is taken at its last whole answer', async ($, on) => {
+    const twice = `${JSON.stringify({ record: PAGED })}\n\nWait, that leaves the content unchanged. Corrected answer:\n\n${JSON.stringify({ record: MENDED })}`
+    const set = stage(on, { replies: [verdict({ records: [PAGED] }), twice], tools: refusing('Page') })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember').map(args => args.content)).toEqual([PAGED.content, MENDED.content])
+  })
+
   test('refused a second time, the record is let go quietly: no third try, nothing shown', async ($, on) => {
     const again = { ...PAGED, content: 'Page GET /audit-log with offset and limit.' }
     const set = stage(on, {
@@ -139,6 +149,10 @@ describe('a refusal that says what is wrong is used once', () => {
     ['says to drop it', '{"drop":true}'],
     ['answers nothing usable', 'I cannot do that.'],
     ['hands the same record back', JSON.stringify({ record: PAGED })],
+    [
+      'cuts its second thought off',
+      `${JSON.stringify({ record: PAGED })}\n\nWait. Corrected answer:\n\n{"record":{"kind":"decision","content":"Use off`,
+    ],
   ] as const) {
     test(`a model that ${what} costs no second write`, async ($, on) => {
       const set = stage(on, { replies: [verdict({ records: [PAGED] }), reply], tools: refusing('Page') })
