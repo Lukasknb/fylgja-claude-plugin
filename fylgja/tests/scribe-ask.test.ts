@@ -1,0 +1,305 @@
+import { describe, expect, test } from 'claude-code/testing'
+
+import { answer, idOf } from './fixtures'
+import { band, claude, decision, dev, edit, fact, NOTHING, press, shown, stage, START, turn, verdict } from './scribe-fixtures'
+
+const TALK = [dev('Use Postgres for the queue lock.'), claude('Done.', edit('src/queue/lock.ts'))]
+
+const UNEXPLAINED = decision({ detail: '', reason_status: 'not_stated' })
+const WHY = { form: 'reason', record: 0, options: ['One less service to run', 'Redis was flaky in CI'] }
+const ASKING = verdict({ records: [UNEXPLAINED], question: WHY })
+
+const QUESTION =
+  '? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Redis was flaky in CI] [3 Other] [4 No particular reason] [9 What is this] [0 Skip]'
+
+const PRIOR = fact(5, { content: 'Use Redis with Redlock for the job queue.', anchors: [{ path: 'src/queue/lock.ts' }] })
+const REVERSAL = { form: 'reversal', record: 0, prior: idOf(5), options: ['One less service to run'] }
+
+/** A stage where the lookup by path finds an older decision the new one goes against. */
+function reversing(on: Parameters<typeof stage>[0], record: Record<string, unknown> = decision()) {
+  return stage(on, {
+    replies: [verdict({ records: [record], question: REVERSAL }), NOTHING],
+    tools: { recall: () => answer({ facts: [PRIOR] }) },
+    // The developer has said they know the older record, so it is not also told.
+    kept: { 'scribe.known': [idOf(5)] },
+  })
+}
+
+describe('Scribe asks why', () => {
+  test('a decision with no reason is written as such, and the question comes once the turn is over', async ($, on) => {
+    const set = stage(on, { replies: [ASKING] })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember')[0]).toMatchObject({ reason_status: 'not_stated', kind: 'decision' })
+    expect(set.of('remember')[0]?.detail).toBeUndefined()
+    expect(await shown($, true), 'while Claude works, only the receipt').toMatch('✓ Recorded')
+    expect(await shown($)).toBe(QUESTION)
+  })
+
+  test('picking a proposed reason saves it as the stated reason', async ($, on) => {
+    const set = stage(on, { replies: [ASKING] })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'reason:1')
+
+    expect(set.of('amend_memory')).toEqual([
+      { atom_id: idOf(101), op: 'fix', detail: 'Redis was flaky in CI', reason_status: 'stated' },
+    ])
+    expect(await shown($)).toMatch('✓ Recorded')
+  })
+
+  test('Skip saves nothing: the record stays without a reason', async ($, on) => {
+    const set = stage(on, { replies: [ASKING] })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'skip')
+
+    expect(set.of('amend_memory')).toEqual([])
+    expect(await shown($)).not.toMatch('Why')
+  })
+
+  test('“No particular reason” is an answer, and is saved as one', async ($, on) => {
+    const set = stage(on, { replies: [ASKING] })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'no-reason')
+
+    expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'fix', reason_status: 'no_strong_reason' }])
+  })
+
+  for (const [typed, status] of [
+    ['idk', 'no_strong_reason'],
+    ['no idea, it just worked', 'no_strong_reason'],
+    ['Honestly don’t know', 'no_strong_reason'],
+    ['Redis kept dropping connections under load', 'stated'],
+  ] as const) {
+    test(`a typed answer “${typed}” is saved in those words as ${status}`, async ($, on) => {
+      const set = stage(on, { replies: [ASKING] })
+
+      await $.session.start(START)
+      await turn($, set, ...TALK)
+
+      const ui = await band($)
+
+      await ui.press('other')
+      await ui.redraw()
+
+      expect(await ui.text()).toBe(' [Why]<> [0 Cancel]')
+
+      await ui.enter('reason-text', typed)
+
+      expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'fix', detail: typed, reason_status: status }])
+    })
+  }
+
+  test('a question the model asks about a gotcha, a correction or a decision with its reason is never shown', async ($, on) => {
+    const gotcha = { kind: 'gotcha', content: 'Run the seed before the tests.', detail: '', triggers: ['pytest'], anchors: [] }
+    const correction = { kind: 'correction', content: 'The staging host is stage-2, not stage-1.', detail: '', anchors: [] }
+    const set = stage(on, {
+      replies: [
+        verdict({ records: [gotcha], question: WHY }),
+        verdict({ records: [correction], question: WHY }),
+        verdict({ records: [decision({ content: 'Use B over A.' })], question: WHY }),
+      ],
+    })
+
+    await $.session.start(START)
+
+    for (let at = 0; at < 3; at += 1) {
+      await turn($, set, ...TALK)
+
+      expect(await shown($), `turn ${at}`).not.toMatch('Why')
+      await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
+    }
+
+    expect(set.of('remember').length).toBe(3)
+  })
+
+  test('a second question does not show while one is open, and the same decision is never asked about twice', async ($, on) => {
+    const other = decision({ content: 'Use B over A.', detail: '', reason_status: 'not_stated' })
+    const set = stage(on, {
+      replies: [ASKING, verdict({ records: [other], question: WHY }), ASKING],
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    // A turn that started by itself, with the first question still open.
+    await turn($, set, ...TALK)
+
+    expect(await shown($)).toBe(QUESTION)
+
+    await press($, 'reason:0')
+
+    expect(await shown($), 'the second comes when the first is answered').toMatch('? Why: Use B over A.')
+
+    await press($, 'reason:0')
+    await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
+    await turn($, set, ...TALK)
+
+    expect(await shown($), 'the first decision again').not.toMatch('Why')
+  })
+
+  test('a question comes before a tell that is waiting untouched, and the tell comes back after it', async ($, on) => {
+    const set = stage(on, {
+      replies: [ASKING],
+      tools: { recall: () => answer({ facts: [fact(7, { anchors: [{ path: 'src/queue/lock.ts' }] })] }) },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(await shown($)).toMatch('? Why: Use Postgres advisory locks')
+
+    await press($, 'skip')
+
+    expect(await shown($)).toMatch('◆ Decision · Use the queue for outbound mail')
+  })
+
+  test('two questions left unanswered end the asking for the session', async ($, on) => {
+    const ask = (n: number) =>
+      verdict({ records: [decision({ content: `Use option ${n}.`, detail: '', reason_status: 'not_stated' })], question: WHY })
+    const set = stage(on, { replies: [ask(1), ask(2), ask(3)] })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'skip')
+    await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
+    await turn($, set, ...TALK)
+
+    expect(await shown($)).toMatch('? Why: Use option 2.')
+
+    // Typed past, untouched.
+    await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember').length, 'still recorded').toBe(3)
+    expect(await shown($)).not.toMatch('Why')
+  })
+
+  test('no session is asked more than four questions', async ($, on) => {
+    const ask = (n: number) =>
+      verdict({ records: [decision({ content: `Use option ${n}.`, detail: '', reason_status: 'not_stated' })], question: WHY })
+    const set = stage(on, { replies: [ask(1), ask(2), ask(3), ask(4), ask(5)] })
+
+    await $.session.start(START)
+
+    const seen: boolean[] = []
+
+    for (let at = 0; at < 5; at += 1) {
+      await turn($, set, ...TALK)
+      seen.push((await shown($)).includes('? Why'))
+
+      if (seen.at(-1) === true) {
+        await press($, 'reason:0')
+      }
+
+      await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
+    }
+
+    expect(seen).toEqual([true, true, true, true, false])
+  })
+})
+
+describe('Scribe asks whether a decision replaces a recorded one', () => {
+  test('the new decision waits for the answer, and both are shown', async ($, on) => {
+    const set = reversing(on)
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember'), 'not written before the answer').toEqual([])
+    expect(await shown($)).toBe(
+      '? This looks like it replaces a recorded decision.Now: Use Postgres advisory locks for the job queue, not Redis.Recorded: Use Redis with Redlock for the job queue. · 2026-09-12 [1 Yes, it replaces it] [2 No, tell Claude] [3 Different case] [9 What is this] [0 Skip]',
+    )
+  })
+
+  test('“Yes, it replaces it” writes it as the replacement', async ($, on) => {
+    const set = reversing(on)
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'replaces')
+
+    expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5), reason_status: 'stated' }])
+    expect(await shown($)).toMatch('✓ Recorded')
+  })
+
+  test('“Yes, it replaces it” with no reason given asks for the reason next, with the same choices', async ($, on) => {
+    const set = reversing(on, decision({ detail: '', reason_status: 'not_stated' }))
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'replaces')
+
+    expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5), reason_status: 'not_stated' }])
+    expect(await shown($)).toBe(
+      '? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Other] [3 No particular reason] [0 Skip]',
+    )
+
+    await press($, 'no-reason')
+
+    expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'fix', reason_status: 'no_strong_reason' }])
+  })
+
+  test('“No, tell Claude” puts a note with the recorded decision in the prompt box and writes nothing', async ($, on) => {
+    const set = reversing(on)
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'tell-claude')
+
+    expect(set.of('remember')).toEqual([])
+    expect(set.fills.length).toBe(1)
+    expect(set.fills[0]).toMatch('> Decision: Use Redis with Redlock for the job queue.')
+    expect(set.fills[0]).toMatch(`> https://fylgja.lknblab.dev/open/atom/${idOf(5)}`)
+    expect(await shown($)).toBe('engine: AbovePrompt')
+  })
+
+  for (const key of ['different', 'skip']) {
+    test(`“${key}” writes the new decision beside the old one`, async ($, on) => {
+      const set = reversing(on)
+
+      await $.session.start(START)
+      await turn($, set, ...TALK)
+      await press($, key)
+
+      expect(set.of('remember').length).toBe(1)
+      expect(set.of('remember')[0]?.supersedes).toBeUndefined()
+      expect(set.of('remember')[0]?.reason_status).toBe('stated')
+    })
+  }
+
+  test('typed past, the new decision is still written, beside the old one, at the next turn', async ($, on) => {
+    const set = reversing(on)
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
+
+    expect(set.of('remember'), 'nothing is waited for when a prompt is sent').toEqual([])
+
+    await turn($, set, dev('go on'), claude('Going on.'))
+
+    expect(set.of('remember').length).toBe(1)
+    expect(set.of('remember')[0]?.supersedes).toBeUndefined()
+  })
+
+  test('a replacement the developer spelled out needs no question', async ($, on) => {
+    const set = stage(on, {
+      replies: [verdict({ records: [decision({ supersedes: idOf(5) })] })],
+      tools: { recall: () => answer({ facts: [PRIOR] }) },
+      kept: { 'scribe.known': [idOf(5)] },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5) }])
+    expect(await shown($)).toMatch('✓ Recorded')
+  })
+})

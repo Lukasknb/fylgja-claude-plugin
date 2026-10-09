@@ -61,11 +61,22 @@ const RECEIPTS: readonly (readonly [string, Record<string, unknown>, string])[] 
   ['restructure', { status: 'unchanged' }, '✓ Nothing moved.'],
   ['review_suggestion', { relation_id: idOf(4), decision: 'accept', kind: 'supersedes' }, '✓ Suggestion accepted — the newer value stands.'],
   ['review_suggestion', { relation_id: idOf(4), decision: 'reject', kind: 'supersedes' }, '✓ Suggestion withdrawn — both stay as they are.'],
+  ['amend_memory', { atom_id: idOf(1), outcome: 'fixed' }, '✓ Fixed in Fylgja.'],
+  ['amend_memory', { atom_id: idOf(1), outcome: 'removed' }, '✓ Removed from Fylgja.'],
+  ['amend_memory', { atom_id: idOf(1), outcome: 'removed', restored_prior_id: idOf(2) }, '✓ Removed from Fylgja. The older note stands again.'],
+  ['amend_memory', { atom_id: idOf(1), outcome: 'unchanged' }, '✓ Already so — nothing changed.'],
+  ['attach_commit', { attached: 2, atom_ids: [idOf(1), idOf(2)] }, '✓ Commit noted on 2 records.'],
+  ['attach_commit', { attached: 1, atom_ids: [idOf(1)] }, '✓ Commit noted on 1 record.'],
+  ['attach_commit', { attached: 0, atom_ids: [] }, '✓ Commit already noted — nothing new.'],
+  ['define_term', { outcome: 'created', term: { term: 'WP' } }, '✓ Term added — unconfirmed until you confirm it in Fylgja.'],
+  ['define_term', { outcome: 'updated', term: { term: 'WP' } }, '✓ Term updated in Fylgja.'],
+  ['define_term', { outcome: 'unchanged', term: { term: 'WP' } }, '✓ Term already says that — nothing changed.'],
+  ['define_term', { outcome: 'rename_suggested', term: { term: 'WP' } }, '✓ New name suggested — it waits for you in Fylgja.'],
 ]
 
 describe('a write to Fylgja', () => {
   for (const [tool, output, line] of RECEIPTS) {
-    test(`${tool} ${JSON.stringify(output.outcome ?? output.status ?? output.decision)} draws “${line}”`, async ($, on) => {
+    test(`${tool} ${JSON.stringify(output.outcome ?? output.status ?? output.decision ?? output.attached)} draws “${line}”`, async ($, on) => {
       engineRow(on)
 
       for (const surface of SURFACES) {
@@ -96,6 +107,9 @@ describe('a write to Fylgja', () => {
     ['restructure', { status: 'started', project_id: idOf(3) }],
     ['review_suggestion', { decision: 'maybe' }],
     ['review_suggestion', [{ type: 'text', text: 'not json' }]],
+    ['amend_memory', { outcome: 'not found' }],
+    ['attach_commit', { attached: 'two' }],
+    ['define_term', { outcome: 'refused', reason: 'a person confirmed this entry' }],
   ]
 
   for (const [tool, output] of unexpected) {
@@ -206,13 +220,13 @@ describe('what the plugin hooks', () => {
   }
 
   const READS = ['search', 'open', 'get_meeting', 'get_project', 'get_timeline', 'get_commitments', 'recall', 'resolve']
-  const WRITES = ['remember', 'save_knowledge', 'restructure', 'review_suggestion']
+  const WRITES = ['remember', 'save_knowledge', 'restructure', 'review_suggestion', 'define_term', 'amend_memory', 'attach_commit']
 
-  test('it draws at three places only, and at a tool row only for a write’s result', () => {
+  test('it draws in the transcript at three places only, at a tool row only for a write’s result, and above the prompt', () => {
     const drawing = hooked().filter(hook => hook.event === 'ui.render')
     const components = drawing.map(hook => (hook.matcher as { component?: unknown } | undefined)?.component)
 
-    expect(components).toEqual(['UserMessage', 'AssistantMessage', 'ToolResult'])
+    expect(components).toEqual(['UserMessage', 'AssistantMessage', 'ToolResult', 'AbovePrompt'])
 
     const tool = (drawing[2]?.matcher as { props: { tool: RegExp } }).props.tool
 
@@ -231,11 +245,11 @@ describe('what the plugin hooks', () => {
     }
   })
 
-  test('it hooks the prompt box and the prompt as sent, no tool call, and nothing that rewrites the conversation', () => {
+  test('it hooks the prompt box, the prompt as sent, the permission check, a turn’s steps and end and its own keys: no tool call, and nothing that rewrites the conversation', () => {
     expect(
       hooked()
         .map(hook => hook.event)
         .filter(event => event !== 'ui.render'),
-    ).toEqual(['session.start', 'classic.SessionStart', 'prompt.edit', 'prompt.submit'])
+    ).toEqual(['session.start', 'classic.SessionStart', 'prompt.edit', 'prompt.submit', 'tool.check', 'turn.step', 'turn.complete', 'ui.press', 'ui.input'])
   })
 })

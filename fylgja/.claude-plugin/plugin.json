@@ -1,8 +1,28 @@
 {
   "name": "fylgja",
-  "description": "Fylgja in every Claude Code session: the knowledge-base tools in every project, pasted record references and links drawn as what they are, one-line receipts for writes, and a line when sign-in is needed. It never adds to what Claude reads and never delays a prompt.",
+  "description": "Fylgja in every Claude Code session: the knowledge-base tools in every project, pasted record references and links drawn as what they are, one-line receipts for writes, and a line when sign-in is needed. Scribe, a background reader on your own Claude plan, records decisions with their reasons in Fylgja, asks when one has none, and tells you what is recorded about the files in hand, in a band above the prompt. It never adds to what Claude reads and never delays a prompt.",
   "version": "0.2.1",
   "author": {
     "name": "Lukasknb"
+  },
+  "userConfig": {
+    "scribe": {
+      "type": "boolean",
+      "title": "Scribe",
+      "description": "Scribe follows the session and records decisions with their reasons in Fylgja, asks when a decision has none, and tells you what is recorded about the files in hand. It uses your own Claude plan for its model calls. Off: nothing is read, asked or written.",
+      "required": false,
+      "default": true
+    },
+    "scribeModel": {
+      "type": "string",
+      "title": "Scribe's model",
+      "description": "The model Scribe thinks with: \"sonnet\" (default) or \"haiku\" (cheaper and quicker, less sure).",
+      "required": false,
+      "default": "sonnet",
+      "options": [
+        "sonnet",
+        "haiku"
+      ]
+    }
   }
 }

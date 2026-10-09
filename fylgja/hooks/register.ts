@@ -1,4 +1,4 @@
-import type { EngineInterface, On } from 'claude-code'
+import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
 import { withGlyphs } from './citations'
 import * as Draft from './draft'
@@ -9,6 +9,10 @@ import { isOwnPrompt } from './origin'
 import { decorationsOf } from './paint'
 import { receiptOf } from './receipts'
 import { drawn } from './plain'
+import { isOwnCall } from './scribe/grant'
+import * as Scribe from './scribe/scribe'
+import type { ScribeHost } from './scribe/scribe'
+import type { Part } from './scribe/view'
 import * as Session from './session'
 import { referencesIn, rowTextOf } from './user-row'
 
@@ -31,6 +35,76 @@ function hostOf($: EngineInterface): Host {
 }
 
 /**
+ * The engine calls Scribe makes, spelled out here as the others are. A call
+ * to Fylgja goes to the session's own connection, under the name the
+ * sign-in check last gave for it.
+ */
+function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost {
+  return {
+    server: () => Session.serverOf(hostOf($), session),
+    call: (server, tool, args) => $.mcp.call(server, tool, args),
+    lookup: async (tool, args) => {
+      const server = await Session.serverOf(hostOf($), session)
+
+      if (server === undefined) {
+        throw new Error('Fylgja is not connected')
+      }
+
+      return $.mcp.call(server, tool, args)
+    },
+    complete: async request => {
+      const reply = await $.model.complete({
+        model: request.model,
+        system: request.system,
+        prompt: request.prompt,
+        maxTokens: request.maxTokens,
+        effort: 'low',
+        timeoutMs: request.timeoutMs,
+      })
+
+      return {
+        text: reply.isAnswered ? reply.text : undefined,
+        usage: {
+          input: reply.usage.input_tokens,
+          output: reply.usage.output_tokens,
+          cacheRead: reply.usage.cache_read_input_tokens ?? 0,
+          cacheWrite: reply.usage.cache_creation_input_tokens ?? 0,
+        },
+      }
+    },
+    now: () => $.clock.now(),
+    after: (ms, fn) => $.clock.after(ms, fn),
+    redraw: () => $.ui.invalidate('ui.render'),
+    toast: text => $.ui.toast(drawn(text, MAX_LINE)),
+    box: async () => (await $.prompt.read()).text,
+    fill: async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled,
+    stored: key => $.store.get(key),
+    store: (key, value) => $.store.set(key, value),
+    sessionId: () => $.session.id(),
+    repo: () => $.session.repo(),
+    cwd: () => $.session.cwd(),
+    exists: path =>
+      $.fs.stat(path).then(
+        () => true,
+        () => false,
+      ),
+    surfaces: () => $.session.surfaces(),
+    rows: () => $.session.messages(),
+  }
+}
+
+const TONES: Readonly<Record<string, { color?: 'success' | 'inactive'; dimColor?: boolean; bold?: boolean }>> = {
+  dim: { dimColor: true },
+  strong: { bold: true },
+  good: { color: 'success' },
+  mark: { color: 'success' },
+}
+
+function toneOf(part: Part): { color?: 'success' | 'inactive'; dimColor?: boolean; bold?: boolean } {
+  return 'tone' in part && part.tone !== undefined ? (TONES[part.tone] ?? {}) : {}
+}
+
+/**
  * Fylgja inside Claude Code, quietly: it says when Fylgja needs sign-in, and
  * draws pasted references, links to records and the rare write as what they
  * are.
@@ -46,13 +120,24 @@ function hostOf($: EngineInterface): Host {
  * started by the row that shows it, rides the session's own Fylgja
  * connection, and is never waited for; a failure leaves the row as it is
  * drawn without an answer.
+ *
+ * Scribe is the one part that does more than draw: at the end of a turn it
+ * reads what happened, asks its own model, and writes to Fylgja. It runs
+ * beside the conversation and never in it: nothing it reads, asks or writes
+ * is added to what Claude reads, and no prompt waits for it.
  */
-export function register(on: On): void {
+export function register(on: On, options: PluginOptions = {}): void {
   const session = Session.create()
   const draft = Draft.create()
+  const scribe = Scribe.create({ isOn: options.scribe !== false, model: options.scribeModel === 'haiku' ? 'haiku' : 'sonnet' })
+  // The keys pressed and the lines entered in the band, as its elements'
+  // own handlers took them; the hook on the press does the work.
+  const presses: string[] = []
+  const entries: { key: string; value: string }[] = []
 
   on('session.start', ($, e, next) => {
     Session.startOver(session)
+    Scribe.started(scribe, e.isInteractive, e.surface)
     // Not waited on: the session starts whether or not Fylgja answers. The
     // line's state is written whatever the answer, because a plugin that was
     // just loaded cannot know whether an earlier load left the line up.
@@ -67,6 +152,7 @@ export function register(on: On): void {
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, ($, e, next) => {
     Session.startOver(session)
     Draft.startOver(draft)
+    Scribe.startOver(scribe)
     $.ui.invalidate('ui.render')
 
     return next(e)
@@ -74,6 +160,14 @@ export function register(on: On): void {
 
   on('prompt.edit', async ($, e, next) => {
     const box = await next(e)
+
+    // Whether the developer is typing; what waits above the prompt comes up
+    // once the box is empty. Nothing is asked of anyone for it.
+    try {
+      Scribe.typed(scribeHostOf($, session), scribe, box.text)
+    } catch {
+      // The box is drawn all the same.
+    }
 
     try {
       const { text, start, end, inputText } = e
@@ -110,6 +204,14 @@ export function register(on: On): void {
 
     Draft.startOver(draft)
 
+    // Work on what is already in hand, and nothing awaited: an offer the
+    // developer typed past is taken down.
+    try {
+      Scribe.prompted(scribeHostOf($, session), scribe)
+    } catch {
+      // The prompt goes on as it was entered.
+    }
+
     return text === e.text ? next(e) : next({ ...e, text })
   }).catch(($, e, next) => next(e))
 
@@ -136,13 +238,15 @@ export function register(on: On): void {
     return text === undefined ? next(e) : next({ ...e, props: { ...e.props, text } })
   })
 
-  // Only the four tools that write. Fylgja's reads are drawn by Claude Code
+  // Only the tools that write. Fylgja's reads are drawn by Claude Code
   // as every other tool's are.
   on(
     'ui.render',
     {
       component: 'ToolResult',
-      props: { tool: /^mcp__(?:plugin_fylgja_fylgja|fylgja)__(?:remember|save_knowledge|restructure|review_suggestion)$/ },
+      props: {
+        tool: /^mcp__(?:plugin_fylgja_fylgja|fylgja)__(?:remember|save_knowledge|restructure|review_suggestion|define_term|amend_memory|attach_commit)$/,
+      },
     },
     ($, e, next) => {
       const receipt = e.props.isErrored ? undefined : receiptOf(e.props.tool, e.props.output)
@@ -161,4 +265,144 @@ export function register(on: On): void {
       })
     },
   )
+
+  // Scribe's own calls to Fylgja are let through without a question to the
+  // person: this plugin's call, on its own server, of one of a fixed few
+  // tools, and never past a refusal. Every other check is passed on as it
+  // came, so nobody else's call is decided here.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+
+    return verdict.decision === 'ask' && isOwnCall(e, next.origin?.plugin)
+      ? { ...verdict, decision: 'allow' as const, reason: 'Fylgja: the plugin’s own call to its own server' }
+      : verdict
+  }).catch(async ($, e, next) => {
+    const verdict = await next(e)
+
+    // Asked here when the engine keeps the hook out of a call raised beneath
+    // the plugin's own code: the same rule, from the event alone.
+    return verdict.decision === 'ask' && isOwnCall(e, next.origin?.plugin)
+      ? { ...verdict, decision: 'allow' as const, reason: 'Fylgja: the plugin’s own call to its own server' }
+      : verdict
+  })
+
+  // The files a step of the main conversation names are noted for a lookup
+  // of what is recorded about them. The step's stream is passed on as it
+  // comes; the lookup starts after it, and a slow one is not waited for.
+  on('turn.step', async function* ($, e, next) {
+    const stepped = yield* next(e)
+
+    if (e.agentId === undefined) {
+      try {
+        await Scribe.stepped(scribeHostOf($, session), scribe, e.index, stepped.toolUses)
+      } catch {
+        // The turn goes on.
+      }
+    }
+
+    return stepped
+  })
+
+  // The end of a turn of the main conversation is where Scribe does its
+  // work, after the turn itself is done with. An agent's turn is not its
+  // business.
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+
+    if (e.agentId === undefined) {
+      try {
+        await Scribe.completed(scribeHostOf($, session), scribe)
+      } catch {
+        // The turn ended as it would have without Scribe.
+      }
+    }
+
+    return done
+  }).catch(($, e, next) => next(e))
+
+  on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
+    // The band is the survey's while one is up, and an agent's transcript is not Scribe's.
+    const shown = e.props.hasSurvey || e.props.view?.agentId !== undefined ? undefined : Scribe.view(scribe, e.props.isWorking)
+
+    if (shown === undefined || (e.surface !== 'terminal' && e.surface !== 'desktop')) {
+      return next(e)
+    }
+
+    const { Box, Button, Input, Link, Text } = $.ui.resolve(e)
+    const keys = (list: readonly { key: string; hotkey: string; label: string }[]) =>
+      list.map(key =>
+        Button({ key: key.key, label: key.label, hotkey: key.hotkey, plain: true, onPress: () => void presses.push(key.key) }),
+      )
+
+    return Box({
+      flexDirection: 'column',
+      children: [
+        ...shown.rows.map(row =>
+          Box({
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            columnGap: 2,
+            children: [
+              ...(row.field === undefined
+                ? [
+                    Text({
+                      children: row.parts.map(part =>
+                        'link' in part
+                          ? Link({ href: part.link, label: part.label })
+                          : Text({ ...toneOf(part), children: [part.text] }),
+                      ),
+                    }),
+                  ]
+                : [
+                    Input({
+                      key: row.field.key,
+                      label: row.field.label,
+                      value: row.field.value,
+                      placeholder: row.field.placeholder,
+                      submitLabel: row.field.submitLabel,
+                      // The person pressed the key that opens the field; typing goes there.
+                      autoFocus: true,
+                      onSubmit: value => void entries.push({ key: row.field?.key ?? '', value }),
+                    }),
+                  ]),
+              ...keys(row.keys ?? []),
+            ],
+          }),
+        ),
+        Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: keys(shown.keys) }),
+      ],
+    })
+  })
+
+  // A key of the band. The element's own handler only notes which; the work
+  // is done here, where a call to Fylgja is this plugin's own to make.
+  on('ui.press', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const pressed = await next(e)
+    const key = presses.shift()
+
+    if (key !== undefined) {
+      try {
+        await Scribe.pressed(scribeHostOf($, session), scribe, key)
+      } catch {
+        // The press is done with.
+      }
+    }
+
+    return pressed
+  }).catch(($, e, next) => next(e))
+
+  on('ui.input', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const entered = await next(e)
+    const entry = entries.shift()
+
+    if (entry !== undefined) {
+      try {
+        await Scribe.entered(scribeHostOf($, session), scribe, entry.key, entry.value)
+      } catch {
+        // The line is done with.
+      }
+    }
+
+    return entered
+  }).catch(($, e, next) => next(e))
 }

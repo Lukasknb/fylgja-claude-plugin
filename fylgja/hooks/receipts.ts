@@ -85,11 +85,59 @@ function reviewed(result: Record<string, unknown>): Receipt | undefined {
   }
 }
 
+function amended(result: Record<string, unknown>): Receipt | undefined {
+  switch (result.outcome) {
+    case 'fixed':
+      return { line: 'Fixed in Fylgja.', isChange: true }
+    case 'removed':
+      // Taking a replacement away makes the note it replaced the current one again.
+      return {
+        line:
+          typeof result.restored_prior_id === 'string'
+            ? 'Removed from Fylgja. The older note stands again.'
+            : 'Removed from Fylgja.',
+        isChange: true,
+      }
+    case 'unchanged':
+      return { line: 'Already so — nothing changed.', isChange: false }
+    default:
+      return undefined
+  }
+}
+
+function attached(result: Record<string, unknown>): Receipt | undefined {
+  if (typeof result.attached !== 'number' || result.attached < 0) {
+    return undefined
+  }
+
+  return result.attached === 0
+    ? { line: 'Commit already noted — nothing new.', isChange: false }
+    : { line: `Commit noted on ${result.attached} ${result.attached === 1 ? 'record' : 'records'}.`, isChange: true }
+}
+
+function defined(result: Record<string, unknown>): Receipt | undefined {
+  switch (result.outcome) {
+    case 'created':
+      return { line: 'Term added — unconfirmed until you confirm it in Fylgja.', isChange: true }
+    case 'updated':
+      return { line: 'Term updated in Fylgja.', isChange: true }
+    case 'unchanged':
+      return { line: 'Term already says that — nothing changed.', isChange: false }
+    case 'rename_suggested':
+      return { line: 'New name suggested — it waits for you in Fylgja.', isChange: false }
+    default:
+      return undefined
+  }
+}
+
 const READERS: Readonly<Record<string, (result: Record<string, unknown>) => Receipt | undefined>> = {
   remember: remembered,
   save_knowledge: saved,
   restructure: restructured,
   review_suggestion: reviewed,
+  amend_memory: amended,
+  attach_commit: attached,
+  define_term: defined,
 }
 
 /**
