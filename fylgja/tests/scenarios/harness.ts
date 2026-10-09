@@ -31,7 +31,7 @@ type Outcome = {
   id: string
   model: string
   run: number
-  calls: { tool: string; args: Record<string, unknown> }[]
+  calls: { tool: string; args: Record<string, unknown>; isRefused?: boolean }[]
   /** What the band showed after each turn and each key. */
   shown: { turn: number; kind: string; text: string }[]
   modelCalls: number
@@ -57,11 +57,21 @@ const ROOT = '/work/app'
 function hostOf($: EngineInterface, world: World): ScribeHost {
   const { outcome } = world
   const call = (tool: string, args: Record<string, unknown>): Promise<unknown> => {
-    outcome.calls.push({ tool, args })
+    const made: Outcome['calls'][number] = { tool, args }
 
-    return $.mcp.call(world.server, tool, args).catch((error: unknown) => {
-      throw new Error(error instanceof Error && /refused|requested permissions/i.test(error.message) ? REFUSED : 'failed')
-    })
+    outcome.calls.push(made)
+
+    return $.mcp.call(world.server, tool, args).then(
+      result => {
+        // What the server itself turned down is told from what it did.
+        made.isRefused = result.isError === true
+
+        return result
+      },
+      (error: unknown) => {
+        throw new Error(error instanceof Error && /refused|requested permissions/i.test(error.message) ? REFUSED : 'failed')
+      },
+    )
   }
 
   return {

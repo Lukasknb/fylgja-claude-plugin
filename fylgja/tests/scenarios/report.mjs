@@ -18,7 +18,8 @@ const isSilent = expect => expect.records[1] === 0 && expect.question === 'none'
 /** What one run of one scenario came to, against what the scenario expects. */
 function grade(scenario, outcome) {
   const { expect } = scenario
-  const written = outcome.calls.filter(call => call.tool === 'remember').map(call => call.args)
+  // A record is one the server took: a write it refused wrote nothing.
+  const written = outcome.calls.filter(call => call.tool === 'remember' && call.isRefused !== true).map(call => call.args)
   const amended = outcome.calls.filter(call => call.tool === 'amend_memory').map(call => call.args)
   const questions = outcome.shown.filter(seen => seen.kind.startsWith('question-')).map(seen => seen.kind.slice(9))
   const tells = outcome.shown.filter(seen => seen.kind === 'tell').length

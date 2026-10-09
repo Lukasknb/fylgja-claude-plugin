@@ -167,6 +167,23 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(set.of('remember').length).toBe(1)
   })
 
+  test('a record written on the developer’s own key is put right the same way, with one call of its own', async ($, on) => {
+    const prior = fact(5, { content: 'Use a cursor to page the audit log.', anchors: { paths: [{ path: 'src/queue/lock.ts' }] } })
+    const set = stage(on, {
+      replies: [verdict({ records: [{ ...PAGED, supersedes: idOf(5) }] }), JSON.stringify({ record: MENDED })],
+      tools: { ...refusing('Page'), recall: () => answer({ facts: [prior] }) },
+      kept: { 'scribe.known': [idOf(5)] },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'different')
+
+    expect(set.asked.length).toBe(2)
+    expect(set.of('remember').map(args => args.content)).toEqual([PAGED.content, MENDED.content])
+    expect(await shown($)).toMatch('✓ Recorded · Use offset and limit to page /audit-log, not a cursor.')
+  })
+
   for (const [code, part] of [
     ['too_long', 'content'],
     ['not_one_sentence', 'content'],

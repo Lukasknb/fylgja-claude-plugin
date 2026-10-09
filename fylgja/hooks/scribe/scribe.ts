@@ -535,15 +535,11 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
 type Sent = { written: Written | undefined; code: string | undefined; refusal: string | undefined }
 
 /**
- * Writes one record. Undefined when nothing was stored or brought back:
- * Fylgja refused it, or holds it already. A refusal is counted.
+ * Writes one record, once. What was written, or the code Fylgja refused it
+ * by and its words. A refusal is counted.
  *
  * @param prior the recorded decision it replaces, when the developer said it does
  */
-async function record(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draft, prior?: Fact): Promise<Written | undefined> {
-  return (await send(host, scribe, who, draft, prior)).written
-}
-
 async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draft, prior?: Fact): Promise<Sent> {
   const args: Record<string, unknown> = {
     content: draft.content,
@@ -658,7 +654,7 @@ async function flush(host: ScribeHost, scribe: Scribe, who: Identity): Promise<v
     }
 
     if ('draft' in work) {
-      const one = await record(host, scribe, who, work.draft)
+      const one = await written(host, scribe, who, work.draft, await lone(host, scribe))
 
       Band.receive(scribe.band, one === undefined ? [] : [one])
     } else {
@@ -692,7 +688,23 @@ function settle(host: ScribeHost, scribe: Scribe): void {
 }
 
 /** What is left of a wake for putting refused records right: model calls, time, and what a record is checked against. */
-type Budget = { steps: number; until: number; seen: Seen }
+type Budget = { steps: number; until: number; seen: Seen; isLastTry?: true }
+
+/**
+ * What a write outside a wake may spend on putting a refused record right:
+ * one model call, with its own time limit. Such a write is the developer's
+ * own key, or a record that was waiting for it.
+ */
+async function lone(host: ScribeHost, scribe: Scribe): Promise<Budget> {
+  const inTree = scribe.plans.docs.flatMap(doc => (doc.path === null ? [] : [doc.path]))
+
+  return {
+    steps: 1,
+    until: (await host.now()) + STEP_TIMEOUT_MS,
+    seen: { plans: scribe.plans.docs, saidNoReason: false, paths: new Set([...scribe.lookedUp, ...inTree]), facts: new Map() },
+    isLastTry: true,
+  }
+}
 
 /**
  * Writes one record of a wake's verdict. A refusal that says what is wrong
@@ -709,8 +721,9 @@ async function written(
   who: Identity,
   draft: Draft,
   budget: Budget,
+  prior?: Fact,
 ): Promise<Written | undefined> {
-  const first = await send(host, scribe, who, draft)
+  const first = await send(host, scribe, who, draft, prior)
   const part = first.written === undefined ? teaches(first.code) : undefined
 
   if (first.written !== undefined || first.code === undefined) {
@@ -718,7 +731,7 @@ async function written(
   }
 
   if (part === undefined) {
-    if (PASSING.includes(first.code)) {
+    if (PASSING.includes(first.code) && budget.isLastTry !== true) {
       // Not at this turn's end: the server is given time.
       defer(scribe, { draft, notIn: scribe.turn })
     }
@@ -752,7 +765,7 @@ async function written(
     timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
   })
   const better = answer === 'drop' || answer === undefined ? undefined : correctedOf(draft, answer, part, budget.seen)
-  const second = better === undefined ? undefined : (await send(host, scribe, who, better)).written
+  const second = better === undefined ? undefined : (await send(host, scribe, who, better, prior)).written
 
   if (second === undefined) {
     scribe.dropped += 1
@@ -1366,22 +1379,22 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
   Band.clear(band)
 
   // Only this key makes the new decision the replacement of the old one.
-  const written = await record(host, scribe, who, item.draft, key === 'replaces' ? item.prior : undefined)
+  const one = await written(host, scribe, who, item.draft, await lone(host, scribe), key === 'replaces' ? item.prior : undefined)
 
-  if (written === undefined) {
+  if (one === undefined) {
     return
   }
 
-  Band.receive(band, [written])
+  Band.receive(band, [one])
 
   // It replaces the old decision, and nobody has said why: that is asked
   // next, as part of the same answer.
-  if (key === 'replaces' && written.reasonStatus === 'not_stated') {
+  if (key === 'replaces' && one.reasonStatus === 'not_stated') {
     band.current = {
       kind: 'question',
       form: 'reason',
-      id: written.id,
-      content: written.content,
+      id: one.id,
+      content: one.content,
       options: item.options,
       isTouched: true,
     }
