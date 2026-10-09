@@ -78,7 +78,7 @@ export const SCENARIOS = [
     id: 'decision-no-reason',
     title: 'A decision with no reason given',
     repo: 'acme/s02',
-    expect: { records: [1, 1], kind: 'decision', status: 'not_stated', question: 'reason-or-none', tells: [0, 0] },
+    expect: { records: [1, 1], kind: 'decision', status: 'not_stated', question: 'reason', tells: [0, 0] },
     turns: [
       {
         rows: [
@@ -222,7 +222,7 @@ export const SCENARIOS = [
         detail: 'Redis was already in the stack for caching.',
       }),
     ],
-    expect: { records: [0, 1], kind: 'decision', question: 'reversal-or-supersedes', tells: [0, 1] },
+    expect: { records: [1, 1], kind: 'decision', question: 'reversal', tells: [0, 1], neverSupersedes: true },
     turns: [
       {
         rows: [
@@ -298,7 +298,7 @@ export const SCENARIOS = [
       records: [1, 1],
       kind: 'decision',
       status: 'not_stated',
-      question: 'reason-or-none',
+      question: 'reason',
       tells: [0, 0],
       answer: 'no_strong_reason',
     },
@@ -361,7 +361,7 @@ export const SCENARIOS = [
     id: 'departs-from-plan',
     title: 'The session departs from the plan',
     repo: 'acme/s13',
-    expect: { records: [1, 2], kind: 'decision', question: 'any', tells: [0, 0] },
+    expect: { records: [1, 2], kind: 'decision', question: 'reason', tells: [0, 0] },
     turns: [
       {
         rows: [

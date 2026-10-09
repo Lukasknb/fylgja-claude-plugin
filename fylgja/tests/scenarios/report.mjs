@@ -22,7 +22,6 @@ function grade(scenario, outcome) {
   const amended = outcome.calls.filter(call => call.tool === 'amend_memory').map(call => call.args)
   const questions = outcome.shown.filter(seen => seen.kind.startsWith('question-')).map(seen => seen.kind.slice(9))
   const tells = outcome.shown.filter(seen => seen.kind === 'tell').length
-  const prior = scenario.records?.[0]?.id
   const wrong = []
 
   if (outcome.error !== undefined) {
@@ -45,16 +44,17 @@ function grade(scenario, outcome) {
     wrong.push(`asked ${questions.join(',')}`)
   }
 
-  if (expect.question === 'reason-or-none' && questions.some(form => form !== 'reason')) {
-    wrong.push(`asked ${questions.join(',')}`)
+  if (expect.question === 'reason' && (!questions.includes('reason') || questions.includes('reversal'))) {
+    wrong.push(questions.length === 0 ? 'did not ask' : `asked ${questions.join(',')}`)
   }
 
-  if (
-    expect.question === 'reversal-or-supersedes' &&
-    !questions.includes('reversal') &&
-    !written.some(args => args.supersedes === prior)
-  ) {
-    wrong.push('reversal not seen')
+  if (expect.question === 'reversal' && !questions.includes('reversal')) {
+    wrong.push('reversal not asked')
+  }
+
+  // Nothing is written as a replacement without the developer's key; the script only skips.
+  if (expect.neverSupersedes === true && written.some(args => args.supersedes !== undefined)) {
+    wrong.push('replaced without the key')
   }
 
   if (!within(tells, expect.tells)) {
@@ -128,8 +128,9 @@ per('Records written in all', list => sum(list, one => one.records))
 per('Questions shown in all', list => sum(list, one => one.questions))
 per('Tells shown in all', list => sum(list, one => one.tells))
 per('Model calls', list => sum(list, one => one.outcome.modelCalls))
-per('Model calls per wake', list =>
-  (sum(list, one => one.outcome.modelCalls) / sum(list, one => one.scenario.turns.length)).toFixed(2),
+per('Turns ended', list => sum(list, one => one.outcome.wakes ?? one.scenario.turns.length))
+per('Model calls per turn ended', list =>
+  (sum(list, one => one.outcome.modelCalls) / sum(list, one => one.outcome.wakes ?? one.scenario.turns.length)).toFixed(2),
 )
 per(
   'Latency per model call, median',

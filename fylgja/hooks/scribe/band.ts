@@ -68,10 +68,18 @@ export type Kept = {
   hasShown: boolean
 }
 
+/** A key that undoes or settles something for good, pressed once: it acts when pressed again in time. */
+export type Armed = { key: string; until: number }
+
 export type Band = {
   current: Item | null
   queue: Item[]
   receipt: Receipt | null
+  /** What was written and is not on show yet: it waits for the developer to stop typing. */
+  held: Written[]
+  /** Items pushed out of the line; a reversal among them still has its record to write. */
+  overflow: Item[]
+  armed: Armed | null
   editing: Editing | null
   isAboutOpen: boolean
   /** Whether the item on show is the first ever on this machine, and says what Scribe is. */
@@ -120,6 +128,9 @@ export function create(): Band {
     current: null,
     queue: [],
     receipt: null,
+    held: [],
+    overflow: [],
+    armed: null,
     editing: null,
     isAboutOpen: false,
     offersAbout: false,
@@ -145,7 +156,10 @@ export function skipsAfter(typedPast: number): number {
 }
 
 function enqueue(band: Band, item: Item): void {
-  band.queue = [...band.queue, item].slice(-MAX_QUEUE)
+  const line = [...band.queue, item]
+
+  band.overflow.push(...line.slice(0, -MAX_QUEUE))
+  band.queue = line.slice(-MAX_QUEUE)
 }
 
 /**
@@ -187,20 +201,37 @@ export function offerQuestion(band: Band, question: Question, about: string): bo
 }
 
 /**
- * Adds what was just written to the receipt on show, or starts one. The
- * newest records are kept when there are more than a line can list.
+ * Notes what was just written, to be shown as a receipt once nothing stands
+ * in the way (`settle`). The newest are kept when there are more than a
+ * line can list.
  */
 export function receive(band: Band, records: readonly Written[]): void {
-  if (records.length === 0) {
-    return
-  }
+  band.held = [...band.held, ...records].slice(-MAX_RECEIPT)
+}
 
-  band.receipts += 1
-  band.receipt = {
-    records: [...(band.receipt?.records ?? []), ...records].slice(-MAX_RECEIPT),
-    isOpen: false,
-    serial: band.receipts,
-  }
+/** A key that needs a second press acts within this long of the first. */
+export const ARM_MS = 5000
+
+/**
+ * Whether `key`, one that undoes or settles something for good, may act
+ * now: only on its second press in a row, within `ARM_MS` of the first. The
+ * first press changes nothing but what the key says. A digit typed alone
+ * into an empty prompt box presses a key of the band, so a single press
+ * must never be able to remove a record or silence one for good.
+ */
+export function confirmed(band: Band, key: string, now: number): boolean {
+  const isSecond = band.armed?.key === key && now <= band.armed.until
+
+  band.armed = isSecond ? null : { key, until: now + ARM_MS }
+
+  return isSecond
+}
+
+/** The counts that belong to a session, to carry over a conversation that started over within it. */
+export type Tally = Pick<Band, 'told' | 'asked' | 'questions' | 'unanswered'>
+
+export function tallyOf(band: Band): Tally {
+  return { told: band.told, asked: band.asked, questions: band.questions, unanswered: band.unanswered }
 }
 
 /** What `settle` did, for the caller to carry out what follows from it. */
@@ -211,6 +242,8 @@ export type Settled = {
   isKeptChanged: boolean
   /** Items let go unseen. A reversal among them still has its record to write. */
   dropped: Item[]
+  /** The serial of a receipt that came up just now, for its time to start. */
+  receipt: number | undefined
 }
 
 /**
@@ -223,7 +256,23 @@ export function settle(band: Band): Settled {
   const settled: Settled = {
     isChanged: false,
     isKeptChanged: false,
-    dropped: [],
+    dropped: band.overflow,
+    receipt: undefined,
+  }
+
+  band.overflow = []
+
+  // What was written comes up as a receipt once the developer is not typing.
+  if (band.held.length > 0 && !band.isTyping) {
+    band.receipts += 1
+    band.receipt = {
+      records: [...(band.receipt?.records ?? []), ...band.held].slice(-MAX_RECEIPT),
+      isOpen: false,
+      serial: band.receipts,
+    }
+    band.held = []
+    settled.receipt = band.receipts
+    settled.isChanged = true
   }
   const shown = band.current
 
@@ -239,7 +288,9 @@ export function settle(band: Band): Settled {
   }
 
   while (band.current === null && !band.isTyping) {
-    const at = band.queue.findIndex(item => item.kind === 'tell' || !band.isWorking)
+    // A question comes before a tell; while Claude works, only a tell may come up.
+    const asks = band.isWorking ? -1 : band.queue.findIndex(item => item.kind === 'question')
+    const at = asks === -1 ? band.queue.findIndex(item => item.kind === 'tell') : asks
 
     if (at === -1) {
       break
@@ -295,7 +346,8 @@ export function clear(band: Band): void {
 /**
  * The developer sent a prompt. Whatever is on show is taken down, unless
  * they are typing into its field; an offer they never touched counts as
- * ignored. The receipt goes.
+ * ignored. The receipt goes, shown or not yet, and the turn that begins
+ * has its own tell.
  *
  * @returns the item taken down, when there was one
  */
@@ -313,6 +365,9 @@ export function submitted(band: Band): Item | undefined {
   }
 
   band.receipt = null
+  band.held = []
+  band.armed = null
+  band.tellsThisTurn = 0
   band.isTyping = false
   band.isWorking = true
 

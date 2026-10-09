@@ -15,9 +15,9 @@
 
 import type { EngineInterface, On } from 'claude-code'
 
-import { observe } from '../../hooks/scribe/delta'
+import { observe, plain } from '../../hooks/scribe/delta'
 import type { Row } from '../../hooks/scribe/delta'
-import { isOwnCall } from '../../hooks/scribe/grant'
+import { REFUSED, verdictFor } from '../../hooks/scribe/grant'
 import * as Scribe from '../../hooks/scribe/scribe'
 import type { ScribeHost } from '../../hooks/scribe/scribe'
 
@@ -36,6 +36,12 @@ type Outcome = {
   ms: number
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number }
   fills: number
+  /** How many turns ended, each a chance for a wake. */
+  wakes: number
+  /** The head of each reply of the model, to see why a run went as it did. The sessions are scripted, so nothing of anyone's is in them. */
+  replies: string[]
+  /** How many times a line was put on the status line. */
+  statuses: number
   error?: string
 }
 
@@ -48,7 +54,9 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
   const call = (tool: string, args: Record<string, unknown>): Promise<unknown> => {
     outcome.calls.push({ tool, args })
 
-    return $.mcp.call(world.server, tool, args)
+    return $.mcp.call(world.server, tool, args).catch((error: unknown) => {
+      throw new Error(error instanceof Error && /refused|requested permissions/i.test(error.message) ? REFUSED : 'failed')
+    })
   }
 
   return {
@@ -73,6 +81,7 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
       }
 
       outcome.modelCalls += 1
+      outcome.replies.push(reply.isAnswered ? reply.text.slice(0, 600) : `(${reply.reason})`)
       outcome.ms += Math.round(performance.now() - started)
       outcome.usage.input += usage.input
       outcome.usage.output += usage.output
@@ -82,10 +91,13 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
       return { text: reply.isAnswered ? reply.text : undefined, usage }
     },
     now: () => $.clock.now(),
-    // No timer runs in a scenario: a receipt stays, and a lookup is waited for.
-    after: () => ({ cancel: () => undefined }),
+    after: (ms, fn) => $.clock.after(ms, fn),
     redraw: () => undefined,
     toast: () => undefined,
+    status: text => {
+      outcome.statuses += text === undefined ? 0 : 1
+    },
+    debug: () => undefined,
     box: () => Promise.resolve(''),
     fill: () => {
       outcome.fills += 1
@@ -149,11 +161,17 @@ async function play(
     ms: 0,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     fills: 0,
+    wakes: 0,
+    replies: [],
+    statuses: 0,
   }
   // A machine that has seen Scribe before, so "What is this" is not in the way.
   const world: World = { scenario, run, server, rows: [], kept: new Map([['scribe.hasShown', true]]), outcome }
   const host = hostOf($, world)
-  const scribe = Scribe.create({ isOn: true, model })
+  const scribe = Scribe.create({ isOn: true })
+
+  // A scenario run may compare models; a session always uses the one Scribe ships with.
+  scribe.model = model
   const note = (turn: number): void => {
     const seen = look(scribe, turn)
 
@@ -166,37 +184,47 @@ async function play(
     Scribe.started(scribe, true, 'terminal')
 
     for (const [turn, step] of scenario.turns.entries()) {
-      world.rows.push(...step.rows)
-      await Scribe.completed(host, scribe)
-      note(turn)
+      // As in a session, each prompt of the developer's begins a turn of its
+      // own: it is sent from the prompt box, the rows up to their next prompt
+      // follow, and the turn ends.
+      const starts = step.rows.flatMap((row, at) => (row.role === 'user' && row.text !== '' ? [at] : []))
 
-      // Everything that waits is looked at, as a developer who dismisses each would see it.
-      for (const act of step.then ?? []) {
-        const { current, editing } = scribe.band
-        const isMeant =
-          act.whenEditing === true
-            ? editing !== null
-            : current?.kind === 'question' && current.form === act.whenQuestion && editing === null
+      for (const [nth, from] of starts.entries()) {
+        const first = step.rows[from]
 
-        if (!isMeant) {
-          continue
-        }
-
-        if (act.press !== undefined) {
-          await Scribe.pressed(host, scribe, act.press)
-        } else if (act.enter !== undefined) {
-          await Scribe.entered(host, scribe, act.enter[0], act.enter[1])
-        }
-
+        outcome.wakes += 1
+        Scribe.prompted(host, scribe, first?.text ?? '')
+        world.rows.push(...step.rows.slice(from, starts[nth + 1]))
+        await Scribe.completed(host, scribe)
         note(turn)
+
+        // What the developer does at the band when this turn's end brings something up.
+        for (const act of step.then ?? []) {
+          const { current, editing } = scribe.band
+          const isMeant =
+            act.whenEditing === true
+              ? editing !== null
+              : current?.kind === 'question' && current.form === act.whenQuestion && editing === null
+
+          if (!isMeant) {
+            continue
+          }
+
+          if (act.press !== undefined) {
+            await Scribe.pressed(host, scribe, act.press)
+          } else if (act.enter !== undefined) {
+            await Scribe.entered(host, scribe, act.enter[0], act.enter[1])
+          }
+
+          note(turn)
+        }
       }
 
+      // Everything still waiting is looked at, as a developer who dismisses each would see it.
       for (let waiting = 0; waiting < 6 && scribe.band.current !== null; waiting += 1) {
         await Scribe.pressed(host, scribe, scribe.band.current.kind === 'tell' ? 'dismiss' : 'skip')
         note(turn)
       }
-
-      Scribe.prompted(host, scribe)
     }
   } catch (error) {
     outcome.error = error instanceof Error ? error.name : 'error'
@@ -206,6 +234,9 @@ async function play(
 }
 
 export function register(on: On): void {
+  // The name the engine answered for the plugin's own server, and the prompts that entered.
+  const own: { server: string | undefined; prompts: Set<string> } = { server: undefined, prompts: new Set() }
+
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'scribe-scenarios', description: 'Runs Scribe over the scripted scenarios.' })
 
@@ -213,10 +244,15 @@ export function register(on: On): void {
   })
 
   // The plugin's own rule, as its own module holds it.
-  on('tool.check', async ($, e, next) => {
-    const verdict = await next(e)
+  on('tool.check', async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, own.server)).catch(
+    async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, own.server),
+  )
 
-    return verdict.decision === 'ask' && isOwnCall(e, next.origin?.plugin) ? { ...verdict, decision: 'allow' as const } : verdict
+  // Every prompt that enters, to see that the conversation's rows hold it as it was sent.
+  on('prompt.submit', ($, e, next) => {
+    own.prompts.add(plain(e.text))
+
+    return next(e)
   }).catch(($, e, next) => next(e))
 
   // With SCRIBE_PROBE naming a file, the end of a real turn leaves there what
@@ -228,7 +264,7 @@ export function register(on: On): void {
 
     if (to !== undefined && to !== '' && e.agentId === undefined) {
       const rows = await $.session.messages()
-      const seen = observe(rows, await $.session.cwd())
+      const seen = observe(rows, await $.session.cwd(), own.prompts)
 
       await $.fs.write(
         to,
@@ -271,6 +307,18 @@ export function register(on: On): void {
 
     if (!connection.isConnected) {
       return { text: 'the stand-in server is not connected' }
+    }
+
+    own.server = connection.server
+
+    // With no scenario to run: which server the engine connected, and whether the plugin's own call gets through to it.
+    if (scenarios.length === 0) {
+      const isGranted = await $.mcp.call(connection.server, 'recall', { repo: 'x/y', paths: ['README.md'] }).then(
+        () => true,
+        () => false,
+      )
+
+      return { text: `server=${connection.server} granted=${String(isGranted)}` }
     }
 
     const outcomes: Outcome[] = []

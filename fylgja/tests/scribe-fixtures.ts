@@ -27,7 +27,11 @@ export type StageOptions = {
   repo?: { root: string; remote: string | null } | null
   cwd?: string
   surfaces?: readonly string[]
-  connect?: () => Record<string, unknown>
+  connect?: () => Record<string, unknown> | Promise<Record<string, unknown>>
+  /** Tools the engine does not let the plugin call, each with the engine's words for it. */
+  refused?: Readonly<Record<string, string>>
+  /** The session's id, when it is not the usual one. */
+  sessionId?: () => string
   /** The session cannot say what its id is. */
   hasNoId?: boolean
   /** What is already kept on this machine. */
@@ -42,6 +46,10 @@ export type Stage = {
   toasts: string[]
   /** Every text put in the prompt box by the plugin. */
   fills: string[]
+  /** Every line the plugin wrote to the debug log. */
+  logged: string[]
+  /** Every tool whose call was put to the permission check, in order. */
+  checks: string[]
   /** Every prompt that entered the session, as it arrived. */
   sent: string[]
   statuses: (string | undefined)[]
@@ -67,6 +75,8 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const asked: Asked[] = []
   const toasts: string[] = []
   const fills: string[] = []
+  const logged: string[] = []
+  const checks: string[] = []
   const sent: string[] = []
   const statuses: (string | undefined)[] = []
   const kept = new Map<string, unknown>(Object.entries(options.kept ?? {}))
@@ -93,11 +103,21 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
     return { type: 'Text', props: {}, children: [`engine: ${props.text ?? e.component}`] }
   })
-  on('tool.check', () => ({ decision: 'ask' as const, reason: 'not granted yet' }))
+  on('tool.check', ($, e) => {
+    checks.push(e.tool)
 
-  on('mcp.connect', () => ({ value: (options.connect?.() ?? CONNECTED) as never }))
+    return { decision: 'ask' as const, reason: 'not granted yet' }
+  })
+
+  on('mcp.connect', async () => ({ value: ((await options.connect?.()) ?? CONNECTED) as never }))
   on('mcp.call', async ($, e) => {
     calls.push({ tool: e.tool, args: e.args })
+
+    const refusal = options.refused?.[e.tool]
+
+    if (refusal !== undefined) {
+      return { deny: refusal }
+    }
 
     const own = options.tools?.[e.tool]
 
@@ -108,7 +128,13 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     if (e.tool === 'remember') {
       written += 1
 
-      return { value: answer({ atom_id: idOf(100 + written), outcome: 'created', supersede: 'not_requested' }) as never }
+      return {
+        value: answer({
+          atom_id: idOf(100 + written),
+          outcome: 'created',
+          supersede: e.args.supersedes === undefined ? 'not_requested' : 'applied',
+        }) as never,
+      }
     }
 
     if (e.tool === 'amend_memory') {
@@ -138,7 +164,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   })
 
   on('session.messages', () => ({ value: rows as never }))
-  on('session.id', () => (options.hasNoId === true ? { deny: 'no id today' } : { value: SESSION_ID }))
+  on('session.id', () => (options.hasNoId === true ? { deny: 'no id today' } : { value: options.sessionId?.() ?? SESSION_ID }))
   on('session.repo', () => ({
     value: (options.repo === undefined
       ? { root: ROOT, remote: 'git@github.com:acme/web.git', internal: false, name: null }
@@ -171,6 +197,11 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
     return { value: undefined }
   })
+  on('ui.log', ($, e) => {
+    logged.push(e.text)
+
+    return { value: undefined }
+  })
   on('ui.status', ($, e) => {
     statuses.push(e.text)
 
@@ -182,6 +213,8 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     asked,
     toasts,
     fills,
+    logged,
+    checks,
     sent,
     statuses,
     kept,
@@ -212,8 +245,28 @@ export const edit = (path: string): Use => use('Edit', { file_path: `${ROOT}/${p
 
 let turns = 0
 
-/** Adds `rows` to the conversation and ends the turn, as the main conversation's own turn ends. */
+/**
+ * One turn as a developer starts it: each of their prompts among `rows` is
+ * sent from the prompt box, the rows join the conversation, and the turn
+ * ends as the main conversation's own turn ends.
+ */
 export async function turn($: Engine, on: Stage, ...rows: Row[]): Promise<void> {
+  for (const row of rows) {
+    if (row.role === 'user' && row.text !== '') {
+      await send($, row.text)
+    }
+  }
+
+  await finish($, on, ...rows)
+}
+
+/** The developer sends a prompt from the prompt box. */
+export async function send($: Engine, text: string): Promise<void> {
+  await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
+}
+
+/** Adds `rows` to the conversation and ends the turn, with no prompt sent for it here. */
+export async function finish($: Engine, on: Stage, ...rows: Row[]): Promise<void> {
   turns += 1
   on.rows.push(...rows)
   await $.turn.complete({
@@ -223,6 +276,26 @@ export async function turn($: Engine, on: Stage, ...rows: Row[]): Promise<void> 
     turnId: `turn-${turns}`,
     reason: 'answer',
   })
+}
+
+/** Types into the prompt box, or empties it. */
+export async function typing($: Engine, on: Stage, text: string): Promise<void> {
+  const prompt = $.prompt as unknown as { edit: (input: Record<string, unknown>) => Promise<unknown> }
+
+  await prompt.edit({
+    origin: { kind: 'composer' },
+    text: on.box.text,
+    cursor: 0,
+    start: 0,
+    end: on.box.text.length,
+    inputText: text,
+  })
+}
+
+/** Presses a key that only acts on its second press, twice. */
+export async function pressTwice($: Engine, key: string): Promise<void> {
+  await press($, key)
+  await press($, key)
 }
 
 /** One step of the main conversation's turn that asks for `uses`. */

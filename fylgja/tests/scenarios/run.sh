@@ -5,7 +5,7 @@
 # as its `fylgja` server, so the calls carry the names they carry in a session.
 #
 #   run.sh <out-dir> [models] [runs] [timeout-seconds]
-#   run.sh /tmp/scribe-run "haiku sonnet" 3 900
+#   run.sh /tmp/scribe-run sonnet 3 900
 #
 # It spends the Claude plan of whoever runs it: about 20 model calls per model
 # and run. The user's own settings are left out, so no installed plugin and
@@ -13,7 +13,7 @@
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 plugin="$(cd "$here/../.." && pwd)"
-out="${1:?out dir}"; models="${2:-haiku sonnet}"; runs="${3:-3}"; limit="${4:-900}"
+out="${1:?out dir}"; models="${2:-sonnet}"; runs="${3:-3}"; limit="${4:-900}"
 mkdir -p "$out/results" "$out/cwd"
 copy="$out/plugin"
 rm -rf "$copy"; mkdir -p "$copy/.claude-plugin" "$copy/hooks"

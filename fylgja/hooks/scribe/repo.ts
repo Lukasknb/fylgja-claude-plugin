@@ -20,13 +20,18 @@ function tail(path: string): string {
   )
 }
 
+const PART = /^[A-Za-z0-9][\w.-]*$/
+
 /**
  * The repository's name: `owner/name` read from the remote's address, or the
- * folder's name when the repository has no remote. Undefined when neither
- * gives a name a person would recognise.
+ * folder's name when the repository has no remote or its address does not
+ * give an owner and a name. Undefined when neither gives a name a person
+ * would recognise.
  *
  * Both spellings of a remote are read (`git@host:owner/name.git`,
- * `https://host/owner/name`); a longer path keeps its last two parts.
+ * `https://host/owner/name`); a longer path keeps its last two parts, and
+ * the `_git` an Azure address puts between project and repository is left
+ * out. A relative remote (`../name`) names no owner, so the folder is used.
  */
 export function repoNameOf(remote: string | null, root: string): string | undefined {
   if (remote !== null) {
@@ -36,17 +41,17 @@ export function repoNameOf(remote: string | null, root: string): string | undefi
       .replace(/^[^/:@]+@[^:/]+:/, '')
       .replace(/\.git\/?$/i, '')
       .replace(/\/+$/, '')
-    const parts = path.split('/').filter(part => part !== '')
-    const name = parts.slice(-2).join('/')
+    const parts = path.split('/').filter(part => part !== '' && part !== '_git')
+    const [owner, name] = parts.slice(-2)
 
-    if (parts.length >= 2 && /^[\w.-]+\/[\w.-]+$/.test(name)) {
-      return name
+    if (parts.length >= 2 && owner !== undefined && name !== undefined && PART.test(owner) && PART.test(name)) {
+      return `${owner}/${name}`
     }
   }
 
   const folder = tail(root)
 
-  return /^[\w.-]+$/.test(folder) ? folder : undefined
+  return PART.test(folder) ? folder : undefined
 }
 
 /**
@@ -92,8 +97,11 @@ export function relativeTo(root: string, path: string): string | undefined {
  * The anchors of `value` that may be written: each a path inside the tree,
  * each once, at most `max`. Anything else in the list is left out, so one
  * bad path never costs a record.
+ *
+ * @param known when given, only these paths are taken: the files the session
+ *   itself touched, so a record never points at a file nobody opened
  */
-export function anchorsOf(value: unknown, max: number): Anchor[] {
+export function anchorsOf(value: unknown, max: number, known?: ReadonlySet<string>): Anchor[] {
   const anchors: Anchor[] = []
   const seen = new Set<string>()
 
@@ -101,7 +109,7 @@ export function anchorsOf(value: unknown, max: number): Anchor[] {
     const path: unknown = typeof entry === 'string' ? entry : (entry as { path?: unknown } | null)?.path
     const symbol: unknown = typeof entry === 'string' ? undefined : (entry as { symbol?: unknown } | null)?.symbol
 
-    if (typeof path !== 'string' || !isAnchorPath(path)) {
+    if (typeof path !== 'string' || !isAnchorPath(path) || (known !== undefined && !known.has(path))) {
       continue
     }
 

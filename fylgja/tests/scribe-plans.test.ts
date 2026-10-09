@@ -78,7 +78,12 @@ describe('Scribe reads the plan the session works from', () => {
     const set = stage(on, { replies: [verdict({ records: [decision({ plan: { doc: 1, section: 'No such heading' } })] })] })
 
     await $.session.start(START)
-    await turn($, set, dev('plan it'), claude('Here is the plan.', use('ExitPlanMode', { plan: PLAN })))
+    await turn(
+      $,
+      set,
+      dev('plan it'),
+      claude('Here is the plan.', use('ExitPlanMode', { plan: PLAN }), edit('src/queue/lock.ts')),
+    )
 
     expect(set.asked[0]?.prompt).toMatch('plan document 1: Plan: queue rework (outside the working tree')
     expect(set.of('remember')[0]?.detail).toBe(

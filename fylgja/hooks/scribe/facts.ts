@@ -12,6 +12,12 @@ const ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
 const MAX_FACTS = 30
 
+// A record's own address: one line, on Fylgja's own host, a kind and an id and nothing after.
+const LINK = new RegExp(
+  `^https://${FYLGJA_HOST.replace(/\./g, '\\.')}/open/[a-z_]{1,40}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+  'i',
+)
+
 /** Every record id written in `text`, lower-cased. */
 export function idsIn(text: string): string[] {
   return (text.match(ID) ?? []).map(id => id.toLowerCase())
@@ -73,7 +79,7 @@ function factOf(value: unknown): Fact | undefined {
     anchors: anchorsOf(paths(value.anchors), 12),
     reasonStatus: reasonStatusOf(value.reason_status),
     date: day?.slice(0, 10) ?? null,
-    link: typeof value.link === 'string' && value.link.startsWith(`https://${FYLGJA_HOST}/open/`) ? value.link : null,
+    link: typeof value.link === 'string' && LINK.test(value.link) ? value.link : null,
   }
 }
 
@@ -96,4 +102,13 @@ export function factsOf(payload: Record<string, unknown> | undefined): Fact[] {
 /** Whether `fact` is anchored to one of `files` itself, not to a folder above it. */
 export function isAnchoredTo(fact: Fact, files: readonly string[]): boolean {
   return fact.anchors.some(anchor => files.includes(anchor.path))
+}
+
+/**
+ * How many repositories Fylgja offered in place of a spelling it does not
+ * know; 0 when it knew the one asked for. Scribe never switches to one of
+ * them by itself: which repository this is, is the session's to say.
+ */
+export function knownReposIn(payload: Record<string, unknown> | undefined): number {
+  return Array.isArray(payload?.known_repos) ? payload.known_repos.length : 0
 }

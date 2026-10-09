@@ -7,7 +7,7 @@
 import { glyphOf } from '../glyphs'
 import { drawn } from '../plain'
 import type { Band, Item, Receipt } from './band'
-import type { Fact } from './types'
+import type { Fact, Written } from './types'
 
 export type Part = { text: string; tone?: 'dim' | 'strong' | 'good' | 'mark' } | { link: string; label: string }
 
@@ -90,7 +90,7 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
   const { fact } = item
   const rest: Key[] = [
     { key: 'tell-claude', hotkey: '2', label: 'Tell Claude' },
-    { key: 'knew', hotkey: '3', label: 'Knew this' },
+    twice(band, 'knew', '3', 'Knew this', 'Press again: never show this'),
     { key: 'dismiss', hotkey: '0', label: 'Dismiss' },
   ]
 
@@ -188,6 +188,19 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
   }
 }
 
+/** A key that acts only when pressed twice: what it says before, and once it is waiting for the second press. */
+function twice(band: Band, key: string, hotkey: string, label: string, again: string): Key {
+  return { key, hotkey, label: band.armed?.key === key ? again : label }
+}
+
+/** What one written record's line says: that it is new or back, its sentence, and what it replaced. */
+function written(record: Written): Part[] {
+  return [
+    { text: drawn(record.content, MAX_CONTENT) },
+    ...(record.replaced === null ? [] : [{ text: ` · replaces: ${drawn(record.replaced, MAX_OPTION)}`, tone: 'dim' } as const]),
+  ]
+}
+
 function receipt(band: Band, shown: Receipt): View {
   const [only] = shown.records
 
@@ -195,12 +208,16 @@ function receipt(band: Band, shown: Receipt): View {
     return {
       rows: [
         {
-          parts: [mark('✓'), { text: 'Recorded · ', tone: 'good' }, { text: drawn(only.content, MAX_CONTENT) }],
+          parts: [
+            mark('✓'),
+            { text: only.outcome === 'restored' ? 'Restored · ' : 'Recorded · ', tone: 'good' },
+            ...written(only),
+          ],
         },
       ],
       keys: withAbout(band, [
         { key: 'fix:0', hotkey: '1', label: 'Fix' },
-        { key: 'remove:0', hotkey: '2', label: 'Remove' },
+        twice(band, 'remove:0', '2', 'Remove', 'Press again to remove'),
         { key: 'ok', hotkey: '0', label: 'OK' },
       ]),
     }
@@ -224,14 +241,10 @@ function receipt(band: Band, shown: Receipt): View {
     rows: [
       head,
       ...shown.records.map((record, index) => ({
-        parts: [{ text: drawn(record.content, MAX_CONTENT) }],
+        parts: [...(record.outcome === 'restored' ? [{ text: 'Restored · ', tone: 'dim' } as const] : []), ...written(record)],
         keys: [
           { key: `fix:${index}`, hotkey: String(index * 2 + 1), label: 'Fix' },
-          {
-            key: `remove:${index}`,
-            hotkey: String(index * 2 + 2),
-            label: 'Remove',
-          },
+          twice(band, `remove:${index}`, String(index * 2 + 2), 'Remove', 'Press again to remove'),
         ],
       })),
     ],
@@ -274,7 +287,7 @@ export function viewOf(band: Band, isWorking: boolean): View | undefined {
     return {
       rows: ABOUT_ROWS,
       keys: [
-        { key: 'off', hotkey: '1', label: 'Turn Scribe off' },
+        twice(band, 'off', '1', 'Turn Scribe off', 'Press again to turn Scribe off'),
         { key: 'about-ok', hotkey: '0', label: 'OK' },
       ],
     }

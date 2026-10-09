@@ -10,7 +10,9 @@ import {
   fact,
   NOTHING,
   press,
+  pressTwice,
   REPO,
+  ROOT,
   SESSION_ID,
   shown,
   stage,
@@ -51,15 +53,6 @@ describe('Scribe records', () => {
     expect(set.asked[0]?.effort).toBe('low')
   })
 
-  test('the model named in the plugin’s options is the one asked', { options: { scribeModel: 'haiku' } }, async ($, on) => {
-    const set = stage(on)
-
-    await $.session.start(START)
-    await turn($, set, ...TALK)
-
-    expect(set.asked.map(asked => asked.model)).toEqual(['haiku'])
-  })
-
   test('a verdict of nothing writes nothing and draws nothing', async ($, on) => {
     const set = stage(on, { replies: [NOTHING] })
 
@@ -84,7 +77,7 @@ describe('Scribe records', () => {
     const set = stage(on, { replies: [verdict({ records: [decision({ anchors })] })] })
 
     await $.session.start(START)
-    await turn($, set, ...TALK)
+    await turn($, set, ...TALK, claude('And the helper.', edit('src/kept.ts')))
 
     expect(set.of('remember').map(args => args.anchors)).toEqual([[{ path: 'src/kept.ts' }]])
   })
@@ -113,16 +106,44 @@ describe('Scribe records', () => {
     expect(set.of('remember')[0]?.supersedes).toBeUndefined()
   })
 
-  test('a record that names one the path lookup returned keeps it', async ($, on) => {
+  test('an anchor the session never touched is left off: a record points only at files that were opened', async ($, on) => {
+    const anchors = [{ path: 'src/queue/lock.ts' }, { path: 'src/never/opened.ts' }, { path: 'src/queue' }]
     const set = stage(on, {
-      replies: [verdict({ records: [decision({ supersedes: idOf(5) })] })],
-      tools: { recall: () => answer({ facts: [fact(5, { anchors: [{ path: 'src/queue/lock.ts' }] })] }) },
+      replies: [
+        verdict({ records: [decision({ anchors }), decision({ content: 'Use B.', anchors: [{ path: 'src/other.ts' }] })] }),
+      ],
     })
 
     await $.session.start(START)
     await turn($, set, ...TALK)
 
-    expect(set.of('remember')[0]?.supersedes).toBe(idOf(5))
+    expect(set.of('remember').map(args => [args.content, args.anchors])).toEqual([
+      ['Use Postgres advisory locks for the job queue, not Redis.', [{ path: 'src/queue/lock.ts' }]],
+      // Every anchor fell away; the record is still written.
+      ['Use B.', undefined],
+    ])
+  })
+
+  test('a record that names a gotcha, or an id found only in a lookup’s text, as the one it replaces is written without it', async ($, on) => {
+    const set = stage(on, {
+      replies: [
+        JSON.stringify({ tool: 'search', args: { query: 'queue lock' } }),
+        verdict({
+          records: [decision({ content: 'Use A.', supersedes: idOf(5) }), decision({ content: 'Use B.', supersedes: idOf(6) })],
+        }),
+      ],
+      tools: {
+        recall: () => answer({ facts: [fact(5, { type: 'gotcha', anchors: [{ path: 'src/queue/lock.ts' }] })] }),
+        search: () => ({ content: [{ type: 'text', text: `Some meeting mentioned ${idOf(6)} in passing.` }], isError: false }),
+      },
+      kept: { 'scribe.known': [idOf(5)] },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember').map(args => args.supersedes)).toEqual([undefined, undefined])
+    expect(await shown($)).toMatch('✓ Recorded 2')
   })
 
   test('a write Fylgja refuses shows no receipt and no error, and the next turn is read as ever', async ($, on) => {
@@ -145,7 +166,12 @@ describe('Scribe records', () => {
     expect(await shown($)).toBe('engine: AbovePrompt')
     expect(set.toasts).toEqual([])
 
-    await turn($, set, dev('and now the retry policy'), claude('Three tries, then the dead letter queue.'))
+    await turn(
+      $,
+      set,
+      dev('and now the retry policy'),
+      claude('Three tries, then the dead letter queue.', edit('src/queue/retry.ts')),
+    )
 
     expect(set.asked.length).toBe(2)
   })
@@ -155,6 +181,11 @@ describe('Scribe records', () => {
 
     await $.session.start(START)
     await turn($, set, ...TALK)
+    await press($, 'remove:0')
+
+    expect(set.of('amend_memory'), 'one press removes nothing').toEqual([])
+    expect(await shown($)).toMatch('[1 Fix] [2 Press again to remove]')
+
     await press($, 'remove:0')
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'remove' }])
@@ -262,6 +293,7 @@ describe('Scribe records', () => {
     )
 
     await ui.press('remove:1')
+    await ui.press('remove:1')
     await ui.redraw()
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(102), op: 'remove' }])
@@ -276,7 +308,7 @@ describe('Scribe records', () => {
       triggers: ['alembic upgrade', 'permission denied for extension'],
       reason_status: 'stated',
       alternatives: ['ignored on a gotcha'],
-      anchors: [{ path: 'migrations/env.py' }],
+      anchors: [{ path: 'src/queue/lock.ts' }],
     }
     const set = stage(on, { replies: [verdict({ records: [gotcha] })] })
 
@@ -297,7 +329,13 @@ describe('Scribe records', () => {
     ])
   })
 
-  test('a commit made in the turn is attached to what the session recorded, by the sha the commit printed', async ($, on) => {
+  const committed = (command: string, text: string, isError = false) =>
+    claude(
+      'Committed.',
+      isError ? { tool: 'Bash', input: { command }, text, isError: true } : { tool: 'Bash', input: { command }, text },
+    )
+
+  test('a commit made in the turn is attached to what the session recorded, by the sha the commit printed, once', async ($, on) => {
     const set = stage(on, { replies: [verdict({ records: [decision()] })] })
 
     await $.session.start(START)
@@ -305,36 +343,125 @@ describe('Scribe records', () => {
       $,
       set,
       ...TALK,
-      claude('Committed.', {
-        tool: 'Bash',
-        input: { command: 'git add -A && git commit -m "queue lock"' },
-        text: '[main 1a2b3c4] queue lock\n 1 file changed, 12 insertions(+)',
-      }),
+      committed('git add -A && git commit -m "queue lock"', '[main 1a2b3c4] queue lock\n 1 file changed'),
     )
 
+    const tools = set.calls.map(call => call.tool)
+
     expect(set.of('attach_commit')).toEqual([{ repo: REPO, sha: '1a2b3c4', session_id: SESSION_ID }])
+    expect(tools.indexOf('attach_commit') > tools.indexOf('remember'), 'after the record').toBe(true)
 
     await turn($, set, dev('thanks'), claude('Welcome.'))
 
     expect(set.of('attach_commit').length, 'once').toBe(1)
   })
 
-  test('a commit that failed is attached to nothing', async ($, on) => {
-    const set = stage(on, { replies: [verdict({ records: [decision()] })] })
+  test('a commit is attached whether or not Scribe recorded anything: the session’s other records are Fylgja’s to find', async ($, on) => {
+    const set = stage(on, { replies: [NOTHING] })
+
+    await $.session.start(START)
+    await turn($, set, dev('commit it'), committed('git commit -am chore', '[main 0a1b2c3] chore'))
+
+    expect(set.of('remember')).toEqual([])
+    expect(set.of('attach_commit')).toEqual([{ repo: REPO, sha: '0a1b2c3', session_id: SESSION_ID }])
+  })
+
+  test('a commit is attached while a question waits, and when a later command of the same call failed', async ($, on) => {
+    const asking = verdict({
+      records: [decision({ detail: '', reason_status: 'not_stated' })],
+      question: { form: 'reason', record: 0, options: ['a', 'b'] },
+    })
+    const set = stage(on, { replies: [asking] })
 
     await $.session.start(START)
     await turn(
       $,
       set,
       ...TALK,
-      claude('The hook refused it.', {
-        tool: 'Bash',
-        input: { command: 'git commit -m "queue lock"' },
-        text: 'pre-commit hook failed\n[main 9f9f9f9] not really',
-        isError: true,
-      }),
+      committed('git commit -m x && npm run deploy', '[main 5e5e5e5] x\nnpm ERR! missing script: deploy', true),
     )
 
-    expect(set.of('attach_commit')).toEqual([])
+    expect(await shown($)).toMatch('? Why')
+    expect(set.of('attach_commit').map(args => args.sha)).toEqual(['5e5e5e5'])
+  })
+
+  for (const [what, command, text] of [
+    ['that failed', 'git commit -m "queue lock"', 'pre-commit hook failed: lint errors'],
+    ['with nothing to commit', 'git commit -m x', 'nothing to commit, working tree clean'],
+    ['in another repository by -C', 'git -C /work/other commit -m x', '[main 9f9f9f9] x'],
+    ['in another repository by cd', 'cd /work/other && git commit -m x', '[main 9f9f9f9] x'],
+    ['in a place the command does not say', 'cd "$OTHER" && git commit -m x', '[main 9f9f9f9] x'],
+    ['with another git directory', 'git --git-dir=/work/other/.git commit -m x', '[main 9f9f9f9] x'],
+  ] as const) {
+    test(`a commit ${what} is attached to nothing`, async ($, on) => {
+      const set = stage(on, { replies: [verdict({ records: [decision()] })] })
+
+      await $.session.start(START)
+      await turn($, set, ...TALK, committed(command, text))
+
+      expect(set.of('attach_commit')).toEqual([])
+    })
+  }
+
+  test('a commit in this repository named by its own path is attached', async ($, on) => {
+    const set = stage(on)
+
+    await $.session.start(START)
+    await turn($, set, dev('commit it'), committed(`cd ${ROOT}/sub && git -C ${ROOT} commit -m x`, '[main 7a7a7a7] x'))
+
+    expect(set.of('attach_commit').map(args => args.sha)).toEqual(['7a7a7a7'])
+  })
+
+  test('a record that had been removed and is written again is shown as restored, and can be removed again', async ($, on) => {
+    const set = stage(on, {
+      replies: [verdict({ records: [decision()] })],
+      tools: { remember: () => answer({ atom_id: idOf(9), outcome: 'restored', supersede: 'not_requested' }) },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(await shown($)).toBe(
+      '✓ Restored · Use Postgres advisory locks for the job queue, not Redis. [1 Fix] [2 Remove] [9 What is this] [0 OK]',
+    )
+
+    await pressTwice($, 'remove:0')
+
+    expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(9), op: 'remove' }])
+  })
+
+  test('a repository Fylgja knows under another spelling is not switched to: it is noted in the debug log, by count alone', async ($, on) => {
+    const set = stage(on, {
+      tools: {
+        recall: () => answer({ repo: REPO, facts: [], known_repos: ['acme-corp/web'], hint: 'retry with acme-corp/web' }),
+      },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await turn($, set, dev('and the retry policy'), claude('Done.', edit('src/queue/retry.ts')))
+
+    expect(set.logged).toEqual(["Fylgja holds nothing under this repository's name and offers 1 it knows"])
+    expect(set.of('recall').every(args => args.repo === REPO)).toBe(true)
+  })
+
+  test('records written after the conversation started over carry the session’s id as it is then', async ($, on) => {
+    let id = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const set = stage(on, {
+      replies: [verdict({ records: [decision()] }), verdict({ records: [decision({ content: 'Use B.' })] })],
+      sessionId: () => id,
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    id = 'bbbbbbbb-0000-4000-8000-000000000002'
+    await $.classic.SessionStart({ source: 'clear' })
+    set.rows.length = 0
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember').map(args => args.session_id)).toEqual([
+      'aaaaaaaa-0000-4000-8000-000000000001',
+      'bbbbbbbb-0000-4000-8000-000000000002',
+    ])
   })
 })

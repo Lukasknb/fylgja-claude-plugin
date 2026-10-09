@@ -120,28 +120,19 @@ describe('Scribe asks why', () => {
     expect(set.of('remember').length).toBe(3)
   })
 
-  test('a second question does not show while one is open, and the same decision is never asked about twice', async ($, on) => {
-    const other = decision({ content: 'Use B over A.', detail: '', reason_status: 'not_stated' })
-    const set = stage(on, {
-      replies: [ASKING, verdict({ records: [other], question: WHY }), ASKING],
-    })
+  test('the same decision is never asked about twice', async ($, on) => {
+    const set = stage(on, { replies: [ASKING, ASKING] })
 
     await $.session.start(START)
-    await turn($, set, ...TALK)
-    // A turn that started by itself, with the first question still open.
     await turn($, set, ...TALK)
 
     expect(await shown($)).toBe(QUESTION)
 
-    await press($, 'reason:0')
-
-    expect(await shown($), 'the second comes when the first is answered').toMatch('? Why: Use B over A.')
-
-    await press($, 'reason:0')
-    await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
+    await press($, 'skip')
     await turn($, set, ...TALK)
 
-    expect(await shown($), 'the first decision again').not.toMatch('Why')
+    expect(set.asked.length).toBe(2)
+    expect(await shown($)).not.toMatch('Why')
   })
 
   test('a question comes before a tell that is waiting untouched, and the tell comes back after it', async ($, on) => {
@@ -226,7 +217,7 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
     await press($, 'replaces')
 
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5), reason_status: 'stated' }])
-    expect(await shown($)).toMatch('✓ Recorded')
+    expect(await shown($)).toMatch('· replaces: Use Redis with Redlock for the job queue.')
   })
 
   test('“Yes, it replaces it” with no reason given asks for the reason next, with the same choices', async ($, on) => {
@@ -289,9 +280,9 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
     expect(set.of('remember')[0]?.supersedes).toBeUndefined()
   })
 
-  test('a replacement the developer spelled out needs no question', async ($, on) => {
+  test('a record the model itself marks as a replacement is asked about all the same: nothing is replaced without the key', async ($, on) => {
     const set = stage(on, {
-      replies: [verdict({ records: [decision({ supersedes: idOf(5) })] })],
+      replies: [verdict({ records: [decision({ supersedes: idOf(5) })] }), NOTHING],
       tools: { recall: () => answer({ facts: [PRIOR] }) },
       kept: { 'scribe.known': [idOf(5)] },
     })
@@ -299,7 +290,39 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
     await $.session.start(START)
     await turn($, set, ...TALK)
 
+    expect(set.of('remember')).toEqual([])
+    expect(await shown($)).toMatch('? This looks like it replaces a recorded decision.')
+
+    await press($, 'replaces')
+
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5) }])
-    expect(await shown($)).toMatch('✓ Recorded')
+    expect(await shown($)).toBe(
+      '✓ Recorded · Use Postgres advisory locks for the job queue, not Redis. · replaces: Use Redis with Redlock for the job queue. [1 Fix] [2 Remove] [0 OK]',
+    )
+  })
+
+  test('where the question cannot be asked, the decision is written beside the old one, never as its replacement', async ($, on) => {
+    const unexplained = (n: number) =>
+      verdict({ records: [decision({ content: `Use option ${n}.`, detail: '', reason_status: 'not_stated' })], question: WHY })
+    const set = stage(on, {
+      replies: [unexplained(1), unexplained(2), verdict({ records: [decision({ content: 'Use B.', supersedes: idOf(5) })] })],
+      tools: { recall: () => answer({ facts: [PRIOR] }) },
+      kept: { 'scribe.known': [idOf(5)] },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'skip')
+    await turn($, set, ...TALK)
+    await press($, 'skip')
+    // Two questions went unanswered in this session; a third is not asked.
+    await turn($, set, ...TALK)
+
+    expect(await shown($)).not.toMatch('replaces')
+    expect(set.of('remember').map(args => [args.content, args.supersedes])).toEqual([
+      ['Use option 1.', undefined],
+      ['Use option 2.', undefined],
+      ['Use B.', undefined],
+    ])
   })
 })

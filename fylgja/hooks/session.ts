@@ -19,6 +19,12 @@ export type Session = {
   /** Whether queued references are being worked through. */
   isLooking: boolean
   signIn: SignIn.SignIn
+  /**
+   * The name the engine last answered for the server this plugin declares:
+   * the one its own calls go to, and are let through on. Undefined until it
+   * has connected, and again while the person has to sign in.
+   */
+  server: string | undefined
   /** Runs while the sign-in line is up, and only then. */
   recheck: { cancel: () => void } | undefined
   /**
@@ -36,6 +42,7 @@ export function create(): Session {
     failures: new Map(),
     isLooking: false,
     signIn: SignIn.create(),
+    server: undefined,
     recheck: undefined,
     epoch: 0,
   }
@@ -67,6 +74,10 @@ export function startOver(session: Session): void {
  */
 export async function serverOf(host: Host, session: Session, isFirst = false): Promise<string | undefined> {
   const { server, change } = await SignIn.check(host, session.signIn, isFirst)
+
+  // An answer that came late names no server; the name last known stands
+  // until the person has to sign in.
+  session.server = server ?? (session.signIn.isShown ? undefined : session.server)
 
   if (session.signIn.isShown && session.recheck === undefined) {
     session.recheck = host.every(RECHECK_MS, () => {

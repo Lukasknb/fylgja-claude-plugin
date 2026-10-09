@@ -9,7 +9,7 @@ import { isOwnPrompt } from './origin'
 import { decorationsOf } from './paint'
 import { receiptOf } from './receipts'
 import { drawn } from './plain'
-import { isOwnCall } from './scribe/grant'
+import { REFUSED, verdictFor } from './scribe/grant'
 import * as Scribe from './scribe/scribe'
 import type { ScribeHost } from './scribe/scribe'
 import type { Part } from './scribe/view'
@@ -42,7 +42,12 @@ function hostOf($: EngineInterface): Host {
 function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost {
   return {
     server: () => Session.serverOf(hostOf($), session),
-    call: (server, tool, args) => $.mcp.call(server, tool, args),
+    // Why a call failed is kept as one word: whether it was not let
+    // through, or anything else. The engine's own words are not handed on.
+    call: (server, tool, args) =>
+      $.mcp.call(server, tool, args).catch((error: unknown) => {
+        throw new Error(error instanceof Error && REFUSAL.test(error.message) ? REFUSED : 'failed')
+      }),
     lookup: async (tool, args) => {
       const server = await Session.serverOf(hostOf($), session)
 
@@ -76,6 +81,8 @@ function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost 
     after: (ms, fn) => $.clock.after(ms, fn),
     redraw: () => $.ui.invalidate('ui.render'),
     toast: text => $.ui.toast(drawn(text, MAX_LINE)),
+    status: text => $.ui.status(text === undefined ? undefined : drawn(text, MAX_LINE)),
+    debug: text => $.ui.log(drawn(text, MAX_LINE), { to: 'debug' }),
     box: async () => (await $.prompt.read()).text,
     fill: async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled,
     stored: key => $.store.get(key),
@@ -92,6 +99,9 @@ function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost 
     rows: () => $.session.messages(),
   }
 }
+
+// How the engine words a call it did not let through. Only whether it does is read; the words go no further.
+const REFUSAL = /\brefused\b|\bdenied\b|requested permissions|haven['’]t granted/i
 
 const TONES: Readonly<Record<string, { color?: 'success' | 'inactive'; dimColor?: boolean; bold?: boolean }>> = {
   dim: { dimColor: true },
@@ -129,7 +139,7 @@ function toneOf(part: Part): { color?: 'success' | 'inactive'; dimColor?: boolea
 export function register(on: On, options: PluginOptions = {}): void {
   const session = Session.create()
   const draft = Draft.create()
-  const scribe = Scribe.create({ isOn: options.scribe !== false, model: options.scribeModel === 'haiku' ? 'haiku' : 'sonnet' })
+  const scribe = Scribe.create({ isOn: options.scribe !== false })
   // The keys pressed and the lines entered in the band, as its elements'
   // own handlers took them; the hook on the press does the work.
   const presses: string[] = []
@@ -197,6 +207,15 @@ export function register(on: On, options: PluginOptions = {}): void {
   // brought back into the box has its chips, and is sent with its references.
   on('prompt.submit', ($, e, next) => {
     if (e.origin.kind !== 'composer') {
+      // A prompt sent from the person's phone or browser is theirs too.
+      if (isOwnPrompt(e.origin)) {
+        try {
+          Scribe.prompted(scribeHostOf($, session), scribe, e.text)
+        } catch {
+          // The prompt goes on as it was sent.
+        }
+      }
+
       return next(e)
     }
 
@@ -207,7 +226,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     // Work on what is already in hand, and nothing awaited: an offer the
     // developer typed past is taken down.
     try {
-      Scribe.prompted(scribeHostOf($, session), scribe)
+      Scribe.prompted(scribeHostOf($, session), scribe, text)
     } catch {
       // The prompt goes on as it was entered.
     }
@@ -270,21 +289,11 @@ export function register(on: On, options: PluginOptions = {}): void {
   // person: this plugin's call, on its own server, of one of a fixed few
   // tools, and never past a refusal. Every other check is passed on as it
   // came, so nobody else's call is decided here.
-  on('tool.check', async ($, e, next) => {
-    const verdict = await next(e)
-
-    return verdict.decision === 'ask' && isOwnCall(e, next.origin?.plugin)
-      ? { ...verdict, decision: 'allow' as const, reason: 'Fylgja: the plugin’s own call to its own server' }
-      : verdict
-  }).catch(async ($, e, next) => {
-    const verdict = await next(e)
-
+  on('tool.check', async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server)).catch(
     // Asked here when the engine keeps the hook out of a call raised beneath
     // the plugin's own code: the same rule, from the event alone.
-    return verdict.decision === 'ask' && isOwnCall(e, next.origin?.plugin)
-      ? { ...verdict, decision: 'allow' as const, reason: 'Fylgja: the plugin’s own call to its own server' }
-      : verdict
-  })
+    async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server),
+  )
 
   // The files a step of the main conversation names are noted for a lookup
   // of what is recorded about them. The step's stream is passed on as it

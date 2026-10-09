@@ -81,34 +81,41 @@ Very little, on purpose.
 
 ## Scribe
 
-Scribe is the one part that does more than draw. At the end of each turn it
-reads what happened, thinks about it with a small model on your own Claude
-plan, and works with Fylgja. Most turns it does nothing, and you see
-nothing. What it shows, it shows in the band above the prompt, one thing at
-a time.
+Scribe is the one part that does more than draw. At the end of a turn you
+started it reads what happened, thinks about it with a small model on your
+own Claude plan, and works with Fylgja. Most turns it does nothing, and you
+see nothing. What it shows, it shows in the band above the prompt, one thing
+at a time.
 
 - **It records.** A choice between real alternatives, a rejected approach,
   a workaround, a departure from the plan, a correction of yours, a gotcha
   that cost time: written to Fylgja at once, with the reason, what was
   rejected, and the files it concerns. Not naming, formatting, routine edits
-  or status. Then one line:
+  or status. A record points only at files the session itself opened. Then
+  one line:
 
   `✓ Recorded · Use Postgres advisory locks for the job queue, not Redis.   1 Fix  2 Remove  0 OK`
 
   Fix opens the sentence in a field. Remove takes the record away again.
-  Several records from one turn are one line, `✓ Recorded 3   1 Review`.
-  The line goes by itself after twenty seconds, or when you send your next
+  Several records from one turn are one line, `✓ Recorded 3   1 Review`. A
+  record you had removed and that is written again says `Restored`. The
+  line goes by itself after twenty seconds, or when you send your next
   prompt. It never waits for you.
 - **It asks why**, when a decision that matters came without a reason:
 
   `? Why: Use a sessions table, not signed cookies.   1 Sessions must be revocable  2 To list a user's devices  3 Other  4 No particular reason  0 Skip`
 
   Pick one, type your own, or say there was none. "No particular reason" is
-  an answer and is kept as one, in your words if you typed some: a later
-  reader sees that nothing in particular decided it, which is not the same
-  as nobody having asked. Skip saves nothing.
-  When a new decision goes against a recorded one, it asks which it is:
-  `1 Yes, it replaces it  2 No, tell Claude  3 Different case  0 Skip`.
+  an answer and is kept as one, in your words if you typed some ("no idea,
+  it just worked"): a later reader sees that nothing in particular decided
+  it, which is not the same as nobody having asked. A typed answer counts
+  as "no reason" only when that is all it says; "none of the others
+  support ESM" is a reason. Skip saves nothing.
+- **It asks before anything is replaced.** When a new decision goes against
+  a recorded one, the new one is not written until you have said which it
+  is: `1 Yes, it replaces it  2 No, tell Claude  3 Different case  0 Skip`.
+  Only the first key makes it the replacement, and the receipt then names
+  what it replaced. Left unanswered, it is written beside the old one.
 - **It tells.** When Claude reads or changes a file that a recorded decision
   or gotcha is anchored to:
 
@@ -125,8 +132,10 @@ a time.
   names the plan; you are not asked. A plan in the repository becomes one
   of the record's anchors. A plan outside it will be gone for a later
   reader, so its reasoning is copied into the record.
-- **It notes the commit.** After a `git commit` in the session, the commit
-  is attached to what the session recorded.
+- **It notes the commit.** After a `git commit` in this repository, the
+  commit is attached to what the session recorded, Claude's own records
+  included. A commit made somewhere else (`git -C /other`, `cd /other &&
+  git commit`) is not.
 
 Staying out of the way is the point, and the limits are in the code:
 
@@ -136,7 +145,12 @@ Staying out of the way is the point, and the limits are in the code:
   went unanswered. It shows only when Claude has finished.
 - At most one tell per turn, never the same record twice in a session.
   Unasked, only for a record anchored to the very file in hand.
-- Nothing new comes up while you are typing. Nothing takes the keyboard.
+- Nothing new comes up while you are typing: not a tell, not a question,
+  not a receipt. Nothing takes the keyboard by itself.
+- Remove, Knew this and Turn Scribe off act on the second press of the same
+  key within five seconds; the first only makes the key say so. A digit
+  typed alone into an empty prompt box presses a key of the band, so
+  answering Claude with "2" can never remove a record.
 - Type past what it offers three times in a row and it holds back the next
   offer, then two, then four, up to sixteen. Any key on an offer ends that.
 
@@ -145,14 +159,46 @@ session inside a git repository, signed in to Fylgja. In a `claude -p` run,
 outside a repository or signed out it does nothing at all: no model call,
 no call to Fylgja.
 
+Before it asks a model anything in a session, one call of its own has to
+get through to Fylgja. If it does not (a rule of yours or your
+organization's refuses it), Scribe is off for that session and says so once
+on the line under the prompt, until your next prompt:
+`Scribe is off in this session: its calls to Fylgja are not let through here`.
+
+### What Scribe costs
+
+Scribe thinks with Sonnet, on your own Claude plan. Claude Code shows no
+cost line for these requests, so here is what they are.
+
+- **When a model is asked.** Once at the end of a turn that you started
+  with a prompt. Not for a turn a background task or a hook started, not
+  for a turn that changed no file and holds under 200 characters of talk
+  (its lines are read with the next turn's), and no more than 30 times in
+  any hour; past that Scribe is quiet until the hour has rolled on.
+- **Usually:** one request per turn of about 2,500 input tokens, of
+  which about 2,200 are read from the prompt cache, and
+  15 to 320 output tokens, in one to four seconds (measured over the
+  scripted sessions in `fylgja/tests/scenarios/RESULTS.md`).
+- **At most, per turn:** 4 requests of at most about 31,000 input tokens
+  each (123,000 characters: the instruction, up to 24,000 characters of
+  plan text, 8 earlier turns in brief, 14,000 characters of this turn, 10
+  records, 3 lookups of 4,000 characters each) and 1,500 output tokens
+  each: about 123,000 input and 6,000 output tokens. All but the first
+  request of a turn read most of that from the prompt cache.
+- **At most, per hour:** 30 turns, so 120 requests, about 3.7 million
+  input tokens and 180,000 output tokens. That is the computed ceiling of
+  a session that hits every limit at once on every turn for an hour.
+- **Time:** each request has a limit of 25 seconds and a turn's whole look
+  45; no call to Fylgja is waited for longer than 8 seconds. A server that
+  never answers ends as a failure, not as a wait.
+
 ### Turning Scribe off
 
 - The plugin option **Scribe** (`/config`, or `scribe: false` under this
-  plugin's options) turns it off. **Scribe's model** picks `sonnet`
-  (default) or `haiku`.
+  plugin's options) turns it off.
 - The first thing Scribe ever shows on a machine carries a `What is this`
-  key; the line it opens has `Turn Scribe off`, which holds for this machine
-  from that moment.
+  key; the line it opens has `Turn Scribe off` (press it twice), which
+  holds for this machine from that moment.
 
 Everything else in this README goes on working with Scribe off.
 
@@ -177,11 +223,17 @@ Everything else in this README goes on working with Scribe off.
 - Text from the session, from a plan and from Fylgja is handed to the model
   fenced as data with the instruction that it is never to be followed. A
   record that says "ignore the above" is a record that says so.
-- It lets through, without asking you, exactly its own calls to its own
-  Fylgja server of seven tools (`recall`, `search`, `open`, `resolve`,
-  `remember`, `amend_memory`, `attach_commit`), and never past a rule of
-  yours or your organization's that refuses them. Claude's calls to the very
-  same tools, and every other tool call, are decided as they always were.
+- It lets through, without asking you, exactly its own calls of seven
+  tools (`recall`, `search`, `open`, `resolve`, `remember`, `amend_memory`,
+  `attach_commit`) on the Fylgja server this plugin declares, and never past
+  a rule of yours or your organization's that refuses them. Claude's calls
+  to the very same tools, and every other tool call, are decided as they
+  always were. If you already run that same Fylgja endpoint as a server of
+  your own, Claude Code runs the two as one under your name for it, and
+  that is then the server meant. A server that only shares the name and
+  points somewhere else is never covered.
+- Nothing recorded is replaced without your key, and nothing is removed or
+  silenced for good on a single press.
 - It does not redraw Claude's searches and reads of your knowledge base, open
   a pane, or pop up a notice. A failure anywhere in Scribe is silent and
   leaves the session as it is without it.
@@ -199,15 +251,16 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   line is up, Claude Code is asked every few seconds whether Fylgja is
   connected yet.
 - **Sent to the model, by Scribe:** at the end of a turn, what happened in
-  it: your prompts, Claude's replies, and one line per tool call (the tool,
-  the file or the command, whether it worked, and the first 160 characters
-  of what a shell command printed). No file's contents and no other tool
-  output, with one exception: the text of a plan document as described
-  above, at most three of them and 12,000 characters each. With it go the
-  Fylgja records Scribe looked up for that turn. This goes to your model
-  provider through Claude Code, on your own Claude plan, as a few short
-  requests per turn (at most four, usually one), to the model you picked.
-  Claude Code shows no cost line for these requests.
+  it: the prompts you sent, Claude's replies, and one line per tool call
+  (the tool, the file or the command, whether it worked, and the first 160
+  characters of what a shell command printed). No file's contents and no
+  other tool output, with one exception: the text of a plan document as
+  described above, at most three of them, 12,000 characters each and
+  24,000 together. A background task's report, a skill's text and a
+  summary after compaction are not your words and are left out. With it go
+  the Fylgja records Scribe looked up for that turn. This goes to your
+  model provider through Claude Code, on your own Claude plan; how much,
+  and how often, is under "What Scribe costs".
 - **Sent to Fylgja, by Scribe:** the repository as `owner/name` and the
   paths of the files Claude touched, to look up what is recorded about
   them; at most three lookups a turn that the model asks for, one of them a
@@ -228,7 +281,11 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   marked `Knew this`, two counters for holding back after ignored offers,
   whether Scribe is switched off, and whether it has shown anything yet.
   Ids, numbers and switches; never a word of a prompt, a reply, a file, a
-  plan or a record. The plugin writes no file of its own and no log line.
+  plan or a record. The plugin writes no file of its own. Scribe writes
+  three kinds of line to Claude Code's debug log, each at most once a
+  session or an hour and each made of fixed words and a count: that its
+  calls were refused, that the hour's share of looks is used up, and that
+  Fylgja does not know the repository under this spelling.
 
 ## Working on it
 
@@ -239,11 +296,19 @@ claude plugin validate ./fylgja --strict
 claude plugin test ./fylgja
 ```
 
+The type check needs the declarations Claude Code writes for a plugin it
+loads from a folder: start `claude --plugin-dir ./fylgja` once, which lays
+them in `fylgja/.claude-plugin/types/` (ignored by git), then
+
+```bash
+npx -p typescript tsc -p fylgja
+```
+
 `fylgja/tests/scenarios/` is a separate run, not part of the tests: Scribe
 over seventeen scripted sessions with a real model and a stand-in server,
 to see how often it is right and how often it speaks when it should not.
-`run.sh` spends your Claude plan (about twenty model calls per model and
-run); `RESULTS.md` there is the last run.
+`run.sh` spends your Claude plan (about 25 model calls per run);
+`RESULTS.md` there is the last run.
 
 ### Still to confirm in a live session
 
@@ -253,23 +318,40 @@ run is headless. What only a signed-in interactive session can show:
 1. The band: that each line draws above the prompt in the terminal and in
    the desktop app, wraps sensibly at a narrow width, and that the digit
    keys press (after ctrl+x tab or a click; a bare digit in an empty box).
-2. The field for Fix and for a typed reason: that it takes the keyboard
+2. The two-press keys: that a single "2" or "3" typed into an empty box
+   only changes what the key says, and that the second press acts.
+3. The field for Fix and for a typed reason: that it takes the keyboard
    when its key is pressed, that Enter saves and Esc leaves.
-3. Whether the wait at the end of a turn is felt. Scribe works after the
+4. Whether the wait at the end of a turn is felt. Scribe works after the
    turn's own end is reported, usually for one to four seconds: check that
    the prompt box takes typing and a sent prompt starts at once meanwhile.
-4. The same for the lookup on every fourth step of a long turn, which may
-   hold that step for up to a second and a half.
-5. The permission rule on the live server: that Scribe's own `recall`,
+5. The same for the lookup on every fourth step of a long turn, which may
+   hold that step for up to a second and a half, and for the first lookup
+   of a session, which is waited for up to eight seconds.
+6. The permission rule on the live server: that Scribe's own `recall`,
    `remember`, `amend_memory` and `attach_commit` go through with no dialog,
    that Claude's own `remember` still asks as before, and that a deny rule
-   of yours for one of these tools still refuses Scribe.
-6. Keys pressed in the band: that Fix, Remove and an answer reach Fylgja
+   of yours for one of these tools still refuses Scribe and turns it off
+   with the one line of status.
+7. The same where Fylgja is also configured as a server of your own (a
+   `fylgja` entry in your settings or `.mcp.json`). Headless, with a
+   stand-in over stdio, Claude Code ran the two as one under the person's
+   name and Scribe's calls went through; a server of the same name with
+   another command stayed apart. Confirm both with the real server over
+   HTTP: same URL, calls go through with no dialog; another URL under the
+   same name, the plugin's own server is used.
+8. Keys pressed in the band: that Fix, Remove and an answer reach Fylgja
    from there. If the engine refuses a call made from a key press, Scribe
    keeps it and makes it at the end of the next turn; check which happens.
-7. That a tell appears while Claude is still working, a question only once
-   it has finished, and neither while the box has text in it.
-8. What the conversation's rows hold for `Read`, `Write` and `ExitPlanMode`
-   in a real session, so that a plan is picked up as the tests assume.
-9. `Tell Claude`: that the note lands in the box, unsent, and that a box
-   with text is left alone with the notice.
+9. That a tell appears while Claude is still working, a question only once
+   it has finished, and none of them, nor a receipt, while the box has text
+   in it.
+10. What the conversation's rows hold in an interactive session: that a
+    prompt you typed is found again word for word (headless it is), so
+    your words are told from a background task's report, and that `Read`,
+    `Write` and `ExitPlanMode` carry a plan's text as the tests assume
+    (`Read` and `Write` do, headless).
+11. `Tell Claude`: that the note lands in the box, unsent, and that a box
+    with text is left alone with the notice.
+12. What a `/clear` does to the session's id: Scribe reads it again and
+    carries the session's question counts over only if it is the same.

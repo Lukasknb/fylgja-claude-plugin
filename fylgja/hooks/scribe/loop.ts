@@ -10,6 +10,8 @@
 
 import { payloadOf } from '../payload'
 import { factsOf, idsIn } from './facts'
+import { CALL_TIMEOUT_MS, limited } from './time'
+import type { After } from './time'
 import { ANSWER_NOW, fenced } from './prompt'
 import type { Block } from './prompt'
 import { replyOf, verdictOf } from './verdict'
@@ -26,7 +28,8 @@ export const STEP_TIMEOUT_MS = 25_000
 /** No wake may take longer in all. */
 export const WAKE_DEADLINE_MS = 45_000
 
-const MAX_RESULT_CHARS = 6000
+/** No more of one lookup's answer is handed to the model than this. */
+export const MAX_RESULT_CHARS = 4000
 const MAX_REPLY_TOKENS = 1500
 
 /** The lookups the model may ask for. It is never handed a tool that writes. */
@@ -53,6 +56,8 @@ export type LoopHost = {
   lookup: (tool: string, args: Record<string, unknown>) => Promise<unknown>
   /** `$.clock.now`. */
   now: () => Promise<number>
+  /** `$.clock.after`. */
+  after: After
 }
 
 export type Wake = {
@@ -65,7 +70,7 @@ export type Wake = {
   repo: string
   /** The records the wake is shown from the start. */
   shown: readonly Fact[]
-  seen: Omit<Seen, 'citable' | 'facts'>
+  seen: Omit<Seen, 'facts'>
 }
 
 /** How a wake ended. Every ending but `verdict` leaves nothing done. */
@@ -111,7 +116,6 @@ function textOf(result: unknown): string {
 /** Runs one wake to its end. Never rejects: a failure anywhere is an ending. */
 export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
   const facts = new Map(input.shown.map(fact => [fact.id, fact]))
-  const citable = new Set(facts.keys())
   const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   const ended = (ending: Ending, steps: number, lookups: number, verdict: Verdict = NOTHING): Woken => ({
     ending,
@@ -173,7 +177,7 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
       unreadable = 0
 
       if (asked.kind === 'verdict') {
-        return ended('verdict', steps, lookups, verdictOf(asked.value, { ...input.seen, citable, facts }))
+        return ended('verdict', steps, lookups, verdictOf(asked.value, { ...input.seen, facts }))
       }
 
       const args = LOOKUPS.has(asked.tool) ? argsOf(asked.tool, asked.args, input.repo) : undefined
@@ -190,16 +194,19 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
       let found: string
 
       try {
-        const result = await host.lookup(asked.tool, args)
+        // A lookup's time is the wake's time: it is waited for no longer
+        // than the wake has left.
+        const spent = (await host.now()) - startedAt
+        const result = await limited(
+          host.after,
+          host.lookup(asked.tool, args),
+          Math.min(CALL_TIMEOUT_MS, WAKE_DEADLINE_MS - spent),
+        )
 
         found = textOf(result).slice(0, MAX_RESULT_CHARS)
 
         for (const fact of factsOf(payloadOf(result))) {
           facts.set(fact.id, fact)
-        }
-
-        for (const id of idsIn(found)) {
-          citable.add(id)
         }
       } catch {
         found = '(the lookup failed; go on without it)'

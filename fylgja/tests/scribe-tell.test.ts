@@ -61,6 +61,12 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await turn($, set, ...WORK)
     await press($, 'knew')
 
+    expect(set.kept.get('scribe.known') ?? [], 'one press settles nothing for good').toEqual([])
+    expect(await shown($)).toMatch('[3 Press again: never show this]')
+
+    await press($, 'knew')
+    await set.clock.settle()
+
     expect(set.kept.get('scribe.known')).toEqual([idOf(1)])
 
     // A new session on the same machine.
@@ -223,6 +229,9 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     const set = stage(on, { tools: found(fact(1)) })
     await $.session.start(START)
     await turn($, set, ...WORK)
+
+    const sent = set.sent.length
+
     await press($, 'tell-claude')
 
     expect(set.fills).toEqual([
@@ -237,7 +246,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
         '',
       ].join('\n'),
     ])
-    expect(set.sent).toEqual([])
+    expect(set.sent.length, 'nothing was sent').toBe(sent)
     expect(await shown($)).toBe('engine: AbovePrompt')
   })
 

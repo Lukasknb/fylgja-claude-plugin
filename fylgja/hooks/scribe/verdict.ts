@@ -76,10 +76,10 @@ export function replyOf(text: string): Reply {
 
 /** What a verdict is checked against: only what this wake really saw. */
 export type Seen = {
-  /** Every record id a lookup of this wake returned. */
-  citable: ReadonlySet<string>
-  /** The records this wake holds whole, by id. */
+  /** The records the lookups of this wake returned, by id. */
   facts: ReadonlyMap<string, Fact>
+  /** The files this session touched or looked up, and its plans in the tree: what a record may be anchored to. */
+  paths: ReadonlySet<string>
   plans: readonly PlanDoc[]
   /** Whether the developer's own words in this turn say there was no particular reason. */
   saidNoReason: boolean
@@ -143,7 +143,7 @@ function draftOf(value: unknown, seen: Seen): Draft | undefined {
   }
 
   const plan = planOf(value.plan, seen.plans)
-  const anchors: Anchor[] = anchorsOf(value.anchors, MAX_ANCHORS - 1)
+  const anchors: Anchor[] = anchorsOf(value.anchors, MAX_ANCHORS - 1, seen.paths)
   let detail = typeof value.detail === 'string' ? value.detail.trim().slice(0, MAX_DETAIL) : ''
   let reasonStatus: ReasonStatus | null = null
 
@@ -176,7 +176,8 @@ function draftOf(value: unknown, seen: Seen): Draft | undefined {
     anchors,
     triggers: kind === 'gotcha' ? sentences(value.triggers, 5, 80) : [],
     reasonStatus,
-    supersedes: kind === 'decision' && supersedes !== null && seen.citable.has(supersedes) ? supersedes : null,
+    // Only a recorded decision a lookup of this wake returned can be replaced.
+    supersedes: kind === 'decision' && supersedes !== null && seen.facts.get(supersedes)?.kind === 'decision' ? supersedes : null,
   }
 }
 
@@ -201,7 +202,7 @@ function askOf(value: unknown, records: readonly (Draft | undefined)[], kept: re
 
   const prior = idOf(value.prior)
 
-  if (value.form === 'reversal' && prior !== null && seen.facts.has(prior)) {
+  if (value.form === 'reversal' && prior !== null && seen.facts.get(prior)?.kind === 'decision') {
     draft.supersedes = prior
 
     return { form: 'reversal', record, prior, options }
@@ -214,8 +215,9 @@ function askOf(value: unknown, records: readonly (Draft | undefined)[], kept: re
  * The verdict the plugin acts on, read from the model's own.
  *
  * A record that is not one is left out and the rest stand. A record keeps
- * only the anchors that lie in the tree, and names a record it replaces, or
- * one to tell about, only by an id this wake was really shown.
+ * only the anchors the session itself touched, and names a record it
+ * replaces, or one to tell about, only by an id a lookup of this wake
+ * returned.
  */
 export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
   if (value.outcome !== 'act') {
@@ -234,32 +236,53 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     }
   }
 
-  return {
-    records,
-    question: askOf(value.question, given, records, seen),
-    tells,
+  let question = askOf(value.question, given, records, seen)
+
+  // Replacing a recorded decision is the developer's call, never the
+  // model's alone: a record that names one it replaces is asked about. Where
+  // the one question of this verdict is already another, it replaces nothing.
+  for (const [record, draft] of records.entries()) {
+    const isAsked = question?.form === 'reversal' && question.record === record
+
+    if (draft.supersedes !== null && !isAsked) {
+      if (question === null) {
+        question = { form: 'reversal', record, prior: draft.supersedes, options: [] }
+      } else {
+        draft.supersedes = null
+      }
+    }
   }
+
+  return { records, question, tells }
 }
 
-// What a person types when asked why and there is no why: a short answer
-// that says they do not know or that nothing decided it.
+// What a person says when there is no why: that they do not know, or that
+// nothing in particular decided it.
 const NO_REASON =
-  /\b(?:idk|dunno|no idea|no clue|not sure|unsure|don'?t (?:really )?(?:know|remember|recall)|do not (?:know|remember|recall)|no (?:particular|real|special|specific|strong|good|actual) reason|no reason|none|nothing in particular|arbitrary|it just worked|just worked|just because|first (?:one |thing )?that worked|whatever worked)\b/i
+  /\b(?:idk|dunno|no idea|no clue|not sure|unsure|(?:i |we )?(?:honestly |really )?(?:don'?t|do not|can'?t|cannot) (?:really )?(?:know|remember|recall|say)|no (?:particular|real|special|specific|strong|good|actual) reason|no reason|none|nothing in particular|nothing|arbitrary|it just worked|just worked|it works|just because|(?:just )?picked the first (?:one |thing )?that worked|first (?:one |thing )?that worked|whatever worked)\b/i
 
-// The words a short answer may open with before it says so.
-const OPENING =
-  /^(?:(?:honestly|frankly|tbh|to be honest|well|sorry|hm+|uh+|er+|oh|really|genuinely|literally|just|i|we|i've|have)[\s,.]+)*/i
+// Words that may come before it and after it without making it anything else.
+const FILLER =
+  "(?:honestly|frankly|tbh|to be honest|well|sorry|hm+|uh+|er+|oh|really|genuinely|literally|just|i guess|i think|i|we|i've|i have|have|at all|anymore|any more|why)"
+const WHOLE = new RegExp(
+  `^(?:${FILLER}[\\s,.]+)*(?:${NO_REASON.source})(?:[\\s,.;:!?-]+(?:${FILLER}|${NO_REASON.source}))*[\\s.!?\u2026]*$`,
+  'i',
+)
 
 /**
  * Whether `text`, a person's own short answer to "why", says there was no
- * particular reason. It has to open with it: "no idea, it just worked" does,
- * "the vendor had no idea how to fix it" is a reason.
+ * particular reason. That has to be the whole of the answer: "no idea", "no
+ * idea, it just worked", "honestly, none". An answer that goes on to say
+ * something is a reason and is kept as one: "none of the others support
+ * ESM", "just because the API requires it".
  */
 export function saysNoReason(text: string): boolean {
-  const flat = text.replace(/[\u2018\u2019]/g, "'").trim()
-  const said = flat.replace(OPENING, '')
+  const flat = text
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
 
-  return flat === '?' || (flat.length <= 160 && [flat, said].some(words => NO_REASON.exec(words)?.index === 0))
+  return flat === '?' || (flat.length <= 160 && WHOLE.test(flat))
 }
 
 /** Whether the developer's words in a turn, however long, say somewhere that there was no particular reason. */

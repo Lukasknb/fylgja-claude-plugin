@@ -2,9 +2,29 @@ import type { ToolCheckResult } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { isOwnCall } from '../hooks/scribe/grant'
+import { isOwnCall, verdictFor } from '../hooks/scribe/grant'
 import { answer, idOf, MEETING_ID, meetingRecord, NEEDS_SIGN_IN, token } from './fixtures'
-import { band, claude, decision, dev, edit, fact, NOTHING, press, shown, stage, START, turn, verdict } from './scribe-fixtures'
+import {
+  band,
+  claude,
+  decision,
+  dev,
+  edit,
+  fact,
+  finish,
+  NOTHING,
+  press,
+  pressTwice,
+  send,
+  shown,
+  stage,
+  START,
+  step,
+  stepping,
+  turn,
+  typing,
+  verdict,
+} from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 
 const FILE = 'src/mail/send.ts'
@@ -71,58 +91,101 @@ describe('Scribe stays quiet', () => {
     expect(await shown($), 'shown again at once').toMatch('◆ Decision')
   })
 
-  test('nothing new comes up while the developer is typing; it comes once the box is empty', async ($, on) => {
-    const set = stage(on, { tools: endless() })
-    const prompt = $.prompt as unknown as { edit: (input: Record<string, unknown>) => Promise<unknown> }
-    const type = (text: string, start: number, end: number, inputText: string) =>
-      prompt.edit({ origin: { kind: 'composer' }, text, cursor: start, start, end, inputText })
+  test('nothing new comes up while the developer is typing: not a tell, not a question, not a receipt', async ($, on) => {
+    const asking = verdict({
+      records: [decision({ detail: '', reason_status: 'not_stated', anchors: [] })],
+      question: { form: 'reason', record: 0, options: ['a', 'b'] },
+    })
+    const set = stage(on, { tools: endless(), replies: [asking] })
 
     await $.session.start(START)
-    await type('', 0, 0, 'h')
-    await work($, set, 1)
+    await send($, 'step 1')
+    await typing($, set, 'h')
+    await finish($, set, dev('step 1'), claude('Done.', edit('src/file-1.ts')))
 
+    expect(set.of('remember').length, 'written all the same').toBe(1)
     expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($, true)).toBe('engine: AbovePrompt')
 
-    await type('h', 0, 1, '')
+    await set.clock.advance(60_000)
+    await typing($, set, '')
+
+    expect(await shown($), 'the question first').toMatch('? Why: Use Postgres advisory locks')
+
+    await press($, 'skip')
 
     expect(await shown($)).toMatch('◆ Decision · Record number 1.')
+
+    await press($, 'dismiss')
+
+    expect(await shown($), 'the receipt’s twenty seconds begin when it comes up').toMatch(
+      '✓ Recorded · Use Postgres advisory locks',
+    )
+
+    await set.clock.advance(20_000)
+
+    expect(await shown($)).toBe('engine: AbovePrompt')
   })
 
-  test('no more than five wait their turn; an older one is let go, never shown late', async ($, on) => {
-    const set = stage(on, { tools: endless() })
-    const prompt = $.prompt as unknown as { edit: (input: Record<string, unknown>) => Promise<unknown> }
+  test('a receipt that waited for the developer to stop typing goes with the prompt they send', async ($, on) => {
+    const set = stage(on, { replies: [verdict({ records: [decision()] }), NOTHING] })
 
     await $.session.start(START)
-    // The developer is typing all along, so nothing comes up.
-    await prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'h' })
+    await send($, 'step 1')
+    await typing($, set, 'next thing')
+    await finish($, set, dev('step 1'), claude('Done.', edit('src/file-1.ts')))
 
-    for (let n = 1; n <= 7; n += 1) {
-      await work($, set, n)
-    }
+    expect(set.of('remember').length).toBe(1)
 
-    await prompt.edit({ origin: { kind: 'composer' }, text: 'h', cursor: 0, start: 0, end: 1, inputText: '' })
+    await send($, 'next thing')
 
-    const order: string[] = []
-
-    for (let n = 0; n < 6; n += 1) {
-      order.push(/Record number \d+/.exec(await shown($))?.[0] ?? 'nothing')
-
-      if (order.at(-1) !== 'nothing') {
-        await press($, 'dismiss')
-      }
-    }
-
-    expect(order).toEqual([
-      'Record number 3',
-      'Record number 4',
-      'Record number 5',
-      'Record number 6',
-      'Record number 7',
-      'nothing',
-    ])
+    expect(await shown($, true)).toBe('engine: AbovePrompt')
   })
 
-  test('the first thing ever shown says what Scribe is, and can turn it off for the machine', async ($, on) => {
+  test('a late lookup does not bring a second tell into a turn that has had one', async ($, on) => {
+    let n = 0
+    const set = stage(on, {
+      tools: {
+        recall: async (args, clock) => {
+          n += 1
+
+          const mine = n
+
+          if (mine === 2) {
+            await clock.sleep(5000)
+          }
+
+          return answer({
+            facts: [fact(mine, { content: `Record number ${mine}.`, anchors: [{ path: (args.paths as string[])[0] }] })],
+          })
+        },
+      },
+    })
+    const read = (file: string) => [{ name: 'Read', input: { file_path: `/work/repo/${file}` } }]
+    let uses = read('src/a.ts')
+
+    stepping(on, () => uses)
+    await $.session.start(START)
+    await send($, 'do a long thing')
+    await step($, 3, uses)
+
+    expect(await shown($, true)).toMatch('Record number 1.')
+
+    uses = read('src/b.ts')
+
+    const slow = step($, 7, uses)
+
+    await set.clock.advance(1500)
+    await slow
+    await finish($, set, dev('do a long thing'), claude('Done.'))
+    await press($, 'dismiss')
+    // The slow lookup answers after the turn has ended, and before the next prompt.
+    await set.clock.advance(5000)
+
+    expect(await shown($)).toBe('engine: AbovePrompt')
+  })
+
+  test('the first thing ever shown says what Scribe is, and can turn it off for the machine with two presses', async ($, on) => {
     const set = stage(on, { tools: endless() })
 
     await $.session.start(START)
@@ -142,6 +205,12 @@ describe('Scribe stays quiet', () => {
     await ui.press('off')
     await ui.redraw()
 
+    expect(await ui.text(), 'one press turns nothing off').toMatch('[1 Press again to turn Scribe off] [0 OK]')
+    expect(set.kept.get('scribe.off')).toBeUndefined()
+
+    await ui.press('off')
+    await ui.redraw()
+
     expect(await ui.isEmpty()).toBe(true)
     expect(set.kept.get('scribe.off')).toBe(true)
 
@@ -153,6 +222,42 @@ describe('Scribe stays quiet', () => {
     await work($, set, 3)
 
     expect([set.asked.length, set.calls.length], 'off from then on, in a new session too').toEqual([asked, calls])
+  })
+
+  test('a key that undoes or settles for good waits for its second press only a few seconds', async ($, on) => {
+    const set = stage(on, { tools: endless() })
+
+    await $.session.start(START)
+    await work($, set, 1)
+    await press($, 'knew')
+    await set.clock.advance(5000)
+
+    expect(await shown($), 'back to what it said').toMatch('[3 Knew this]')
+
+    await press($, 'knew')
+
+    expect(await shown($)).toMatch('[3 Press again: never show this]')
+
+    // Another key in between, and the first press counts for nothing.
+    await press($, 'open')
+    await press($, 'knew')
+    await set.clock.settle()
+
+    expect(set.kept.get('scribe.known') ?? []).toEqual([])
+    expect(await shown($)).toMatch('[3 Press again: never show this]')
+  })
+
+  test('two sessions on one machine each add to the records marked as known; neither writes over the other', async ($, on) => {
+    const set = stage(on, { tools: endless() })
+
+    await $.session.start(START)
+    await work($, set, 1)
+    // Another session marked one of its own since this one read the list.
+    set.kept.set('scribe.known', [idOf(900)])
+    await pressTwice($, 'knew')
+    await set.clock.settle()
+
+    expect(set.kept.get('scribe.known')).toEqual([idOf(900), idOf(1)])
   })
 
   test('“What is this” is offered once per machine', async ($, on) => {
@@ -236,37 +341,66 @@ describe('Scribe does nothing at all', () => {
 
 describe('Scribe’s own calls to Fylgja', () => {
   const OWN = { tool: 'mcp__plugin_fylgja_fylgja__recall', tool_use_id: 'toolu_plugin_01' }
+  const SERVER = 'plugin:fylgja:fylgja'
 
-  test('its own call of a listed tool on its own server is let through', () => {
+  test('its own call of a listed tool on the server the engine connected for it is let through', () => {
     for (const tool of ['recall', 'search', 'open', 'resolve', 'remember', 'amend_memory', 'attach_commit']) {
-      expect(isOwnCall({ ...OWN, tool: `mcp__plugin_fylgja_fylgja__${tool}` }, 'fylgja'), tool).toBe(true)
+      expect(isOwnCall({ ...OWN, tool: `mcp__plugin_fylgja_fylgja__${tool}` }, 'fylgja', SERVER), tool).toBe(true)
     }
 
-    expect(isOwnCall(OWN, 'fylgja@inline')).toBe(true)
+    expect(isOwnCall(OWN, 'fylgja@inline', SERVER)).toBe(true)
+    expect(verdictFor({ decision: 'ask' }, OWN, 'fylgja', SERVER).decision).toBe('allow')
+  })
+
+  test('where the person runs the same endpoint under their own name, the engine answers that name and its tools are the ones let through', () => {
+    const theirs = { ...OWN, tool: 'mcp__fylgja__recall' }
+
+    expect(isOwnCall(theirs, 'fylgja', 'fylgja')).toBe(true)
+    expect(isOwnCall(OWN, 'fylgja', 'fylgja'), 'and the plugin’s own name is then nobody’s').toBe(false)
+    expect(isOwnCall(theirs, 'fylgja', SERVER), 'a server of the same name that the engine did not answer').toBe(false)
+  })
+
+  test('a refusal is never turned into anything else, and an allow is left as it came', () => {
+    expect(verdictFor({ decision: 'deny', reason: 'a rule of yours' }, OWN, 'fylgja', SERVER)).toEqual({
+      decision: 'deny',
+      reason: 'a rule of yours',
+    })
+    expect(verdictFor({ decision: 'allow', reason: 'a rule of yours' }, OWN, 'fylgja', SERVER)).toEqual({
+      decision: 'allow',
+      reason: 'a rule of yours',
+    })
   })
 
   test('every other call is left to be decided as it always was', () => {
-    const others: readonly (readonly [string, Parameters<typeof isOwnCall>[0], string | undefined])[] = [
-      ['Claude’s own call of the same tool', { ...OWN, tool_use_id: 'toolu_01abc' }, 'engine'],
-      ['Claude’s call, were it to carry the plugin’s kind of id', OWN, 'engine'],
-      ['an agent’s call', { ...OWN, agentId: 'agent-1' }, 'fylgja'],
-      ['the plugin’s call of a tool not listed', { ...OWN, tool: 'mcp__plugin_fylgja_fylgja__restructure' }, 'fylgja'],
+    const others: readonly (readonly [string, Parameters<typeof isOwnCall>[0], string | undefined, string | undefined])[] = [
+      ['Claude’s own call of the same tool', { ...OWN, tool_use_id: 'toolu_01abc' }, 'engine', SERVER],
+      ['Claude’s call, were it to carry the plugin’s kind of id', OWN, 'engine', SERVER],
+      ['an agent’s call', { ...OWN, agentId: 'agent-1' }, 'fylgja', SERVER],
+      ['the plugin’s call of a tool not listed', { ...OWN, tool: 'mcp__plugin_fylgja_fylgja__restructure' }, 'fylgja', SERVER],
       [
-        'the plugin’s call of a tool whose name only starts like a listed one',
+        'a tool whose name only starts like a listed one',
         { ...OWN, tool: 'mcp__plugin_fylgja_fylgja__recall_all' },
         'fylgja',
+        SERVER,
       ],
-      ['another server’s tool of the same name', { ...OWN, tool: 'mcp__notes__recall' }, 'fylgja'],
-      ['the same server added by hand', { ...OWN, tool: 'mcp__fylgja__recall' }, 'fylgja'],
-      ['another plugin’s call', OWN, 'fylgja-lookalike'],
-      ['a call nobody is named for', OWN, undefined],
-      ['a query with no call behind it', { tool: OWN.tool }, 'fylgja'],
-      ['a tool the organization limits', { ...OWN, ceiling: 'ask' }, 'fylgja'],
-      ['a built-in tool', { ...OWN, tool: 'Bash' }, 'fylgja'],
+      ['another server’s tool of the same name', { ...OWN, tool: 'mcp__notes__recall' }, 'fylgja', SERVER],
+      [
+        'a server of the plugin’s name added by hand, pointing elsewhere',
+        { ...OWN, tool: 'mcp__fylgja__recall' },
+        'fylgja',
+        SERVER,
+      ],
+      ['another plugin’s call', OWN, 'fylgja-lookalike', SERVER],
+      ['a call nobody is named for', OWN, undefined, SERVER],
+      ['a call while Fylgja is not connected', OWN, 'fylgja', undefined],
+      ['a query with no call behind it', { tool: OWN.tool }, 'fylgja', SERVER],
+      ['a tool the organization limits', { ...OWN, ceiling: 'ask' }, 'fylgja', SERVER],
+      ['a built-in tool', { ...OWN, tool: 'Bash' }, 'fylgja', SERVER],
     ]
 
-    for (const [name, e, raisedBy] of others) {
-      expect(isOwnCall(e, raisedBy), name).toBe(false)
+    for (const [name, e, raisedBy, server] of others) {
+      expect(isOwnCall(e, raisedBy, server), name).toBe(false)
+      expect(verdictFor({ decision: 'ask' }, e, raisedBy, server).decision, name).toBe('ask')
     }
   })
 
@@ -319,19 +453,18 @@ describe('Scribe’s model', () => {
     const set = stage(on, { replies: [...looking, NOTHING] })
 
     await $.session.start(START)
-    await turn($, set, dev('FIRST TURN: make the mailer retry'), claude('Done.'))
+    await turn($, set, dev('FIRST TURN: make the mailer retry'), claude('Done.', edit(FILE)))
 
     expect(set.asked.length).toBe(4)
-    expect(set.calls.map(call => call.tool)).toEqual(['recall', 'search', 'open'])
-    expect(set.calls[0]?.args, 'the repository is the session’s, whatever the model wrote').toEqual({
+    expect(set.calls.map(call => call.tool)).toEqual(['recall', 'recall', 'search', 'open'])
+    expect(set.calls[1]?.args, 'the repository is the session’s, whatever the model wrote').toEqual({
       query: 'queue lock',
       repo: 'acme/web',
     })
     expect(set.asked[3]?.prompt).toMatch('That lookup was not run: no lookups are left in this wake')
     expect(set.of('remember')).toEqual([])
 
-    await $.prompt.submit(SUBMIT)
-    await turn($, set, dev('SECOND TURN'), claude('Done again.'))
+    await turn($, set, dev('SECOND TURN'), claude('Done again.', edit(FILE)))
 
     expect(set.asked[4]?.prompt).toMatch('FIRST TURN: make the mailer retry')
     expect(set.asked[4]?.prompt).toMatch('SECOND TURN')
@@ -365,8 +498,9 @@ describe('Scribe’s model', () => {
     })
 
     await $.session.start(START)
+    await send($, 'FIRST TURN: pick the queue')
 
-    const first = turn($, set, dev('FIRST TURN: pick the queue'), claude('Picked.'))
+    const first = finish($, set, dev('FIRST TURN: pick the queue'), claude('Picked.', edit(FILE)))
 
     await set.clock.advance(25_000)
     await first
@@ -374,7 +508,7 @@ describe('Scribe’s model', () => {
     expect(set.asked.map(asked => asked.timeoutMs)).toEqual([25_000])
     expect(set.of('remember')).toEqual([])
 
-    await turn($, set, dev('SECOND TURN'), claude('Done.'))
+    await turn($, set, dev('SECOND TURN'), claude('Done.', edit(FILE)))
 
     expect(set.asked[1]?.prompt).toMatch('FIRST TURN: pick the queue')
   })
@@ -388,8 +522,9 @@ describe('Scribe’s model', () => {
     const set = stage(on, { replies: [slow, slow, slow, slow] })
 
     await $.session.start(START)
+    await send($, WORK[0]?.text ?? '')
 
-    const done = turn($, set, ...WORK)
+    const done = finish($, set, ...WORK)
 
     await set.clock.advance(60_000)
     await done
@@ -414,13 +549,13 @@ describe('Scribe’s model', () => {
     expect(set.of('remember'), 'a record that says to write causes no write').toEqual([])
   })
 
-  test('earlier wakes are sent again as the same blocks, the newest marked for the cache, and say what was done', async ($, on) => {
-    const set = stage(on, { replies: [verdict({ records: [decision()] }), NOTHING, NOTHING] })
+  test('earlier wakes are sent again as the same blocks, and say what was done', async ($, on) => {
+    const set = stage(on, { replies: [verdict({ records: [decision({ anchors: [] })] }), NOTHING, NOTHING] })
 
     await $.session.start(START)
-    await turn($, set, dev('TURN ONE'), claude('One.'))
-    await turn($, set, dev('TURN TWO'), claude('Two.'))
-    await turn($, set, dev('TURN THREE'), claude('Three.'))
+    await turn($, set, dev('TURN ONE'), claude('One.', edit(FILE)))
+    await turn($, set, dev('TURN TWO'), claude('Two.', edit(FILE)))
+    await turn($, set, dev('TURN THREE'), claude('Three.', edit(FILE)))
 
     const [, second, third] = set.asked
 
@@ -478,14 +613,6 @@ describe('Scribe fails quietly', () => {
 
 describe('what Scribe keeps', () => {
   test('after a whole session, the machine holds ids, counters and switches, and nothing anyone wrote', async ($, on) => {
-    const logged: string[] = []
-
-    on('ui.log', ($, e) => {
-      logged.push(JSON.stringify(e))
-
-      return { value: undefined }
-    })
-
     const reasonless = decision({ content: 'Use SECRET-CONTENT-B.', detail: '', reason_status: 'not_stated' })
     const set = stage(on, {
       replies: [
@@ -496,6 +623,7 @@ describe('what Scribe keeps', () => {
       tools: {
         recall: () =>
           answer({
+            known_repos: ['SECRET-ORG/web'],
             facts: [fact(1, { content: 'SECRET-FACT-ONE' }), fact(2, { content: 'SECRET-FACT-TWO', anchors: [{ path: 'src' }] })],
           }),
       },
@@ -503,18 +631,17 @@ describe('what Scribe keeps', () => {
 
     await $.session.start(START)
     await turn($, set, dev('SECRET-PROMPT in src/mail/send.ts'), claude('SECRET-REPLY', edit(FILE)))
-    await press($, 'knew')
-    await $.prompt.submit({ text: 'SECRET-PROMPT-TWO', wait: false, origin: { kind: 'composer' } })
+    await pressTwice($, 'knew')
     await turn($, set, dev('SECRET-PROMPT-TWO'), claude('SECRET-REPLY-TWO', edit('src/SECRET-PATH.ts')))
     await press($, 'reason:0')
-    await $.prompt.submit({ text: 'SECRET-PROMPT-THREE', wait: false, origin: { kind: 'composer' } })
-    await turn($, set, dev('SECRET-PROMPT-THREE'), claude('SECRET-REPLY-THREE'))
+    await turn($, set, dev('SECRET-PROMPT-THREE'), claude('SECRET-REPLY-THREE', edit(FILE)))
     await set.clock.advance(30_000)
 
     expect([...set.kept.keys()].sort()).toEqual(['scribe.hasShown', 'scribe.known', 'scribe.skip', 'scribe.typedPast'])
     expect(set.kept.get('scribe.known')).toEqual([idOf(1)])
     expect(JSON.stringify([...set.kept.entries()])).not.toMatch('SECRET')
-    expect(logged).toEqual([])
+    expect(set.logged.length, 'the debug log got its one line').toBe(1)
+    expect(JSON.stringify(set.logged)).not.toMatch('SECRET')
     expect(JSON.stringify(set.statuses)).not.toMatch('SECRET')
     expect(JSON.stringify(set.toasts)).not.toMatch('SECRET')
     expect(set.asked.length, 'the model was asked each turn, so the test saw real work').toBe(3)
