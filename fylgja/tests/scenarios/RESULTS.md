@@ -62,6 +62,10 @@ Each cell: correct runs, then records written / questions shown / tells shown ov
 
 Nothing.
 
+### Once more, on the tree as committed
+
+The three runs above were made a minute or two before their commit and two commits before the last change to the plugin. The ten sessions were run once more on the tree at commit `c279421` (15 model calls): 10 of 10, no false record, no false question, zero questions and zero tells in the silent sessions, the same four questions and the one expected tell, a median of 2.0 s a call.
+
 What the table does not say:
 
 - Thirty runs of ten sessions is a small sample, and the sessions and what counts as right were written by the same hand as the prompt. It is a first measurement, not a rate to plan on.
@@ -156,4 +160,4 @@ Each cell: correct runs, then records written / questions shown / tells shown ov
 
 ## Model calls spent in this round
 
-223 in all: 25 on Haiku (19 before the harness was corrected, 6 after), 48 on the first full Sonnet run, 75 on the second and 75 on the one reported above. The held-out run added 45.
+223 in all: 25 on Haiku (19 before the harness was corrected, 6 after), 48 on the first full Sonnet run, 75 on the second and 75 on the one reported above. The held-out run added 45, and its rerun on the committed tree 15.
