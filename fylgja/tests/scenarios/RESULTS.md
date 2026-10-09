@@ -85,6 +85,10 @@ The plugin no longer holds a sentence to the server's rules itself. It sends the
 - The other was lost, and with it the one session that failed: in the reversal, "Generate the 160, 480 and 1280 image sizes …" was refused when the developer's key wrote it. The model answered the correction twice in one reply (the record unchanged, then "Wait, that leaves the content unchanged. Corrected answer:" and a second one), and the reply was read as one object and so as none. The reading has since been changed to take the last whole answer; the sessions were not run again after that.
 - A run just before this one, at `494d06b`, is not reported as a number: it counted a refused write as a record.
 
+### After the final sync to the server's contract
+
+Not run yet. The tree at commit `91d7119` follows the server as it landed (records with no link, commits as objects, the landed refusal codes), but the server's rule for how a sentence may open was still due to change once more when this was written: back to a list of opening words, with a refusal that names the word it did not know and shows two ways to say it. The stand-in refuses in that announced shape. The ten sessions are run three times once that rule is in the server's code and the stand-in has been checked against it, so that the calls are spent once.
+
 What the table does not say:
 
 - Thirty runs of ten sessions is a small sample, and the sessions and what counts as right were written by the same hand as the prompt. It is a first measurement, not a rate to plan on.
