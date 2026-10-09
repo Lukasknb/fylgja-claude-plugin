@@ -6,7 +6,8 @@
 
 import { isRecord } from '../payload'
 import { reasonStatusOf } from './facts'
-import { MAX_ALTERNATIVE_CHARS, MAX_ALTERNATIVES, MAX_ANCHORS, MAX_CONTENT_CHARS, MAX_DETAIL_CHARS, refusalOf } from './gate'
+import { MAX_ALTERNATIVE_CHARS, MAX_ALTERNATIVES, MAX_ANCHORS, MAX_CONTENT_CHARS, MAX_DETAIL_CHARS } from './gate'
+import type { Part } from './gate'
 import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
@@ -127,8 +128,11 @@ function reasonOf(asked: ReasonStatus | null, detail: string, saidNoReason: bool
   return { status: 'stated', detail }
 }
 
-/** A record as the plugin will write it; the name of the server's rule its text breaks; or undefined when it is no record. */
-function draftOf(value: unknown, seen: Seen): Draft | string | undefined {
+/** No sentence longer than this is sent at all; up to it, the server says what is wrong and it may be put right. */
+const MAX_SENT_CONTENT = 1000
+
+/** A record as the plugin will write it, or undefined when it is no record. */
+function draftOf(value: unknown, seen: Seen): Draft | undefined {
   if (!isRecord(value) || typeof value.kind !== 'string' || !KINDS.has(value.kind)) {
     return undefined
   }
@@ -136,7 +140,7 @@ function draftOf(value: unknown, seen: Seen): Draft | string | undefined {
   const kind = value.kind as RecordKind
   const content = sentence(value.content)
 
-  if (content === '') {
+  if (content === '' || content.length > MAX_SENT_CONTENT) {
     return undefined
   }
 
@@ -175,13 +179,6 @@ function draftOf(value: unknown, seen: Seen): Draft | string | undefined {
 
   const supersedes = idOf(value.supersedes)
   const triggers = kind === 'gotcha' ? sentences(value.triggers, 5, 80) : []
-  // A sentence the server would refuse is left out whole, never cut or
-  // reworded here: a sentence cut short says something else.
-  const rule = refusalOf(kind, content, detail, triggers)
-
-  if (rule !== undefined) {
-    return rule
-  }
 
   return {
     kind,
@@ -196,16 +193,16 @@ function draftOf(value: unknown, seen: Seen): Draft | string | undefined {
   }
 }
 
-function askOf(value: unknown, records: readonly (Draft | string | undefined)[], kept: readonly Draft[], seen: Seen): Ask | null {
+function askOf(value: unknown, records: readonly (Draft | undefined)[], kept: readonly Draft[], seen: Seen): Ask | null {
   if (!isRecord(value) || typeof value.record !== 'number') {
     return null
   }
 
   const draft = records[value.record]
-  const record = draft === undefined || typeof draft === 'string' ? -1 : kept.indexOf(draft)
+  const record = draft === undefined ? -1 : kept.indexOf(draft)
 
   // Only a decision is ever asked about.
-  if (draft === undefined || typeof draft === 'string' || record === -1 || draft.kind !== 'decision') {
+  if (draft === undefined || record === -1 || draft.kind !== 'decision') {
     return null
   }
 
@@ -236,12 +233,11 @@ function askOf(value: unknown, records: readonly (Draft | string | undefined)[],
  */
 export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
   if (value.outcome !== 'act') {
-    return { records: [], question: null, tells: [], faults: [] }
+    return { records: [], question: null, tells: [] }
   }
 
   const given = (Array.isArray(value.records) ? value.records : []).slice(0, MAX_RECORDS).map(record => draftOf(record, seen))
-  const records = given.filter((draft): draft is Draft => draft !== undefined && typeof draft !== 'string')
-  const faults = given.flatMap((draft, record) => (typeof draft === 'string' ? [{ record, rule: draft }] : []))
+  const records = given.filter((draft): draft is Draft => draft !== undefined)
   const tells: string[] = []
 
   for (const entry of Array.isArray(value.tells) ? value.tells : []) {
@@ -269,7 +265,35 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     }
   }
 
-  return { records, question, tells, faults }
+  return { records, question, tells }
+}
+
+/**
+ * A record Fylgja refused, put right by the model: the same record with the
+ * one part the refusal was about taken from the model's answer, and every
+ * other part as it was. A reworded sentence can so never bring a reason
+ * with it that nobody gave, or a place nobody opened. Undefined when the
+ * answer is no record, or changes nothing.
+ */
+export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen): Draft | undefined {
+  const answered = draftOf(isRecord(value) ? { ...value, kind: draft.kind } : value, seen)
+
+  if (answered === undefined) {
+    return undefined
+  }
+
+  const better: Draft =
+    part === 'content'
+      ? { ...draft, content: answered.content }
+      : part === 'triggers'
+        ? { ...draft, triggers: answered.triggers }
+        : part === 'reason'
+          ? { ...draft, detail: answered.detail, reasonStatus: answered.reasonStatus, alternatives: answered.alternatives }
+          : part === 'alternatives'
+            ? { ...draft, alternatives: answered.alternatives }
+            : { ...draft, anchors: answered.anchors }
+
+  return JSON.stringify(better) === JSON.stringify(draft) ? undefined : better
 }
 
 // What a person says when there is no why: that they do not know, or that

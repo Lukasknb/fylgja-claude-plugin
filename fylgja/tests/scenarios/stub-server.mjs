@@ -3,7 +3,10 @@
 // plugin calls. It answers in the shapes of the real server's contracts
 // (`MemoryContextResponse`, `MemoryRememberResponse`, `MemoryAmendResponse`,
 // `CommitAttachResponse`, `WhoAmIResponse`) and refuses what the real
-// server's gate and anchor rules refuse, in its words (`refused:<rule> — …`).
+// server's gate and anchor rules refuse, every refusal opening with its code
+// (`refused:<code> — <what to do>`), as the server's do. The rule for how a
+// sentence may open is the server's as it stood when this was written: a
+// list of verbs, or a statement.
 // It holds the records the scenarios give it, keeps what is written in
 // memory, and appends one line per call to the file named in
 // SCRIBE_STUB_LOG. It reaches no network and no real knowledge base.
@@ -149,18 +152,18 @@ function pathFault(path) {
 
 function anchorsFault(anchors) {
   if (anchors.length > 12) {
-    return `anchors holds ${anchors.length} entries; at most 12 — anchor the directory instead`
+    return `refused:anchors_too_many — anchors holds ${anchors.length} entries; at most 12: anchor the directory instead`
   }
 
   for (const [position, anchor] of anchors.entries()) {
     const fault = typeof anchor?.path === 'string' ? pathFault(anchor.path) : 'is empty'
 
     if (fault !== undefined) {
-      return `anchors[${position}].path ${fault} — ${PATH_RULE}`
+      return `refused:anchor_invalid — anchors[${position}].path ${fault}: ${PATH_RULE}`
     }
 
     if (typeof anchor.symbol === 'string' && anchor.symbol.trim().length > 200) {
-      return `anchors[${position}].symbol is longer than 200 characters — a symbol is a name, not a snippet`
+      return `refused:anchor_invalid — anchors[${position}].symbol is longer than 200 characters: a symbol is a name, not a snippet`
     }
   }
 
@@ -227,7 +230,7 @@ function call(name, args) {
         args.paths.length > 30 ? 'paths holds too many entries' : args.paths.map(pathFault).find(found => found !== undefined)
 
       if (fault !== undefined) {
-        return failed(`paths ${fault} — ${PATH_RULE}`)
+        return failed(`refused:anchor_invalid — paths ${fault}: ${PATH_RULE}`)
       }
     }
 
@@ -249,7 +252,7 @@ function call(name, args) {
   if (name === 'open' || name === 'resolve') {
     const record = everything().find(one => one.id === args.id)
 
-    return record === undefined ? failed('record not found') : json(asFact(record))
+    return record === undefined ? failed('refused:not_found — record not found') : json(asFact(record))
   }
 
   if (name === 'remember') {
@@ -340,7 +343,7 @@ function call(name, args) {
     const record = everything().find(one => one.id === args.atom_id && one.written_by === WHO.user.id)
 
     if (record === undefined) {
-      return failed('record not found')
+      return failed('refused:not_found — record not found')
     }
 
     if (args.op === 'remove') {
@@ -359,7 +362,9 @@ function call(name, args) {
     const taken = everything().find(one => one !== record && one.content === content)
 
     if (taken !== undefined) {
-      return failed(`atom ${taken.id} on this topic already says this; atom ${record.id} was not changed`)
+      return failed(
+        `refused:atom_content_taken — atom ${taken.id} on this topic already says this; atom ${record.id} was not changed`,
+      )
     }
 
     const status = args.reason_status ?? (String(detail ?? '').trim() === '' ? (record.reason_status ?? undefined) : undefined)
@@ -398,7 +403,7 @@ function call(name, args) {
   if (name === 'attach_commit') {
     if (!/^[0-9a-f]{7,40}$/.test(String(args.sha))) {
       return failed(
-        "sha is not a commit — a commit is its lowercase hex sha, 7 to 40 characters, e.g. '4d9da09a' (git rev-parse HEAD)",
+        "refused:sha_invalid — a commit is its lowercase hex sha, 7 to 40 characters, e.g. '4d9da09a' (git rev-parse HEAD)",
       )
     }
 

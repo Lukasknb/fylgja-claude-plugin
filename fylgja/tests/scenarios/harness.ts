@@ -38,6 +38,9 @@ type Outcome = {
   ms: number
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number }
   fills: number
+  /** Records handed back to the model once after a refusal, and those lost after it. */
+  corrections: number
+  dropped: number
   /** How many turns ended, each a chance for a wake. */
   wakes: number
   /** The head of each reply of the model, to see why a run went as it did. The sessions are scripted, so nothing of anyone's is in them. */
@@ -203,6 +206,8 @@ async function play(
     ms: 0,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     fills: 0,
+    corrections: 0,
+    dropped: 0,
     wakes: 0,
     replies: [],
     statuses: 0,
@@ -271,6 +276,9 @@ async function play(
   } catch (error) {
     outcome.error = error instanceof Error ? error.name : 'error'
   }
+
+  outcome.corrections = scribe.corrections
+  outcome.dropped = scribe.dropped
 
   return outcome
 }

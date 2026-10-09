@@ -82,8 +82,8 @@ describe('Scribe records', () => {
     expect(set.of('remember').map(args => args.anchors)).toEqual([[{ path: 'src/kept.ts' }]])
   })
 
-  test('a record whose sentence is too long is not written at all, never cut short', async ($, on) => {
-    const long = `Use ${'a very '.repeat(40)}long sentence.`
+  test('a sentence far too long to be one is not sent at all, never cut short', async ($, on) => {
+    const long = `Use ${'a very '.repeat(200)}long sentence.`
     const set = stage(on, {
       replies: [verdict({ records: [decision({ content: long }), decision({ content: 'Use the short one.' })] })],
     })
@@ -92,6 +92,7 @@ describe('Scribe records', () => {
     await turn($, set, ...TALK)
 
     expect(set.of('remember').map(args => args.content)).toEqual(['Use the short one.'])
+    expect(set.asked.length).toBe(1)
   })
 
   test('a record that names one it replaces by an id no lookup returned is written without it', async ($, on) => {

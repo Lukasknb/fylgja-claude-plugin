@@ -40,8 +40,6 @@ export type Verdict = {
   question: Ask | null
   /** Ids of records worth telling the developer about, each one a lookup returned. */
   tells: string[]
-  /** Records left out because Fylgja would refuse their text: which, and by which of its rules. */
-  faults: { record: number; rule: string }[]
 }
 
 /** A record as Fylgja returned it, as much as the band shows. Its texts are held as received and made safe where drawn. */

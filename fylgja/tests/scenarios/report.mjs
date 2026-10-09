@@ -124,6 +124,8 @@ per('Tells shown in the scenarios that expect silence (target 0)', list =>
     one => one.tells,
   ),
 )
+per('Records Fylgja refused and the model was asked once to put right', list => sum(list, one => one.outcome.corrections ?? 0))
+per('Records lost after a refusal', list => sum(list, one => one.outcome.dropped ?? 0))
 per('Records written in all', list => sum(list, one => one.records))
 per('Questions shown in all', list => sum(list, one => one.questions))
 per('Tells shown in all', list => sum(list, one => one.tells))

@@ -20,7 +20,8 @@ import { isPrompt, observe, pathsOf, plain } from './delta'
 import type { Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
-import { WAKE_DEADLINE_MS, wake } from './loop'
+import { codeOf, PASSING, teaches } from './gate'
+import { correct, MAX_STEPS, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
 import type { LoopHost } from './loop'
 import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
@@ -28,7 +29,8 @@ import type { Block } from './prompt'
 import { repoNameOf } from './repo'
 import { CALL_TIMEOUT_MS, limited } from './time'
 import type { Draft, Fact, Verdict, Written } from './types'
-import { MAX_CONTENT, mentionsNoReason, saysNoReason } from './verdict'
+import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason } from './verdict'
+import type { Seen } from './verdict'
 import { NO_STRONG_REASON, NOT_STATED, viewOf } from './view'
 import type { View } from './view'
 
@@ -78,7 +80,10 @@ export type ScribeHost = LoopHost & {
 type Identity = { sessionId: string; repo: string; root: string }
 
 /** Something to do on Fylgja that could not be done when it was asked for, kept for the next turn. */
-type Deferred = { tool: string; args: Record<string, unknown> } | { draft: Draft }
+type Deferred = ({ tool: string; args: Record<string, unknown> } | { draft: Draft }) & {
+  /** The turn it was put off in, when it is not to be done before a later one ends. */
+  notIn?: number
+}
 
 export type Options = { isOn: boolean }
 
@@ -137,8 +142,13 @@ export type Scribe = {
   said: Set<string>
   /** Counts the times the session started over; an answer from before is dropped. */
   epoch: number
+  /** Counts the turns that ended. */
+  turn: number
   /** Writes Fylgja refused or that failed. */
   refused: number
+  /** Records handed back to the model once to be put right, and those lost for good after a refusal. */
+  corrections: number
+  dropped: number
 }
 
 /** The keys kept on this machine. */
@@ -216,7 +226,10 @@ export function create(options: Options): Scribe {
     hasAsked: false,
     said: new Set(),
     epoch: 0,
+    turn: 0,
     refused: 0,
+    corrections: 0,
+    dropped: 0,
   }
 }
 
@@ -438,25 +451,32 @@ async function call(
   return (await tried(host, scribe, tool, args)).answer
 }
 
+const LINES: Readonly<Record<string, string>> = {
+  atom_content_taken: 'Not saved: another record already says this.',
+  atom_content_removed: 'Not saved: a record that was removed already holds this text.',
+  edit_conflict: 'Not saved yet: the record was changed by someone else just now. It is tried once more after the next turn.',
+  search_index_unavailable: 'Not saved yet: Fylgja could not reach its search index. It is tried once more after the next turn.',
+  not_found: 'Not saved: the record is gone, or is not yours to change.',
+}
+
 /**
  * What the developer is told when Fylgja turned a change to a record down,
- * read from the server's own refusal: a short line of fixed words, never
- * the server's text.
+ * read from the code its refusal opens with: a short line of fixed words,
+ * never the server's text. A refusal with no code, or one not known here, is
+ * said as no more than that it was turned down.
  */
 export function refusalLine(refusal: string): string {
-  const rule = /^refused:([a-z_]{1,40})\b/.exec(refusal)?.[1]
-  const lines: readonly (readonly [RegExp, string])[] = [
-    [/already says this/, 'Not saved: another record already says this.'],
-    [/removed record on this topic/, 'Not saved: a record that was removed already holds this text.'],
-    [/was changed by someone else/, 'Not saved: the record was changed by someone else just now. Try again.'],
-    [/search index/, 'Not saved: Fylgja could not reach its search index, so nothing was changed. Try again in a moment.'],
-    [/record not found/, 'Not saved: the record is gone, or is not yours to change.'],
-  ]
+  const code = codeOf(refusal)
 
-  return (
-    lines.find(([says]) => says.test(refusal))?.[1] ??
-    (rule === undefined ? 'Not saved: Fylgja turned the change down.' : `Not saved: Fylgja turned the new text down (${rule}).`)
-  )
+  if (code === undefined) {
+    return 'Not saved: Fylgja turned the change down.'
+  }
+
+  return Object.hasOwn(LINES, code)
+    ? (LINES[code] ?? '')
+    : teaches(code) === undefined
+      ? 'Not saved: Fylgja turned the change down.'
+      : `Not saved: Fylgja turned the new text down (${code}).`
 }
 
 /**
@@ -483,9 +503,9 @@ function defer(scribe: Scribe, work: Deferred): void {
 /**
  * A change to a record the developer asked for. Whether it was made.
  *
- * A change Fylgja turned down is said in one plain line and left at that:
- * it is never tried again. One that did not reach Fylgja is tried once more
- * at the end of the next turn.
+ * A change Fylgja turned down is said in one plain line and left at that.
+ * One that did not reach Fylgja, or that it could not make for trouble of
+ * its own, is tried once more at the end of the next turn, and never again.
  */
 async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unknown>): Promise<boolean> {
   try {
@@ -493,6 +513,11 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
 
     if (answer === undefined) {
       host.toast(refusalLine(refusal ?? ''))
+
+      // The server's own trouble, not the change's: once more, later, as it is.
+      if (PASSING.includes(codeOf(refusal) ?? '')) {
+        defer(scribe, { tool: 'amend_memory', args })
+      }
     }
 
     return answer !== undefined
@@ -506,14 +531,20 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
   }
 }
 
+/** What sending one record came to: what was written, or the code Fylgja refused it by and its words. */
+type Sent = { written: Written | undefined; code: string | undefined; refusal: string | undefined }
+
 /**
  * Writes one record. Undefined when nothing was stored or brought back:
- * Fylgja refused it, or holds it already. A refusal is counted and never
- * tried again.
+ * Fylgja refused it, or holds it already. A refusal is counted.
  *
  * @param prior the recorded decision it replaces, when the developer said it does
  */
 async function record(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draft, prior?: Fact): Promise<Written | undefined> {
+  return (await send(host, scribe, who, draft, prior)).written
+}
+
+async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draft, prior?: Fact): Promise<Sent> {
   const args: Record<string, unknown> = {
     content: draft.content,
     repo: who.repo,
@@ -529,25 +560,28 @@ async function record(host: ScribeHost, scribe: Scribe, who: Identity, draft: Dr
   }
 
   let answer: Record<string, unknown> | undefined
+  let refusal: string | undefined
 
   try {
-    answer = await call(host, scribe, 'remember', args)
+    ;({ answer, refusal } = await tried(host, scribe, 'remember', args))
   } catch {
     answer = undefined
   }
+
+  const none = (code?: string): Sent => ({ written: undefined, code, refusal })
 
   const outcome = answer?.outcome
 
   if (outcome !== 'created' && outcome !== 'restored' && outcome !== 'duplicate' && outcome !== 'reconfirmed') {
     scribe.refused += 1
 
-    return undefined
+    return none(codeOf(refusal))
   }
 
   scribe.recorded = [...scribe.recorded, draft.content].slice(-MAX_LISTED)
 
   if (typeof answer?.atom_id !== 'string') {
-    return undefined
+    return none()
   }
 
   // Fylgja says when what was sent was not applied because the record is
@@ -558,7 +592,7 @@ async function record(host: ScribeHost, scribe: Scribe, who: Identity, draft: Dr
   // Held already by the developer's own record: nothing was written, so
   // there is nothing to show or undo.
   if (!isTheirs && outcome !== 'created' && outcome !== 'restored') {
-    return undefined
+    return none()
   }
 
   const written: Written = {
@@ -571,12 +605,12 @@ async function record(host: ScribeHost, scribe: Scribe, who: Identity, draft: Dr
   }
 
   if (written.outcome === 'held') {
-    return written
+    return { written, code: undefined, refusal: undefined }
   }
 
   scribe.written = [...scribe.written, written].slice(-MAX_LISTED)
 
-  return written
+  return { written, code: undefined, refusal: undefined }
 }
 
 /**
@@ -612,6 +646,11 @@ async function flush(host: ScribeHost, scribe: Scribe, who: Identity): Promise<v
   scribe.deferred = []
 
   for (const [at, work] of waiting.entries()) {
+    if (work.notIn === scribe.turn) {
+      defer(scribe, work)
+      continue
+    }
+
     if ((await host.now()) - startedAt > FLUSH_BUDGET_MS) {
       scribe.deferred = [...waiting.slice(at), ...scribe.deferred].slice(-MAX_DEFERRED)
 
@@ -652,6 +691,76 @@ function settle(host: ScribeHost, scribe: Scribe): void {
   host.redraw()
 }
 
+/** What is left of a wake for putting refused records right: model calls, time, and what a record is checked against. */
+type Budget = { steps: number; until: number; seen: Seen }
+
+/**
+ * Writes one record of a wake's verdict. A refusal that says what is wrong
+ * with the record is used once: the model is handed the record and the
+ * refusal, and nothing else, and what it puts right is checked and sent
+ * once. Refused again, or dropped by the model, the record is let go and
+ * counted. A refusal that is the server's own trouble is tried once more at
+ * the next turn's end, as it is. This spends the wake's own model calls and
+ * time, and none when the wake has used them up.
+ */
+async function written(
+  host: ScribeHost,
+  scribe: Scribe,
+  who: Identity,
+  draft: Draft,
+  budget: Budget,
+): Promise<Written | undefined> {
+  const first = await send(host, scribe, who, draft)
+  const part = first.written === undefined ? teaches(first.code) : undefined
+
+  if (first.written !== undefined || first.code === undefined) {
+    return first.written
+  }
+
+  if (part === undefined) {
+    if (PASSING.includes(first.code)) {
+      // Not at this turn's end: the server is given time.
+      defer(scribe, { draft, notIn: scribe.turn })
+    }
+
+    return undefined
+  }
+
+  const left = budget.until - (await host.now())
+
+  if (budget.steps <= 0 || left <= 0) {
+    scribe.dropped += 1
+
+    return undefined
+  }
+
+  budget.steps -= 1
+  scribe.corrections += 1
+
+  const answer = await correct(host, {
+    model: scribe.model,
+    record: {
+      kind: draft.kind,
+      content: draft.content,
+      detail: draft.detail,
+      reason_status: draft.reasonStatus,
+      alternatives: draft.alternatives,
+      anchors: draft.anchors,
+      triggers: draft.triggers,
+    },
+    refusal: first.refusal ?? '',
+    timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
+  })
+  const better = answer === 'drop' || answer === undefined ? undefined : correctedOf(draft, answer, part, budget.seen)
+  const second = better === undefined ? undefined : (await send(host, scribe, who, better)).written
+
+  if (second === undefined) {
+    scribe.dropped += 1
+  }
+
+  return second
+}
+
 /** Acts on a wake's verdict: writes its records, and puts its question and its tells in line. */
 async function apply(
   host: ScribeHost,
@@ -659,6 +768,7 @@ async function apply(
   who: Identity,
   verdict: Verdict,
   facts: ReadonlyMap<string, Fact>,
+  budget: Budget,
 ): Promise<void> {
   const { band } = scribe
   const { question } = verdict
@@ -689,7 +799,8 @@ async function apply(
       }
     }
 
-    const one = await record(host, scribe, who, { ...draft, supersedes: null })
+    // What is written may be the record put right: the question, if there is one, is about that one.
+    const one = await written(host, scribe, who, { ...draft, supersedes: null }, budget)
 
     if (one === undefined) {
       continue
@@ -910,6 +1021,7 @@ function mayWake(host: ScribeHost, scribe: Scribe, now: number): boolean {
 export async function completed(host: ScribeHost, scribe: Scribe): Promise<void> {
   scribe.band.isWorking = false
   scribe.band.hasAskedThisTurn = false
+  scribe.turn += 1
 
   const who = await identityOf(host, scribe)
 
@@ -982,6 +1094,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
       const plans = planBlock(scribe.plans.docs)
       const past = scribe.past.map((block, at) => (at === scribe.past.length - 1 ? { ...block, cache: true as const } : block))
       const inTree = scribe.plans.docs.flatMap(doc => (doc.path === null ? [] : [doc.path]))
+      const allowed = new Set([...scribe.lookedUp, ...inTree])
       const woken = await wake(host, {
         model: scribe.model,
         system: SYSTEM,
@@ -1000,7 +1113,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         seen: {
           plans: scribe.plans.docs,
           saidNoReason: mentionsNoReason(seen.developer),
-          paths: new Set([...scribe.lookedUp, ...inTree]),
+          paths: allowed,
         },
       })
 
@@ -1012,7 +1125,11 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         scribe.hasPrompt = false
         scribe.anchored.clear()
         scribe.wakes += 1
-        await apply(host, scribe, who, woken.verdict, woken.facts)
+        await apply(host, scribe, who, woken.verdict, woken.facts, {
+          steps: MAX_STEPS - woken.steps,
+          until: woken.startedAt + WAKE_DEADLINE_MS,
+          seen: { plans: scribe.plans.docs, saidNoReason: mentionsNoReason(seen.developer), paths: allowed, facts: woken.facts },
+        })
         scribe.past = [
           ...scribe.past,
           pastBlock(scribe.wakes, gist(seen.lines), summaryOf(woken.verdict, scribe.written.slice(before))),

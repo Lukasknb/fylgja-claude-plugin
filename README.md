@@ -92,17 +92,19 @@ at a time.
   that cost time: written to Fylgja at once, with the reason, what was
   rejected, and the files it concerns. Not naming, formatting, routine edits
   or status. A record points only at files the session itself opened, at
-  most twelve of them. Fylgja takes a record only as one sentence that
-  opens with an instruction word or says what is so (`Use …`, `Never …`,
-  `X is Y`) and refuses rather than trims; Scribe holds every record to
-  those rules before it sends it, asks its model once to put a sentence
-  right, and leaves out what still would be refused. Then one line:
+  most twelve of them. Fylgja takes a record only in a certain form (one
+  sentence, worded as a rule) and refuses rather than trims, saying why.
+  When it refuses one for its form, Scribe hands its model that record and
+  the refusal once, takes only the part the refusal was about from the
+  answer, so a reworded sentence brings no new reason with it, and sends
+  it once more. Refused again, the record is let go. Then one line:
 
   `✓ Recorded · Use Postgres advisory locks for the job queue, not Redis.   1 Fix  2 Remove  0 OK`
 
   Fix opens the sentence in a field. Remove takes the record away again.
   A change Fylgja turns down is said in one line (`Not saved: another
-  record already says this.`) and not tried again. A decision a teammate
+  record already says this.`) and not tried again; one it could not make
+  for trouble of its own is tried once more after the next turn. A decision a teammate
   has already recorded is theirs to change: the line then reads `Already
   recorded by someone else` and offers neither Fix nor Remove.
   Several records from one turn are one line, `✓ Recorded 3   1 Review`. A
@@ -496,6 +498,10 @@ run is headless. What only a signed-in interactive session can show:
 14. What a `/clear` does to the session's id: Scribe reads it again and
     carries the session's question counts over only if it is the same.
 15. A record's link: the tell's `Open in Fylgja` and the link in a `Tell
-    Claude` note come from a `link` field on a recalled record. The
-    server's contract for `recall` carries none at the time of writing; if
-    it stays that way, both simply do not appear.
+    Claude` note come from the `link` a recalled record carries. Check
+    that it opens the record in the Fylgja app; a record that comes
+    without one shows neither.
+16. A refused record: word a decision so that Fylgja refuses its sentence
+    and check that one more model call puts it right, that the receipt
+    shows the sentence as written, and that a question, if one was due, is
+    about that sentence.

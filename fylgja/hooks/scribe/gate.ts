@@ -1,11 +1,11 @@
 /**
- * Fylgja's own rules for what it stores, as its server holds them, so that
- * Scribe sends nothing the server would refuse: a refused write is a record
- * lost, and the server refuses rather than trims.
+ * What Fylgja's server takes, as far as the plugin holds itself to it before
+ * it sends: the lengths and counts over which the server refuses rather than
+ * trims, and what a path is. They mirror the server's anchor rules and caps
+ * and have to change with them.
  *
- * These mirror the server's gate and its anchor rules and have to change
- * with them. They only ever leave things out; whatever passes here is still
- * the server's to judge.
+ * Whether a sentence is a memory is the server's to say, and it says why
+ * when it refuses: that is read here by its code.
  */
 
 /** A record's sentence is at most this long. */
@@ -24,67 +24,47 @@ export const MAX_ANCHORS = 12
 export const MAX_PATH_CHARS = 400
 export const MAX_SYMBOL_CHARS = 200
 
-/** Words a memory's sentence may open with: an order starts with its verb, or with when it applies. */
-const OPENERS: readonly string[] = [
-  'after', 'always', 'before', 'do not', "don't", 'for', 'if', 'never', 'on', 'only', 'when',
-  'add', 'assume', 'avoid', 'bind', 'build', 'call', 'cap', 'check', 'confirm', 'configure', 'copy', 'delete', 'deploy',
-  'disable', 'drop', 'enable', 'ensure', 'expect', 'export', 'fetch', 'grant', 'install', 'keep', 'kill', 'label', 'leave',
-  'limit', 'log', 'make', 'merge', 'mount', 'move', 'pass', 'pin', 'point', 'prefer', 'put', 'query', 'read', 'rebuild',
-  'reboot', 'reindex', 'remove', 'rename', 'restart', 'restore', 'retry', 'reuse', 'revoke', 'rotate', 'route', 'run', 'send',
-  'set', 'skip', 'split', 'stamp', 'start', 'stop', 'store', 'tag', 'treat', 'update', 'use', 'verify', 'wait', 'wrap', 'write',
-] // prettier-ignore
+/**
+ * The name of the rule Fylgja refused something by. Every refusal of the
+ * server's opens `refused:<code> — <what to do>`; the code is what is read,
+ * never the words after it. Undefined for anything else.
+ */
+export function codeOf(refusal: string | undefined): string | undefined {
+  return /^refused:([a-z_]{1,60})(?![a-z_])/.exec(refusal ?? '')?.[1]
+}
 
-const OPENS = new RegExp(`^(?:${OPENERS.map(opener => opener.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`)
+/** The part of a record a refusal is about, and so the only part a correction may change. */
+export type Part = 'content' | 'triggers' | 'reason' | 'alternatives' | 'anchors'
 
-// A decision or a correction may say what is so instead of ordering it.
-const STATES = /\b(?:is|are|must|stays|becomes)\b/i
-
-const SENTENCE_END = /[.!?](?:\s|$)/g
-const BACKTICKED = /`[^`]*`/g
-
-// Phrases that only ever report where something has got to, and words that
-// do so next to the ticket, pull request or date whose state they give.
-const STATUS = /\b(?:open PR|draft PR|in review|awaiting review|blocked on|waiting for|as of 20\d\d|is now live)\b/i
-const STATUS_WORD = /\b(?:merged|pending|landed|WIP|awaiting|deployed on)\b/gi
-const STATUS_ANCHOR = /#\d+|\b[A-Z]{2,6}-\d+\b|\b20\d\d-\d{2}-\d{2}\b|\b20\d\d\b/g
-const TICKET = /#\d+|\b[A-Z]{2,6}-\d+\b/g
-const STATUS_NEAR = 40
-const MAX_TICKETS = 2
-
-function readsAsStatus(text: string): boolean {
-  if (STATUS.test(text)) {
-    return true
-  }
-
-  const anchors = [...text.matchAll(STATUS_ANCHOR)].map(match => [match.index, match.index + match[0].length] as const)
-
-  return [...text.matchAll(STATUS_WORD)].some(word =>
-    anchors.some(([from, to]) => word.index + word[0].length >= from - STATUS_NEAR && word.index <= to + STATUS_NEAR),
-  )
+const PARTS: Readonly<Record<string, Part>> = {
+  not_imperative: 'content',
+  too_long: 'content',
+  not_one_sentence: 'content',
+  status_not_memory: 'content',
+  no_trigger: 'triggers',
+  reason_missing: 'reason',
+  reason_contradiction: 'reason',
+  not_a_decision: 'reason',
+  detail_too_long: 'reason',
+  alternatives_too_many: 'alternatives',
 }
 
 /**
- * Why the server would refuse a record's text, by its own name for the
- * rule; undefined when it would not. The first rule broken is the one named,
- * in the server's order.
+ * Which part of a record a refusal teaches something about; undefined for a
+ * refusal that says nothing a rewording could mend (the record is gone, too
+ * many were written, the server is having trouble) and for a code not known
+ * here, which is a failure and nothing more.
  */
-export function refusalOf(kind: string, content: string, detail: string, triggers: readonly string[]): string | undefined {
-  const sentence = content.trim()
-  const both = `${sentence}\n${detail}`
-  const rules: readonly (readonly [string, boolean])[] = [
-    ['too_long', sentence.length > MAX_CONTENT_CHARS],
-    ['detail_too_long', detail.trim().length > MAX_DETAIL_CHARS],
-    ['not_one_sentence', (sentence.replace(BACKTICKED, ' ').match(SENTENCE_END) ?? []).length > 1],
-    ['status_not_memory', readsAsStatus(both) || (both.match(TICKET) ?? []).length > MAX_TICKETS],
-    [
-      'not_imperative',
-      !(OPENS.test(sentence.toLowerCase()) || ((kind === 'decision' || kind === 'correction') && STATES.test(sentence))),
-    ],
-    ['no_trigger', kind === 'gotcha' && !triggers.some(trigger => trigger.trim() !== '')],
-  ]
+export function teaches(code: string | undefined): Part | undefined {
+  if (code === undefined) {
+    return undefined
+  }
 
-  return rules.find(([, isBroken]) => isBroken)?.[0]
+  return Object.hasOwn(PARTS, code) ? PARTS[code] : /^(?:anchor|path|symbol)s?_/.test(code) ? 'anchors' : undefined
 }
+
+/** Refusals that are the server's trouble and not the record's: tried once more, later, as it is. */
+export const PASSING: readonly string[] = ['search_index_unavailable', 'edit_conflict']
 
 const LINE_REFERENCE = /(?::\d+(?:-\d+)?(?::\d+)?|#L\d+(?:-L?\d+)?)$/
 const CONTROL = /[\u0000-\u001f\u007f]/
