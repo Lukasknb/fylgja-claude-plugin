@@ -180,18 +180,46 @@ says so once on the line under the prompt, until your next prompt:
 
 **If Fylgja is also set up outside the plugin.** The plugin works only
 through the connection it declares itself. If the same Fylgja address is
-also configured anywhere else (your own settings, or a `.mcp.json` in the
-repository you are in), Claude Code runs the two as one under that other
-entry, with that entry's sign-in or token. A repository you cloned could
-ship such an entry with a token for somebody else's account, and what
-Scribe wrote would land there. So in that case the plugin stays out
-altogether: Scribe does not run (no call to Fylgja, no model call), no
-pasted reference is looked up, and one line under the prompt says so until
-your next prompt:
+also configured anywhere else, Claude Code runs the two as one under that
+other entry, with that entry's sign-in or token; and an entry that takes the
+plugin's own connection name is answered as if it were the plugin's. A
+repository you cloned could ship either in its `.mcp.json`, with a token
+for somebody else's account, and what Scribe wrote would land there. Claude
+Code does not say where a connection came from, so the plugin looks for
+itself, before it trusts any answer:
+
+- When a session starts, starts over (`/clear`, resume, fork) or moves to
+  another directory, it reads every `.mcp.json` from the working directory
+  up to the top of the file system: the files Claude Code loads project
+  servers from. If one holds an entry that names Fylgja's host (any scheme,
+  port or path, as a URL or inside a command), or an entry whose name is,
+  holds, or starts like the plugin's connection name (`plugin…`), the
+  project does not leave Fylgja to the plugin. A file that is there and
+  cannot be read or parsed counts the same.
+- And the connection Claude Code answers must be the plugin's own by name,
+  `plugin:fylgja:fylgja`.
+
+If either fails, the plugin stays out altogether for the session: Scribe
+does not run (no call to Fylgja, no model call), no pasted reference is
+looked up, Fylgja is not even asked whether it is connected, and one line
+under the prompt says so until your next prompt:
 `Fylgja is also set up outside the plugin here, so the plugin stays out: it only works through the connection it declares itself`.
 Claude can still use the Fylgja tools of that other entry, as you set it
 up. To use Scribe and the chips, remove the other entry and let the plugin
 provide Fylgja.
+
+What this does not close, because nothing inside a plugin can:
+
+- **A second plugin that is also named `fylgja`.** Claude Code then has two
+  plugins under one name, and which one's server answers is its choice.
+  Install this plugin from its own marketplace only.
+- **Entries in your own user-level configuration.** They are yours to
+  trust. An entry of your own at Fylgja's address under another name is
+  caught by the name check and the plugin stays out; one you named
+  `plugin:fylgja:fylgja` yourself is taken for the plugin's.
+- **Which account is signed in.** Fylgja's server has no tool yet that names
+  the signed-in account, so the plugin cannot hold the connection to one.
+  When it has, that check goes into the same place.
 
 ### What Scribe costs
 
@@ -278,10 +306,13 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   Fylgja address is also set up outside the plugin, in your settings or in
   a `.mcp.json` of the repository you are in, Claude Code runs the two as
   one under that other entry and with its sign-in or token, which a cloned
-  repository can set to somebody else's account. The plugin then sends
-  nothing at all: no reference is looked up (its chip stays
-  `[◉ meeting · 45ada8aa]`), Scribe does not run, and one line under the
-  prompt says so until your next prompt.
+  repository can set to somebody else's account. To find that out the
+  plugin reads the `.mcp.json` files from the working directory upward,
+  and its own, when a session starts; nothing of them is sent anywhere or
+  kept. Where such an entry is found, or the connection is not the
+  plugin's own by name, the plugin sends nothing at all: no reference is
+  looked up (its chip stays `[◉ meeting · 45ada8aa]`), Scribe does not
+  run, and one line under the prompt says so until your next prompt.
 - **Sent to Fylgja:** the id of each reference in a message of yours that is
   drawn (one you typed or sent yourself), to look up its title, date and
   visibility for the chip. Nothing else of the message is sent, and a prompt
@@ -382,7 +413,8 @@ run is headless. What only a signed-in interactive session can show:
    of yours for any one of these tools still refuses Scribe and turns it
    off with the one line of status.
 8. Fylgja configured both ways: add an entry with the same address to your
-   settings or to a repository's `.mcp.json`, under any name. The plugin
+   settings or to a repository's `.mcp.json`, under any name, and once
+   under the name `plugin:fylgja:fylgja`. The plugin
    must stay out with its one line of status, and nothing of it must reach
    that entry's account: no lookup of a pasted reference, no lookup or
    record of Scribe's. (Headless, with a stand-in over stdio,

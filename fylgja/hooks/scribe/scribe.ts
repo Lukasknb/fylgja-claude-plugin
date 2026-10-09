@@ -371,9 +371,7 @@ async function identityOf(host: ScribeHost, scribe: Scribe): Promise<Identity | 
  * plugin's own (which the session decides, for the whole plugin), or not
  * saying in time.
  */
-function connected(host: ScribeHost, scribe: Scribe): Promise<string | undefined> {
-  void scribe
-
+function connected(host: ScribeHost): Promise<string | undefined> {
   return limited(host.after, host.server(), CALL_TIMEOUT_MS).catch(() => undefined)
 }
 
@@ -396,7 +394,7 @@ async function call(
   tool: string,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown> | undefined> {
-  const server = await connected(host, scribe)
+  const server = await connected(host)
 
   if (server === undefined) {
     throw new Error('Fylgja is not connected')
@@ -748,7 +746,7 @@ export async function stepped(
 
   wanted(scribe, pathsOf(uses, who.root))
 
-  if ((index + 1) % LOOKUP_EVERY !== 0 || scribe.paths.length === 0 || (await connected(host, scribe)) === undefined) {
+  if ((index + 1) % LOOKUP_EVERY !== 0 || scribe.paths.length === 0 || (await connected(host)) === undefined) {
     return
   }
 
@@ -860,7 +858,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   const who = await identityOf(host, scribe)
 
   // Signed out, nothing is read and no model is asked.
-  if (who === null || (await connected(host, scribe)) === undefined) {
+  if (who === null || (await connected(host)) === undefined) {
     return
   }
 

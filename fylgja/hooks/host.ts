@@ -13,6 +13,14 @@ export type Host = {
   redraw: () => void
   /** `$.clock.every`: calls `fn` every `ms` milliseconds until cancelled. */
   every: (ms: number, fn: () => void) => { cancel: () => void }
+  /** `$.session.cwd`: the directory the session runs in. */
+  cwd: () => Promise<string>
+  /** Whether a file is at `path` (`$.fs.stat`). */
+  exists: (path: string) => Promise<boolean>
+  /** `$.fs.read`: a file's text; rejects when it cannot be read. */
+  read: (path: string) => Promise<string>
+  /** The text of the plugin's own `.mcp.json`. */
+  declared: () => Promise<string>
 }
 
 export type Connection =

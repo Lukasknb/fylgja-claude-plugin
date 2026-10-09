@@ -107,6 +107,11 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
     })
   }
 
+  // Where the session is, and a project that holds no `.mcp.json`: the
+  // plugin looks at both before it trusts Fylgja's connection.
+  on('session.cwd', () => ({ value: '/work/repo' }))
+  on('fs.stat', () => ({ deny: 'no such file' }))
+
   on('mcp.connect', async () => {
     connects += 1
 

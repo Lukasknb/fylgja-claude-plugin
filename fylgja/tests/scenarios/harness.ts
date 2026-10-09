@@ -20,6 +20,8 @@ import type { Row } from '../../hooks/scribe/delta'
 import { REFUSED, verdictFor } from '../../hooks/scribe/grant'
 import * as Scribe from '../../hooks/scribe/scribe'
 import type { ScribeHost } from '../../hooks/scribe/scribe'
+import * as Session from '../../hooks/session'
+import type { Host } from '../../hooks/host'
 
 type Act = { whenQuestion?: string; whenEditing?: boolean; press?: string; enter?: [string, string] }
 type Scenario = { id: string; repo: string; turns: { rows: Row[]; then?: Act[] }[] }
@@ -116,6 +118,29 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     exists: path => Promise.resolve(path === `${ROOT}/.git`),
     surfaces: () => Promise.resolve(['terminal']),
     rows: () => Promise.resolve(world.rows),
+  }
+}
+
+/** The plugin's own calls for the check of its connection, as its own module binds them. */
+function probeHostOf($: EngineInterface, said: string[]): Host {
+  return {
+    connect: () => $.mcp.connect('fylgja'),
+    call: (server, tool, args) => $.mcp.call(server, tool, args),
+    status: text => {
+      if (text !== undefined) {
+        said.push(text)
+      }
+    },
+    redraw: () => undefined,
+    every: (ms, fn) => $.clock.every(ms, fn),
+    cwd: () => $.session.cwd(),
+    exists: path =>
+      $.fs.stat(path).then(
+        () => true,
+        () => false,
+      ),
+    read: path => $.fs.read(path),
+    declared: () => $.fs.read(`${$.plugin.root}/.mcp.json`),
   }
 }
 
@@ -303,6 +328,29 @@ export function register(on: On): void {
   on('command.run', { command: 'scribe-scenarios' }, async ($, e) => {
     const [model = 'haiku', run = '1', from = '', to = ''] = e.args.trim().split(/\s+/)
     const scenarios = JSON.parse(await $.fs.read(from)) as Scenario[]
+    // With no scenario to run: what the plugin's own check of the connection
+    // comes to in this project, and, where it holds, who served its call.
+    if (scenarios.length === 0) {
+      const said: string[] = []
+      const session = Session.create()
+
+      Session.located(session, await $.session.cwd())
+
+      const server = await Session.serverOf(probeHostOf($, said), session, true)
+
+      own.server = session.server
+
+      const served =
+        server === undefined
+          ? 'no call made'
+          : await $.mcp.call(server, 'recall', { repo: 'x/y', paths: ['README.md'] }).then(
+              result => JSON.stringify(result.content).slice(0, 120),
+              () => 'refused',
+            )
+
+      return { text: `own=${server ?? 'no'} status=${said.at(-1) ?? 'none'} served=${served}` }
+    }
+
     const connection = await $.mcp.connect('fylgja')
 
     if (!connection.isConnected) {
@@ -310,16 +358,6 @@ export function register(on: On): void {
     }
 
     own.server = connection.server
-
-    // With no scenario to run: which server the engine connected, and whether the plugin's own call gets through to it.
-    if (scenarios.length === 0) {
-      const isGranted = await $.mcp.call(connection.server, 'recall', { repo: 'x/y', paths: ['README.md'] }).then(
-        () => true,
-        () => false,
-      )
-
-      return { text: `server=${connection.server} granted=${String(isGranted)}` }
-    }
 
     const outcomes: Outcome[] = []
 

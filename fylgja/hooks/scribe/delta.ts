@@ -200,6 +200,9 @@ export function plain(text: string): string {
   return said(text).replace(/\s+/g, ' ').trim()
 }
 
+// How the engine opens the row that stands for a compacted conversation.
+const SUMMARY = /^This session is being continued from a previous conversation\b/
+
 /** A prompt shorter than this is found only as the whole of a row, or at its start or end; a longer one anywhere in it. */
 const MIN_INSIDE = 12
 
@@ -219,6 +222,12 @@ export function isPrompt(row: Row, prompts: ReadonlySet<string>): boolean {
 
   if (prompts.has(text)) {
     return true
+  }
+
+  // What the engine writes in place of a compacted conversation quotes the
+  // developer at length; it is the engine's row, not theirs.
+  if (SUMMARY.test(text)) {
+    return false
   }
 
   for (const prompt of prompts) {

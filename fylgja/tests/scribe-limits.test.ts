@@ -289,15 +289,18 @@ describe('whether Scribe’s calls get through is settled before a model is aske
       mcp: { connect: () => Promise.resolve({ isConnected: true, server }) },
       ui: { status: () => undefined, invalidate: () => undefined },
       clock: { every: () => ({ cancel: () => undefined }) },
+      // A project with no `.mcp.json` anywhere above it.
+      fs: { stat: () => Promise.reject(new Error('no such file')), read: () => Promise.reject(new Error('no such file')) },
+      plugin: { root: '/plugin' },
     }
     const start = plugin.get('session.start') as unknown as ($: unknown, e: unknown, next: (e: unknown) => unknown) => unknown
     const check = plugin.get('tool.check') as unknown as ($: unknown, e: unknown, next: unknown) => Promise<{ decision: string }>
 
     await start($, START, (e: unknown) => e)
     // The session's start does not wait for the server's answer.
-    await new Promise<void>(resolve => {
-      void Promise.resolve().then(() => Promise.resolve().then(() => Promise.resolve().then(resolve)))
-    })
+    for (let turn = 0; turn < 200; turn += 1) {
+      await Promise.resolve()
+    }
 
     const next = Object.assign(() => Promise.resolve({ decision: core, reason: 'core' }), {
       origin: { plugin: raisedBy, tier: 'user' },

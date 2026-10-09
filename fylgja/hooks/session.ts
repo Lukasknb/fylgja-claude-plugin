@@ -1,4 +1,5 @@
 import type { Host } from './host'
+import { isLeftToPlugin } from './project'
 import { OWN_SERVER } from './scribe/grant'
 import * as Memory from './memory'
 import type { Asked } from './resolve'
@@ -37,6 +38,13 @@ export type Session = {
   notice: string | undefined
   /** Whether the engine last answered an entry other than the plugin's own for its server. */
   isOutside: boolean
+  /** The directory the session runs in, as far as it is known. */
+  cwd: string | undefined
+  /**
+   * Whether the project leaves Fylgja's connection to the plugin: found out
+   * once, when the session starts, starts over or moves, and never per call.
+   */
+  vetted: Promise<boolean> | undefined
   /** Runs while the sign-in line is up, and only then. */
   recheck: { cancel: () => void } | undefined
   /**
@@ -57,6 +65,8 @@ export function create(): Session {
     server: undefined,
     notice: undefined,
     isOutside: false,
+    cwd: undefined,
+    vetted: undefined,
     recheck: undefined,
     epoch: 0,
   }
@@ -96,18 +106,48 @@ export function prompted(host: Host, session: Session): void {
 }
 
 /**
+ * The session is in `cwd`: at its start, and whenever it is found to have
+ * moved. What the project holds is looked at afresh.
+ */
+export function located(session: Session, cwd: string): void {
+  if (session.cwd !== cwd) {
+    session.cwd = cwd
+    session.vetted = undefined
+  }
+}
+
+/** The conversation started over: the project may have changed under it, so it is looked at afresh. */
+export function revet(session: Session): void {
+  session.vetted = undefined
+}
+
+/**
+ * Whether the account behind the connection is the one the plugin is meant
+ * to work for. Fylgja's server has no tool yet that names the signed-in
+ * account, so there is nothing to hold the connection to: no pin is
+ * available. When the server offers one, this is the place that asks it.
+ */
+export function accountPin(): 'unavailable' | 'match' | 'mismatch' {
+  return 'unavailable'
+}
+
+/**
  * The name to call Fylgja's server under, or undefined when the plugin is
- * not to call it: it is not connected, or it is connected through an entry
- * that is not the plugin's own. The sign-in line is kept true along the way.
+ * not to call it: it is not connected, or the connection is not the
+ * plugin's own. The sign-in line is kept true along the way.
  *
  * This is the one place that decides whether the connection is the
- * plugin's own, for the lookups of references and for Scribe alike. Where
- * the same address is also configured outside the plugin (the person's
- * settings, a repository's `.mcp.json`), the engine runs the two as one
- * under that other entry and with its credentials, which a cloned
- * repository can set to anybody's. Nothing of this plugin goes there: no
- * lookup is made, a reference stays the chip that claims nothing, and one
- * line under the prompt says why, once.
+ * plugin's own, for the lookups of references and for Scribe alike. Two
+ * things must hold. The project's `.mcp.json` files, from the working
+ * directory up, hold no entry that could stand in for the plugin's server
+ * (see `project.ts`); they are read before any answer is trusted, once per
+ * session and not per call. And the engine answers the plugin's own
+ * connection name. Otherwise the same address is configured outside the
+ * plugin, the engine runs the connection with that entry's credentials,
+ * and a cloned repository can set those to anybody's. Nothing of this
+ * plugin goes there: Fylgja is not asked whether it is connected, no lookup
+ * is made, a reference stays the chip that claims nothing, and one line
+ * under the prompt says why, once.
  *
  * A person who has to sign in may sign in as someone else, so everything
  * known about references is dropped when the line goes up: a chip never
@@ -117,8 +157,26 @@ export function prompted(host: Host, session: Session): void {
  * drawn again and look their references up.
  */
 export async function serverOf(host: Host, session: Session, isFirst = false): Promise<string | undefined> {
+  if (session.vetted === undefined) {
+    const cwd = session.cwd ?? (await host.cwd().catch(() => undefined))
+
+    // A project that cannot be looked at is not vouched for.
+    session.vetted ??= cwd === undefined ? Promise.resolve(false) : isLeftToPlugin(host, cwd).catch(() => false)
+  }
+
+  if (!(await session.vetted)) {
+    if (!session.isOutside) {
+      session.isOutside = true
+      say(host, session, TWIN_STATUS)
+    }
+
+    session.server = undefined
+
+    return undefined
+  }
+
   const { server: answered, change } = await SignIn.check(host, session.signIn, isFirst)
-  const isOutside = answered !== undefined && answered !== OWN_SERVER
+  const isOutside = answered !== undefined && (answered !== OWN_SERVER || accountPin() === 'mismatch')
   const server = isOutside ? undefined : answered
 
   // Said when it becomes so, not at every answer: the line does not flicker.

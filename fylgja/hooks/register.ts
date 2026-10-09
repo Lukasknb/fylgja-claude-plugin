@@ -37,6 +37,14 @@ function hostOf($: EngineInterface, session: Session.Session): Host {
     },
     redraw: () => $.ui.invalidate('ui.render'),
     every: (ms, fn) => $.clock.every(ms, fn),
+    cwd: () => $.session.cwd(),
+    exists: path =>
+      $.fs.stat(path).then(
+        () => true,
+        () => false,
+      ),
+    read: path => $.fs.read(path),
+    declared: () => $.fs.read(`${$.plugin.root}/.mcp.json`),
   }
 }
 
@@ -157,6 +165,8 @@ export function register(on: On, options: PluginOptions = {}): void {
 
   on('session.start', ($, e, next) => {
     Session.startOver(session)
+    Session.located(session, e.cwd)
+    Session.revet(session)
     Scribe.started(scribe, e.isInteractive, e.surface)
     // Not waited on: the session starts whether or not Fylgja answers. The
     // line's state is written whatever the answer, because a plugin that was
@@ -171,6 +181,7 @@ export function register(on: On, options: PluginOptions = {}): void {
   // on screen, or come back, look their references up again.
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, ($, e, next) => {
     Session.startOver(session)
+    Session.revet(session)
     Draft.startOver(draft)
     Scribe.startOver(scribe)
     $.ui.invalidate('ui.render')
@@ -332,6 +343,8 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     if (e.agentId === undefined) {
       try {
+        // A session that has moved is in another project; what that one holds is looked at before anything else.
+        Session.located(session, await $.session.cwd())
         await Scribe.completed(scribeHostOf($, session), scribe)
       } catch {
         // The turn ended as it would have without Scribe.

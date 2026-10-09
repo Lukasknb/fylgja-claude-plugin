@@ -30,6 +30,12 @@ export type StageOptions = {
   connect?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Tools the engine does not let the plugin call, each with the engine's words for it. */
   refused?: Readonly<Record<string, string>>
+  /** The text of the plugin's own `.mcp.json`. */
+  declared?: string
+  /** Where the session is now, when it moves. */
+  cwdNow?: () => string
+  /** Files of the machine by path: their text, or `null` for one that is there and cannot be read. Read on every look. */
+  files?: Record<string, string | null>
   /** The session's id, when it is not the usual one. */
   sessionId?: () => string
   /** The session cannot say what its id is. */
@@ -46,6 +52,8 @@ export type Stage = {
   toasts: string[]
   /** Every text put in the prompt box by the plugin. */
   fills: string[]
+  /** Every file the plugin read, in order. */
+  reads: string[]
   /** Every line the plugin wrote to the debug log. */
   logged: string[]
   /** Every tool whose call was put to the permission check, in order. */
@@ -75,6 +83,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const asked: Asked[] = []
   const toasts: string[] = []
   const fills: string[] = []
+  const reads: string[] = []
   const logged: string[] = []
   const checks: string[] = []
   const sent: string[] = []
@@ -172,13 +181,23 @@ export function stage(on: On, options: StageOptions = {}): Stage {
         ? null
         : { ...options.repo, internal: false, name: null }) as never,
   }))
-  on('session.cwd', () => ({ value: options.cwd ?? ROOT }))
+  on('session.cwd', () => ({ value: options.cwdNow?.() ?? options.cwd ?? ROOT }))
   on('session.surfaces', () => ({ value: (options.surfaces ?? ['terminal']) as never }))
-  on('fs.stat', ($, e) =>
-    e.path === `${options.cwd ?? ROOT}/.git` || e.path === `${ROOT}/.git`
-      ? { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } as never }
-      : { deny: 'no such file' },
-  )
+  on('fs.stat', ($, e) => {
+    const isThere = e.path === `${options.cwd ?? ROOT}/.git` || e.path === `${ROOT}/.git` || options.files?.[e.path] !== undefined
+
+    return isThere ? { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } as never } : { deny: 'no such file' }
+  })
+  on('fs.read', ($, e) => {
+    // Any other `.mcp.json` asked for is the plugin's own, wherever the plugin is installed.
+    const text =
+      options.files?.[e.path] ??
+      (e.path.endsWith('/.mcp.json') && !(e.path in (options.files ?? {})) ? options.declared : undefined)
+
+    reads.push(e.path)
+
+    return typeof text === 'string' ? { value: text as never } : { deny: 'cannot be read' }
+  })
   on('store.get', ($, e) => ({ value: kept.get(e.key) as never }))
   on('store.set', ($, e) => {
     kept.set(e.key, e.value)
@@ -213,6 +232,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     asked,
     toasts,
     fills,
+    reads,
     logged,
     checks,
     sent,
