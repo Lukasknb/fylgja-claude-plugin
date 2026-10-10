@@ -30,9 +30,10 @@ export type Draft = {
   supersedes: string | null
   /**
    * The repository the record is about, as `owner/name`: the one its anchors
-   * lie in, or, with no anchor, the one most of the turn's files lie in.
-   * Null when the turn touched no file of any repository; such a record is
-   * not written.
+   * lie in; with no anchor, the one most of the turn's files lie in; with
+   * no file in the turn, the one most of the session's files so far lie in,
+   * or the session's own. Null when there is none of these; such a record
+   * is not written.
    */
   repo: string | null
   /** The id of one of Scribe's own records of this session that this one rewrites in place; null for a new record. */

@@ -102,8 +102,11 @@ at a time.
   nearest `.git` above the file decides, and the name is read from that
   repository's `origin`, or is its folder's name). A record's files all
   lie in one repository, the one most of them are in; a record without
-  files goes to the repository most of the turn's files are in; and a
-  turn that touched no file of any repository records nothing.
+  files goes to the repository most of the turn's files are in. A turn
+  that touched no file itself (you steering, agents doing the work) is
+  about the repository the session has been working in: the one most of
+  its files so far lie in, or the one it sits in. Only a session that
+  sits in no repository and has touched no file of one records nothing.
   When a later turn of the same session changes a decision Scribe already
   recorded, Scribe rewrites its own record (`✓ Updated · …`) or takes it
   back (`✓ Withdrawn · …`) without asking: it is its own record, minutes
@@ -225,8 +228,9 @@ nothing at all: no model call, no call to Fylgja.
 A session need not start inside a git repository. Started in a folder
 that is none (one that holds several checkouts, say), these rules hold:
 
-- A turn that touches no file of any repository records nothing, and no
-  model is asked before the session has touched a file of one.
+- Nothing is recorded, and no model is asked, before the session has
+  touched a file of some repository. From then on a turn that touches no
+  file is about the repository most of the session's files lie in.
 - A record is filed under the repository its files lie in, as everywhere.
 - Who is signed in is asked, and the account pinned or checked, when the
   session starts, as everywhere. That does not wait for a repository.

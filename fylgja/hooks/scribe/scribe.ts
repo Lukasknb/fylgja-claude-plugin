@@ -155,6 +155,8 @@ export type Scribe = {
    * and under which repository it is then filed.
    */
   places: Map<string, Place>
+  /** How many files the session has touched in each repository, for a turn that touches none itself. */
+  filesIn: Map<string, number>
   /** The working tree each folder seen so far lies in; null for a folder in none. */
   trees: Map<string, Tree | null>
   /** What the developer has stated in the session so far: reasons, constraints, standing preferences. */
@@ -288,6 +290,7 @@ export function create(options: Options): Scribe {
     paths: [],
     lookedUp: new Set(),
     places: new Map(),
+    filesIn: new Map(),
     trees: new Map(),
     stated: [],
     unplaced: 0,
@@ -343,6 +346,7 @@ export function startOver(scribe: Scribe): void {
   scribe.paths = []
   scribe.lookedUp.clear()
   scribe.places.clear()
+  scribe.filesIn.clear()
   scribe.stated = []
   scribe.spoken = []
   scribe.unspoken = 0
@@ -519,6 +523,7 @@ async function placesOf(host: ScribeHost, scribe: Scribe, who: Identity, files: 
 
       place = { repo: tree.repo, path }
       scribe.places.set(file, place)
+      scribe.filesIn.set(place.repo, (scribe.filesIn.get(place.repo) ?? 0) + 1)
 
       const fromHere = relativeTo(who.root, file)
 
@@ -981,12 +986,12 @@ async function written(
   budget: Budget,
   prior?: Fact,
 ): Promise<Written | undefined> {
-  // A record is about a repository. One from a turn that touched no file of any is about none, and is not written.
+  // A record is about a repository. One from a session that has no repository of its own and has touched no file of any is about none, and is not written.
   if (draft.repo === null) {
     scribe.unplaced += 1
 
     if (once(scribe, 'unplaced')) {
-      host.debug('Scribe: a record was not written because the turn touched no file of any repository')
+      host.debug('Scribe: a record was not written because the session has touched no file of any repository')
     }
 
     return undefined
@@ -1625,7 +1630,16 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         saidNoReason: mentionsNoReason(seen.developer),
         paths: allowed,
         places: scribe.places,
-        home: homeOf(here, who.repo),
+        // A turn that touched no file itself (the developer steering, agents
+        // doing the work) is about the repository the session has been
+        // working in: the one most of its files so far lie in, or its own.
+        home:
+          homeOf(here, who.repo) ??
+          homeOf(
+            [...scribe.filesIn].flatMap(([repo, count]) => Array.from({ length: count }, () => ({ repo, path: '' }))),
+            who.repo,
+          ) ??
+          who.repo,
         own: new Set(scribe.written.filter(one => one.outcome !== 'held').map(one => one.id)),
       }
       const woken = await wake(host, {

@@ -162,7 +162,7 @@ for (const [at, pass] of passes.entries()) {
     `|Own records rewritten in place / taken back|${summary.updates.length} / ${summary.withdrawals.length}|`,
     `|Tells offered|${summary.tells.length}|`,
     `|Decisions without a reason checked against the developer's words / reason found|${pass.counters.reasonsLookedFor ?? 0} / ${pass.counters.reasonsFound ?? 0}|`,
-    `|Records not written because the turn touched no file of any repository|${pass.counters.notPlaced ?? 0}|`,
+    `|Records not written because the session had touched no file of any repository|${pass.counters.notPlaced ?? 0}|`,
     `|Writes refused / records put right / records lost|${summary.refusals.length} / ${pass.counters.corrections} / ${pass.counters.lost}|`,
     `|Items shown, and per hour of the session|${pass.counters.itemsShown}${summary.itemsShownPerHour === null ? '' : `, ${summary.itemsShownPerHour.toFixed(1)}`}|`,
     `|Offers typed past in a row / offers to be let go for it|${pass.counters.typedPast} / ${pass.counters.skipsOwed}|`,

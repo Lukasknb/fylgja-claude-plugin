@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { claude, decision, dev, REPO, ROOT, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { claude, decision, dev, NOTHING, REPO, ROOT, stage, START, turn, use, verdict } from './scribe-fixtures'
 
 const origin = (name: string): string =>
   `[core]\n\tbare = false\n[remote "origin"]\n\turl = git@github.com:${name}.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`
@@ -113,9 +113,14 @@ describe('a record is about the repository its files lie in', () => {
     expect(set.of('remember')[0]).toMatchObject({ repo: REPO })
   })
 
-  test('a turn that touched no file of any repository records nothing, and says so once in the debug log', async ($, on) => {
+  test('a turn that touched no file is about the repository the session has been working in: most of its files so far, or its own', async ($, on) => {
     const set = stage(on, {
-      replies: [verdict({ records: [decision({ anchors: [] })] }), verdict({ records: [decision({ anchors: [] })] })],
+      files: SIBLING,
+      replies: [
+        verdict({ records: [decision({ anchors: [] })] }),
+        NOTHING,
+        verdict({ records: [decision({ content: 'The other service is restarted by hand after a deploy.', anchors: [] })] }),
+      ],
     })
     const talk = 'x'.repeat(260)
 
@@ -123,15 +128,71 @@ describe('a record is about the repository its files lie in', () => {
     await turn(
       $,
       set,
+      dev(`the developer steers, an agent does the work ${talk}`),
+      claude('Agreed.', use('Agent', { prompt: 'do it' })),
+    )
+
+    expect(set.of('remember')[0], 'nothing touched yet: the session’s own repository').toMatchObject({ repo: REPO })
+
+    await turn(
+      $,
+      set,
+      dev('now the other service'),
+      edits('/work/other/lib/y.ts', '/work/other/lib/z.ts', '/work/other/lib/w.ts'),
+    )
+    await turn(
+      $,
+      set,
+      dev(`and how it is restarted ${talk}`),
+      claude('Noted.', use('Bash', { command: 'ssh box systemctl restart other' })),
+    )
+
+    expect(set.of('remember')[1], 'most of the session’s files lie in the other one by now').toMatchObject({ repo: 'acme/other' })
+  })
+
+  test('a session with no repository of its own: a turn without a file is about the repository it looked into before', async ($, on) => {
+    const set = stage(on, {
+      repo: null,
+      cwdNow: () => '/work',
+      files: SIBLING,
+      replies: [NOTHING, verdict({ records: [decision({ anchors: [] })] })],
+    })
+    const talk = 'x'.repeat(260)
+
+    await $.session.start({ ...START, cwd: '/work' })
+    await turn($, set, dev('look at the other service'), edits('/work/other/lib/y.ts'))
+    await turn(
+      $,
+      set,
       dev(`deploy it on the other box ${talk}`),
       claude('Deployed.', use('Bash', { command: 'ssh box systemctl restart app' })),
     )
-    await turn($, set, dev(`and the file outside every repository ${talk}`), edits('/etc/app/app.conf'))
 
-    expect(set.asked.length, 'the turns were looked at').toBe(2)
-    expect(set.of('remember')).toEqual([])
-    expect(set.logged).toEqual(['Scribe: a record was not written because the turn touched no file of any repository'])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(set.of('remember').map(args => args.repo)).toEqual(['acme/other'])
+  })
+
+  test('with no repository of its own and no file of one in the whole conversation, nothing is recorded, and the debug log says so once', async ($, on) => {
+    const set = stage(on, {
+      repo: null,
+      cwdNow: () => '/work',
+      files: SIBLING,
+      replies: [NOTHING, verdict({ records: [decision({ anchors: [] })] })],
+    })
+    const talk = 'x'.repeat(260)
+
+    await $.session.start({ ...START, cwd: '/work' })
+    await turn($, set, dev('look at the other service'), edits('/work/other/lib/y.ts'))
+    await $.classic.SessionStart({ source: 'clear' })
+    set.rows.length = 0
+    await turn(
+      $,
+      set,
+      dev(`deploy it on the other box ${talk}`),
+      claude('Deployed.', use('Bash', { command: 'ssh box systemctl restart app' })),
+    )
+
+    expect(set.of('remember'), 'the cleared conversation has touched nothing').toEqual([])
+    expect(set.logged).toContain('Scribe: a record was not written because the session has touched no file of any repository')
   })
 
   test('a file in no repository is no anchor, and does not decide where a record goes', async ($, on) => {
