@@ -15,9 +15,24 @@ const models = [...new Set(outcomes.map(outcome => outcome.model))].sort()
 const within = (n, [min, max]) => n >= min && n <= max
 const isSilent = expect => expect.records[1] === 0 && expect.question === 'none' && expect.tells[1] === 0
 
-/** What one run of one scenario came to, against what the scenario expects. */
+/**
+ * What one run of one scenario came to, against what the scenario expects.
+ * A scenario may name a second outcome that is as right as the first
+ * (`expect.or`): the run is graded against both and the better one counts.
+ */
 function grade(scenario, outcome) {
-  const { expect } = scenario
+  const first = gradeBy(scenario, outcome, scenario.expect)
+
+  if (scenario.expect.or === undefined || first.wrong.length === 0) {
+    return first
+  }
+
+  const second = gradeBy(scenario, outcome, { ...scenario.expect, ...scenario.expect.or, or: undefined })
+
+  return second.wrong.length === 0 ? second : first
+}
+
+function gradeBy(scenario, outcome, expect) {
   // A record is one the server took: a write it refused wrote nothing.
   const written = outcome.calls.filter(call => call.tool === 'remember' && call.isRefused !== true).map(call => call.args)
   const amended = outcome.calls.filter(call => call.tool === 'amend_memory').map(call => call.args)

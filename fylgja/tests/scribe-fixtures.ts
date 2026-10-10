@@ -32,6 +32,8 @@ export type StageOptions = {
   refused?: Readonly<Record<string, string>>
   /** What `whoami` answers, when it is not the usual account. */
   whoami?: (clock: MockClock) => unknown
+  /** What the comparison of a new decision with records already held answers; "unrelated" without it. */
+  relate?: (asked: Asked, clock: MockClock) => string | undefined | Promise<string | undefined>
   /** What the look for a reason in the developer's own words answers; "absent" without it. */
   verify?: (asked: Asked, clock: MockClock) => string | undefined | Promise<string | undefined>
   /** The text of the plugin's own `.mcp.json`. */
@@ -60,6 +62,8 @@ export type Stage = {
   whoamis: number[]
   /** Every look for a reason in the developer's own words, in order. */
   verified: Asked[]
+  /** Every comparison of a new decision with records already held, in order. */
+  related: Asked[]
   /** Every file the plugin read, in order. */
   reads: string[]
   /** Every line the plugin wrote to the debug log. */
@@ -93,6 +97,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const fills: string[] = []
   const whoamis: number[] = []
   const verified: Asked[] = []
+  const related: Asked[] = []
   const reads: string[] = []
   const logged: string[] = []
   const checks: string[] = []
@@ -203,6 +208,16 @@ export function stage(on: On, options: StageOptions = {}): Stage {
       return { value: { isAnswered: true, text: found, usage: spent } as never }
     }
 
+    // How a new decision stands to records already held is a call of its own kind too: "unrelated" unless the test says otherwise.
+    if (request.system.startsWith('You compare one new decision')) {
+      related.push(request)
+
+      const found = (await options.relate?.(request, clock)) ?? '{"relation":"unrelated"}'
+      const spent = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+
+      return { value: { isAnswered: true, text: found, usage: spent } as never }
+    }
+
     const replies = options.replies ?? [NOTHING]
     const reply = replies[Math.min(asked.length, replies.length - 1)] ?? NOTHING
 
@@ -278,6 +293,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     fills,
     whoamis,
     verified,
+    related,
     reads,
     logged,
     checks,

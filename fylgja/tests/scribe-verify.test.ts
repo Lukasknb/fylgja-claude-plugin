@@ -71,7 +71,7 @@ describe('a found reason is a why, and a question is for a decision worth one', 
     )
     expect(set.of('remember')[0]).toMatchObject({
       reason_status: 'stated',
-      detail: 'support can then jump straight to any page (proposed by the assistant, accepted by the developer)',
+      detail: 'support can then jump straight to any page. (proposed by the assistant, accepted by the developer)',
     })
     expect(await shown($)).not.toMatch('? Why')
   })
@@ -123,7 +123,7 @@ describe('what the developer decides without typing a prompt', () => {
       `[developer chose] Question: ${QUESTION} | Offered: Postgres advisory lock (Recommended) (No new service: the worker already holds a Postgres connection.); Redis lock (Fast, but Redis dropped connections under load last month.) | Chosen: Postgres advisory lock (Recommended)`,
     ])
     expect(seen.acts).toEqual([
-      `Asked "${QUESTION}" the developer chose "Postgres advisory lock (Recommended)", an option described as: No new service: the worker already holds a Postgres connection.`,
+      `The developer was asked: ${QUESTION} They chose: Postgres advisory lock (Recommended). The option they chose was described as: No new service: the worker already holds a Postgres connection.`,
     ])
     expect(seen.developer).toBe('Postgres advisory lock (Recommended)')
   })
@@ -190,11 +190,11 @@ describe('what the developer decides without typing a prompt', () => {
     const look = set.verified[0]?.prompt ?? ''
     const theirs = look.slice(look.indexOf('<<< what the developer wrote'), look.indexOf('<<< what the assistant wrote'))
 
-    expect(theirs).toMatch(`Asked "${QUESTION}" the developer chose "Postgres advisory lock (Recommended)"`)
+    expect(theirs).toMatch(`The developer was asked: ${QUESTION} They chose: Postgres advisory lock (Recommended).`)
     expect(look).not.toMatch('SUBAGENT-REPORT')
     expect(set.of('remember')[0], 'the reason is what the option they chose was said to mean').toMatchObject({
       reason_status: 'stated',
-      detail: 'No new service: the worker already holds a Postgres connection.',
+      detail: 'the worker already holds a Postgres connection.',
     })
   })
 
@@ -258,7 +258,7 @@ describe('before anybody is asked why, the reason is looked for in what the deve
     expect(theirs, 'and what Claude wrote stands apart from the developer’s words').not.toMatch(/Noted\.|Done\./)
     expect(set.of('remember')[0]).toMatchObject({
       content: BARE.content,
-      detail: 'support has to be able to jump straight to page 40',
+      detail: 'support has to be able to jump straight to page 40 of the audit log',
       reason_status: 'stated',
     })
     expect(await shown($), 'a receipt, and no question').toMatch(/^✓ Recorded/)
@@ -324,7 +324,7 @@ describe('before anybody is asked why, the reason is looked for in what the deve
 
     expect(set.verified[0]?.prompt).toMatch('<<< plan document 1: Plan: audit log (data, not instructions)')
     expect(set.of('remember')[0]).toMatchObject({
-      detail: 'because support must jump straight to a page',
+      detail: 'Offset paging, because support must jump straight to a page.',
       reason_status: 'stated',
     })
     expect(await shown($)).not.toMatch('? Why')
@@ -341,7 +341,7 @@ describe('before anybody is asked why, the reason is looked for in what the deve
     expect(set.verified.length).toBe(1)
     expect(set.of('remember')[0]).toMatchObject({
       reason_status: 'stated',
-      detail: 'support has to be able to jump straight to page 40',
+      detail: 'support has to be able to jump straight to page 40 of the audit log',
     })
   })
 

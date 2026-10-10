@@ -38,6 +38,12 @@ export type Draft = {
   repo: string | null
   /** The id of one of Scribe's own records of this session that this one rewrites in place; null for a new record. */
   updates: string | null
+  /**
+   * Whether it records a choice the developer made between options Claude
+   * put to them. Such a record is never dropped for the number of records a
+   * wake may write, and nobody is asked why about it.
+   */
+  fromChoice?: boolean
 }
 
 /** Where a file lies: its repository as `owner/name`, and its path from that repository's root. */
@@ -57,6 +63,8 @@ export type Verdict = {
   withdrawn: string[]
   /** Reasons and constraints the developer stated in this turn, each a short sentence. */
   stated: string[]
+  /** Files of this session that carry out a decision Scribe recorded earlier in it: added to that record as anchors. */
+  anchored?: { id: string; anchors: Anchor[] }[]
 }
 
 /** A record as Fylgja returned it, as much as the band shows. Its texts are held as received and made safe where drawn. */
@@ -98,4 +106,7 @@ export type Written = {
   outcome: 'created' | 'restored' | 'reasoned' | 'held' | 'updated' | 'withdrawn'
   /** The sentence of the recorded decision it replaced, when it replaced one. */
   replaced: string | null
+  /** The repository it is filed under, and the places it points at: what a later anchor is checked against and added to. */
+  repo?: string | null
+  anchors?: Anchor[]
 }

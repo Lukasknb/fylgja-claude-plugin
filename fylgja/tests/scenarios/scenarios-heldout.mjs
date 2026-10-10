@@ -244,6 +244,10 @@ export const SCENARIOS = [
       question: 'reason',
       tells: [0, 0],
       answer: 'no_strong_reason',
+      // As right: Claude said what the trials showed (the flag fixed every failing case where two other attempts
+      // did not) and the developer kept the flag on that. That is a reason the assistant gave and the developer
+      // accepted, so the decision may be recorded with it and nobody asked.
+      or: { status: 'stated', question: 'none', answer: undefined },
     },
     turns: [
       {

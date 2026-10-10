@@ -181,7 +181,18 @@ function call(name, args) {
       }
     }
 
+    // By files: the records anchored to them. By words alone: the records that share words with the question, as
+    // a lexical lookup does (two words of four letters or more, here).
+    const wanted = new Set(
+      String(args.query ?? '')
+        .toLowerCase()
+        .match(/[a-z0-9_]{4,}/g) ?? [],
+    )
+    const shares = record =>
+      (`${record.content} ${record.detail ?? ''}`.toLowerCase().match(/[a-z0-9_]{4,}/g) ?? []).filter(word => wanted.has(word))
+        .length >= 2
     const facts = records
+      .filter(record => Array.isArray(args.paths) || shares(record))
       .map(record => asFact(record, Array.isArray(args.paths) ? args.paths : undefined))
       .filter(fact => fact.matched_paths === null || fact.matched_paths.length > 0)
 
@@ -360,15 +371,29 @@ function call(name, args) {
     }
 
     const gone = args.remove_anchors ?? []
-    const anchors = record.anchors.filter(
+    const left = record.anchors.filter(
       anchor => !gone.some(one => one.path === anchor.path && (one.symbol ?? null) === (anchor.symbol ?? null)),
     )
+    // Path anchors sent with a fix replace the ones the author added; a teammate's stay.
+    const fault = args.anchors === undefined ? undefined : anchorsFault(args.anchors)
+
+    if (fault !== undefined) {
+      return failed(fault)
+    }
+
+    const anchors =
+      args.anchors === undefined
+        ? left
+        : [
+            ...args.anchors.map(anchor => ({ path: anchor.path, symbol: anchor.symbol ?? null, added_by: 'author' })),
+            ...left.filter(anchor => anchor.added_by !== 'author'),
+          ]
     const isChanged =
       content !== record.content ||
       detail !== record.detail ||
       args.reason_status !== undefined ||
       args.alternatives !== undefined ||
-      anchors.length !== record.anchors.length
+      JSON.stringify(anchors) !== JSON.stringify(record.anchors)
 
     Object.assign(record, {
       content,

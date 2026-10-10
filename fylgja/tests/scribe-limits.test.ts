@@ -541,8 +541,8 @@ describe('a single press writes nothing', () => {
     expect(Band.confirmed(band, 'remove:1', 0)).toBe(false)
     expect(band.armed?.key).toBe(`remove:${idOf(2)}`)
 
-    // Four more come in; the list holds four, so the armed record moves up a place.
-    Band.receive(band, [written(3), written(4), written(5)])
+    // More come in than the list holds, so the armed record moves up a place.
+    Band.receive(band, [written(3), written(4), written(5), written(6), written(7), written(8)])
     Band.settle(band)
 
     expect(Band.confirmed(band, 'remove:1', 100), 'the same place is another record now').toBe(false)

@@ -162,7 +162,7 @@ describe('the shape the server takes is in the instruction', () => {
       'holds one of the words "is", "are", "must", "stays", "becomes"',
     )
     expect(SYSTEM, 'a decision is said in whatever words say what holds, by the server’s own rule').toMatch(DECISION_RULE)
-    expect(SYSTEM).toMatch(`opens with one of ${ACCOUNT_OPENERS.slice(0, 4).join(', ')}`)
+    expect(SYSTEM, 'and names what the server refuses as an account').toMatch(ACCOUNT_OPENERS.join(', '))
     expect(SYSTEM).toMatch('do not put "Always" before it')
     expect(SYSTEM).toMatch('"open PR"')
   })

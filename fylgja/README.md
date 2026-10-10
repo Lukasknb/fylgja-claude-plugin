@@ -107,6 +107,14 @@ at a time.
   about the repository the session has been working in: the one most of
   its files so far lie in, or the one it sits in. Only a session that
   sits in no repository and has touched no file of one records nothing.
+  A decision is often recorded before the code that carries it out
+  exists, and then points at no file. When a later turn of the same
+  session touches the files that implement it, Scribe adds them to its
+  own record as places, without a receipt (the opened list shows them).
+  A choice you made between options Claude put to you is recorded with
+  the options you turned down as its alternatives; such records do not
+  count against the three a turn may write, up to four more, and you are
+  never asked why about one.
   When a later turn of the same session changes a decision Scribe already
   recorded, Scribe rewrites its own record (`✓ Updated · …`) or takes it
   back (`✓ Withdrawn · …`) without asking: it is its own record, minutes
@@ -150,9 +158,12 @@ at a time.
   own words, quoted, or "absent". A quote is taken only if it stands in
   what you wrote, or in a plan, word for word; then the decision is
   recorded with that reason and you are not asked. Only on "absent" is
-  the question put. A quote that only says the decision again is not a
-  reason and is not taken (seven tenths of its words being the
-  decision's own words is the line). The same request is shown what
+  the question put. A quote is completed to the whole sentences it
+  touches, so that a reason never begins or ends mid-sentence. A quote
+  that only says the decision again is not a reason and is not taken:
+  that is one with seven tenths of its words being the decision's own,
+  or holding half of the decision's words, or with nothing left once the
+  words of the question and of the options offered are set aside. The same request is shown what
   Claude wrote in the turn and the one before: when Claude gave the
   reason for something it proposed and you accepted it without
   objecting, that is recorded as the reason, marked "proposed by the
@@ -160,7 +171,13 @@ at a time.
   decision that concerns code in hand or ruled something out; a decision
   with neither is recorded and nobody is asked. When the reason turns up
   in a later turn, the question goes and the record is given the reason.
-- **It asks before anything is replaced.** When a new decision goes against
+- **It asks before anything is replaced.** Before a new decision is
+  written, Fylgja is asked once what it already holds on the decision's
+  subject (by the decision's own words, not only by the files in hand),
+  and when something comes back one small request says whether the new
+  decision goes against it, refines it or has nothing to do with it. So a
+  decision you make in conversation, before any file is touched, is still
+  held against what was recorded. When a new decision goes against
   a recorded one, the new one is not written until you have said which it
   is: `1 Yes, it replaces it  2 No, tell Claude  3 Different case  0 Skip`.
   Only the first key makes it the replacement, and the receipt then names
@@ -363,6 +380,11 @@ cost line for these requests, so here is what they are.
   which about 2,200 are read from the prompt cache, and
   15 to 320 output tokens, in one to four seconds (measured over the
   scripted sessions in `fylgja/tests/scenarios/RESULTS.md`).
+- **Beside the look itself,** a turn may spend up to three small
+  requests out of the same four: one to look for a decision's reason in
+  what you wrote, one to say whether a new decision goes against a
+  recorded one (only when Fylgja holds something on its subject), and
+  one to put right a record the server refused.
 - **At most, per turn:** 4 requests of at most about 31,000 input tokens
   each (123,000 characters: the instruction, up to 24,000 characters of
   plan text, 8 earlier turns in brief, 14,000 characters of this turn, 10

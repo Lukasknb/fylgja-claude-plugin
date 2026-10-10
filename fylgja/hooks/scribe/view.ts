@@ -270,6 +270,18 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
         parts: [
           ...(record.outcome === 'created' ? [] : [{ text: HEADS[record.outcome], tone: 'dim' } as const]),
           ...written(record),
+          // Where it points, places added later included.
+          ...((record.anchors ?? []).length === 0
+            ? []
+            : [
+                {
+                  text: ` · ${(record.anchors ?? [])
+                    .slice(0, 4)
+                    .map(anchor => drawn(anchor.path, MAX_OPTION))
+                    .join(', ')}`,
+                  tone: 'dim',
+                } as const,
+              ]),
         ],
         keys:
           record.outcome === 'held' || record.outcome === 'withdrawn'

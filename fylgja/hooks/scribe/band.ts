@@ -117,7 +117,7 @@ export const MAX_KNOWN = 500
 const MAX_SKIP = 16
 
 /** A receipt lists no more records than this. */
-const MAX_RECEIPT = 4
+const MAX_RECEIPT = 7
 
 export function freshKept(): Kept {
   return { known: [], typedPast: 0, skip: 0, hasShown: false }

@@ -92,6 +92,10 @@ export type Seen = {
   home?: string | null
   /** The ids of the records Scribe itself wrote in this session: the only ones it may rewrite or take back. */
   own?: ReadonlySet<string>
+  /** The repository each of those is filed under: a later anchor must lie in it. */
+  ownRepos?: ReadonlyMap<string, string>
+  /** How many questions Claude put to the developer they answered in this turn. */
+  choices?: number
 }
 
 /**
@@ -261,6 +265,8 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
     repo,
     // Only a record Scribe itself wrote in this session is rewritten in place.
     updates: updates !== null && seen.own?.has(updates) === true ? updates : null,
+    // Only where the developer did answer a question in this turn.
+    fromChoice: value.from_choice === true && (seen.choices ?? 0) > 0,
   }
 }
 
@@ -307,7 +313,31 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     return { records: [], question: null, tells: [], withdrawn: [], stated: [] }
   }
 
-  const given = (Array.isArray(value.records) ? value.records : []).slice(0, MAX_RECORDS).map(record => draftOf(record, seen))
+  // A wake writes no more than `MAX_RECORDS` records, and beside them one for
+  // each question the developer answered in the turn, up to `MAX_CHOICE_RECORDS`:
+  // a choice they made is never what the limit drops.
+  const room = { other: MAX_RECORDS, choice: Math.min(MAX_CHOICE_RECORDS, seen.choices ?? 0) }
+  const given = (Array.isArray(value.records) ? value.records : []).slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS).map(record => {
+    const draft = draftOf(record, seen)
+
+    if (draft === undefined) {
+      return undefined
+    }
+
+    if (draft.fromChoice === true && room.choice > 0) {
+      room.choice -= 1
+
+      return draft
+    }
+
+    if (room.other > 0) {
+      room.other -= 1
+
+      return { ...draft, fromChoice: false }
+    }
+
+    return undefined
+  })
   const records = given.filter((draft): draft is Draft => draft !== undefined)
   const tells: string[] = []
 
@@ -364,8 +394,34 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     }
   }
 
-  return { records, question, tells, withdrawn, stated: sentences(value.stated, MAX_STATED, MAX_STATED_CHARS) }
+  // Files that carry out one of Scribe's own earlier decisions: the record
+  // must be its own, the files among those the session touched, and in the
+  // repository the record is filed under.
+  const anchored: { id: string; anchors: Anchor[] }[] = []
+
+  for (const entry of Array.isArray(value.anchor) ? value.anchor.slice(0, MAX_LATE) : []) {
+    const id = isRecord(entry) ? idOf(entry.id) : null
+    const home = id === null ? undefined : seen.ownRepos?.get(id)
+
+    if (id === null || home === undefined || seen.places === undefined || !isRecord(entry)) {
+      continue
+    }
+
+    const placed = inOnePlace(anchorsOf(entry.paths, MAX_ANCHORS, seen.paths), seen.places)
+
+    if (placed.repo === home && placed.anchors.length > 0) {
+      anchored.push({ id, anchors: placed.anchors })
+    }
+  }
+
+  return { records, question, tells, withdrawn, stated: sentences(value.stated, MAX_STATED, MAX_STATED_CHARS), anchored }
 }
+
+/** Beside the records of a wake, no more records of the developer's own choices than this. */
+export const MAX_CHOICE_RECORDS = 4
+
+/** No more of Scribe's own records are given later anchors by one verdict than this. */
+const MAX_LATE = 3
 
 /** No more of Scribe's own records are taken back by one verdict than this. */
 const MAX_WITHDRAWN = 2

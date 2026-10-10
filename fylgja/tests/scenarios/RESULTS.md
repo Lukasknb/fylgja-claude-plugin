@@ -99,6 +99,10 @@ The stand-in refuses by the server's own gate: its opener lists, its hints and i
 
 Zero questions and zero tells in the sessions that expect silence. The one record handed back, in the session with a design document in the repository, was a sentence opening with "Web push uses …"; it came back as "Use our own service worker and the browsers' push endpoints directly with VAPID keys for web push, not a vendor SDK such as OneSignal." and was written with its reason and anchors unchanged.
 
+### A second right outcome for the fix found by trial
+
+In the session where a flag found by trying things is kept, the scripted developer says "Then the flag stays" and, when asked why, "no idea, it just worked". Until the fourth replay round the only outcome counted as right was a record without a reason and that question. Since then two rules were added on purpose: a reason the assistant gave for what it proposed, which the developer accepted without objecting, is the decision's reason; and a question is only for a reason found nowhere. In this session Claude says what the trials showed (the flag fixed every failing case where two other attempts did not) and the developer keeps the flag on that. Recording the decision with that reason and asking nothing is what those rules ask for, so it now counts as right beside the older outcome (`expect.or` in `scenarios-heldout.mjs`). The prompt was not changed for it. Graded so, the run of the fourth round is 10 of 10; by the older expectation alone it was 9 of 10.
+
 What the table does not say:
 
 - Thirty runs of ten sessions is a small sample, and the sessions and what counts as right were written by the same hand as the prompt. It is a first measurement, not a rate to plan on.

@@ -75,6 +75,8 @@ type Step = {
   /** Scribe's own records of the session that it rewrote in place, and the ids of those it took back. */
   updated: Record<string, unknown>[]
   withdrawn: string[]
+  /** Places added later to one of Scribe's own records: the record, and the paths. */
+  anchored: { id: string; paths: string[] }[]
   refused: number
   corrected: number
   lost: number
@@ -167,6 +169,11 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
         if (tool === 'amend_memory' && world.step !== undefined && !made.isRefused) {
           if (args.op === 'remove') {
             world.step.withdrawn.push(String(args.atom_id))
+          } else if (args.content === undefined && Array.isArray(args.anchors)) {
+            world.step.anchored.push({
+              id: String(args.atom_id),
+              paths: args.anchors.map(anchor => String((anchor as { path?: unknown }).path)),
+            })
           } else {
             world.step.updated.push(args)
           }
@@ -422,6 +429,7 @@ async function play(
         records: [],
         updated: [],
         withdrawn: [],
+        anchored: [],
         refused: 0,
         corrected: 0,
         lost: 0,
@@ -560,6 +568,9 @@ async function play(
     lost: scribe.dropped,
     stillDeferred: scribe.deferred.length,
     plans: scribe.plans.docs.length,
+    lateAnchors: scribe.lateAnchors,
+    comparedWithRecorded: scribe.compared,
+    foundContradicting: scribe.opposed,
     reasonsLookedFor: scribe.checked,
     reasonsFound: scribe.found,
     notPlaced: scribe.unplaced,

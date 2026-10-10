@@ -20,8 +20,8 @@ import { filesOf, isPrompt, observe, plain } from './delta'
 import type { Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
-import { codeOf, PASSING, teaches } from './gate'
-import { correct, MAX_STEPS, reasonIn, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
+import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
+import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
 import type { LoopHost } from './loop'
 import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
@@ -183,6 +183,13 @@ export type Scribe = {
   proposals: string[]
   /** What it wrote in the turn before, kept until the next wake. */
   earlier: string[]
+  /** The words of the questions the developer was asked and of the options offered: never a reason for anything. */
+  offered: string[]
+  /** How many places were added later to records written before the code they concern existed. */
+  lateAnchors: number
+  /** How many times a new decision was compared with records on its subject, and how often it went against one. */
+  compared: number
+  opposed: number
   /** How many times a decision without a reason was checked against what the developer wrote, and how often a reason was there. */
   checked: number
   found: number
@@ -248,6 +255,12 @@ export const MAX_STATED = 20
 /** No more of what the developer wrote is kept for a session than this, in characters; the oldest prompts go first. */
 export const MAX_SPOKEN_CHARS = 30_000
 
+/** No more questions and option names are kept for telling a reason from an echo of the question. */
+const MAX_OFFERED = 80
+
+/** No more records on a decision's subject are compared with it than this. */
+const MAX_COMPARED = 5
+
 /** No more of the assistant's replies are handed to the look for a reason than this, and no more of each. */
 const MAX_PROPOSALS = 6
 const MAX_PROPOSAL_CHARS = 2500
@@ -300,6 +313,10 @@ export function create(options: Options): Scribe {
     hasActed: false,
     proposals: [],
     earlier: [],
+    offered: [],
+    lateAnchors: 0,
+    compared: 0,
+    opposed: 0,
     checked: 0,
     found: 0,
     anchored: new Map(),
@@ -352,6 +369,7 @@ export function startOver(scribe: Scribe): void {
   scribe.unspoken = 0
   scribe.acted.clear()
   scribe.hasActed = false
+  scribe.offered = []
   scribe.proposals = []
   scribe.earlier = []
   scribe.anchored.clear()
@@ -851,6 +869,8 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
     reasonStatus: draft.reasonStatus,
     outcome: isTheirs || (outcome !== 'created' && outcome !== 'restored') ? 'held' : outcome,
     replaced: prior !== undefined && answer.supersede === 'applied' ? prior.content : null,
+    repo: draft.repo,
+    anchors: draft.anchors,
   }
 
   if (written.outcome === 'held') {
@@ -941,7 +961,7 @@ function settle(host: ScribeHost, scribe: Scribe): void {
 }
 
 /** What is left of a wake for putting refused records right: model calls, time, and what a record is checked against. */
-type Budget = { steps: number; until: number; seen: Seen; isLastTry?: true }
+type Budget = { steps: number; until: number; seen: Seen; isLastTry?: true; lookups?: number }
 
 /**
  * What a write outside a wake may spend on putting a refused record right:
@@ -1174,6 +1194,7 @@ async function withReason(
     unspoken: scribe.unspoken,
     plans: scribe.plans.docs,
     proposals: scribe.proposals,
+    asked: scribe.offered,
     timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
   })
 
@@ -1184,6 +1205,99 @@ async function withReason(
   scribe.found += 1
 
   return { draft: { ...draft, detail: reason, reasonStatus: 'stated' }, isAbsent: false }
+}
+
+/**
+ * The recorded decision a new one goes against, when there is one. Fylgja is
+ * asked once what it holds on the decision's subject (its lookup by words,
+ * in the repository the decision is about), and one model call of the
+ * wake's own says how the decision stands to what came back. Records of
+ * Scribe's own from this session are left out: those it rewrites itself.
+ * Undefined when nothing is held, when nothing is contradicted, and when the
+ * wake has no lookup or no call left.
+ */
+async function opposedBy(
+  host: ScribeHost,
+  scribe: Scribe,
+  draft: Draft,
+  facts: ReadonlyMap<string, Fact>,
+  budget: Budget,
+): Promise<Fact | undefined> {
+  if (draft.kind !== 'decision' || draft.repo === null || (budget.lookups ?? 0) <= 0) {
+    return undefined
+  }
+
+  budget.lookups = (budget.lookups ?? 0) - 1
+
+  const held = factsOf(
+    await call(host, scribe, 'recall', { repo: draft.repo, query: draft.content.slice(0, 300) }).catch(() => undefined),
+  )
+    .filter(fact => fact.kind === 'decision' && !scribe.written.some(own => own.id === fact.id))
+    .slice(0, MAX_COMPARED)
+  const left = budget.until - (await host.now())
+
+  if (held.length === 0 || budget.steps <= 0 || left <= 0) {
+    return undefined
+  }
+
+  budget.steps -= 1
+  scribe.compared += 1
+
+  const found = await relationOf(host, {
+    model: scribe.model,
+    decision: draft.content,
+    facts: held,
+    timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
+  })
+  const prior = found?.relation === 'contradicts' ? held.find(fact => fact.id === found.id) : undefined
+
+  if (prior !== undefined) {
+    scribe.opposed += 1
+    // Held with the wake's own records, so that the question and its keys find it.
+    ;(facts as Map<string, Fact>).set(prior.id, prior)
+  }
+
+  return prior
+}
+
+/**
+ * Adds places to one of Scribe's own records of this session: files a later
+ * turn touched that carry out a decision recorded before they existed. The
+ * record's own anchors are kept and the new ones added, up to what the
+ * server takes. Nothing is shown for it: the record says the same.
+ */
+async function anchorMore(
+  host: ScribeHost,
+  scribe: Scribe,
+  id: string,
+  anchors: readonly Draft['anchors'][number][],
+): Promise<void> {
+  const own = scribe.written.find(one => one.id === id)
+
+  if (own === undefined || own.outcome === 'held') {
+    return
+  }
+
+  const had = own.anchors ?? []
+  const fresh = anchors.filter(anchor => !had.some(one => one.path === anchor.path && one.symbol === anchor.symbol))
+  const all = [...had, ...fresh].slice(0, MAX_ANCHORS)
+
+  if (all.length === had.length) {
+    return
+  }
+
+  let outcome: unknown
+
+  try {
+    outcome = (await tried(host, scribe, 'amend_memory', { atom_id: id, op: 'fix', anchors: all })).answer?.outcome
+  } catch {
+    outcome = undefined
+  }
+
+  if (outcome === 'fixed' || outcome === 'unchanged') {
+    scribe.lateAnchors += all.length - had.length
+    scribe.written = scribe.written.map(one => (one.id === id ? { ...one, anchors: all } : one))
+  }
 }
 
 /** Acts on a wake's verdict: writes its records, and puts its question and its tells in line. */
@@ -1202,6 +1316,10 @@ async function apply(
     if (!scribe.stated.includes(said)) {
       scribe.stated = [...scribe.stated, said].slice(-MAX_STATED)
     }
+  }
+
+  for (const late of verdict.anchored ?? []) {
+    await anchorMore(host, scribe, late.id, late.anchors)
   }
 
   for (const id of verdict.withdrawn) {
@@ -1235,6 +1353,27 @@ async function apply(
       scribe.asked = [...scribe.asked, draft.content].slice(-MAX_LISTED)
     }
 
+    // A new decision is held against what is already recorded on its
+    // subject, not only on its files: one that goes against a record is the
+    // developer's to settle, as when the wake itself saw the record.
+    const against = prior === undefined ? await opposedBy(host, scribe, checked.draft, facts, budget) : undefined
+
+    if (against !== undefined) {
+      const ask: Band.Question = {
+        kind: 'question',
+        form: 'reversal',
+        draft: checked.draft,
+        prior: against,
+        options: [],
+        isTouched: false,
+      }
+
+      if (Band.offerQuestion(band, ask, draft.content)) {
+        scribe.asked = [...scribe.asked, draft.content].slice(-MAX_LISTED)
+        continue
+      }
+    }
+
     // A decision that may replace a recorded one is written once the
     // developer has said which it is. When they cannot be asked, it is
     // written beside the old one: nothing is ever replaced without their key.
@@ -1266,7 +1405,10 @@ async function apply(
     // about a decision a later reader of the code would trip over: one that
     // concerns code in hand or ruled something out. The bar for asking is
     // higher than the bar for recording.
-    const isWorthAsking = checked.draft.anchors.length > 0 || checked.draft.alternatives.length > 0
+    // And never about a choice the developer made themselves between options
+    // put to them: what they chose and what they turned down is on record.
+    const isWorthAsking =
+      (checked.draft.anchors.length > 0 || checked.draft.alternatives.length > 0) && checked.draft.fromChoice !== true
 
     if (
       isAskedOf &&
@@ -1608,6 +1750,8 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     }
   }
 
+  scribe.offered = [...new Set([...scribe.offered, ...seen.offered])].slice(-MAX_OFFERED)
+
   const isWorthAsking = seen.lines.length > 0 && (seen.hasChange || seen.words >= QUIET_TURN_CHARS || scribe.hasActed)
 
   // What the assistant said in this turn and the one before it, cut to a length.
@@ -1641,6 +1785,12 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
           ) ??
           who.repo,
         own: new Set(scribe.written.filter(one => one.outcome !== 'held').map(one => one.id)),
+        ownRepos: new Map(
+          scribe.written.flatMap(one =>
+            one.outcome !== 'held' && typeof one.repo === 'string' ? [[one.id, one.repo] as const] : [],
+          ),
+        ),
+        choices: seen.choices,
       }
       const woken = await wake(host, {
         model: scribe.model,
@@ -1679,6 +1829,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         scribe.wakes += 1
         await apply(host, scribe, who, woken.verdict, woken.facts, {
           steps: MAX_STEPS - woken.steps,
+          lookups: MAX_LOOKUPS - woken.lookups,
           until: woken.startedAt + WAKE_DEADLINE_MS,
           seen: { ...judged, facts: woken.facts },
         })

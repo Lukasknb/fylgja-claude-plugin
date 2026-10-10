@@ -50,6 +50,10 @@ export type Seen = {
    * call they turned down. Their own words, to be kept with their prompts.
    */
   acts: string[]
+  /** How many questions Claude put to them they answered in these rows. */
+  choices: number
+  /** The words of those questions and of the options offered: not theirs, and no reason for anything. */
+  offered: string[]
   /** Whether a file was written or changed, or a commit made. */
   hasChange: boolean
   /** How many characters the developer and Claude wrote between them. */
@@ -362,6 +366,8 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
   const plans: PlanSighting[] = []
   const developer: string[] = []
   const acts: string[] = []
+  const optionWords: string[] = []
+  let answered = 0
   let hasChange = false
   let words = 0
 
@@ -404,11 +410,13 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
           developer.push(choice.chosen)
           // Kept with their prompts: the question, their answer, and what the chosen option was said to mean.
           acts.push(
-            `Asked "${choice.question}" the developer chose "${choice.chosen}"${choice.offered
+            `The developer was asked: ${choice.question} They chose: ${choice.chosen}.${choice.offered
               .filter(option => choice.chosen.includes(option.label) && option.description !== '')
-              .map(option => `, an option described as: ${option.description}`)
+              .map(option => ` The option they chose was described as: ${option.description}`)
               .join('')}`,
           )
+          answered += 1
+          optionWords.push(choice.question, ...choice.offered.map(option => option.label))
           words += choice.question.length + choice.chosen.length
         }
       } else if (feedback !== undefined && feedback !== '') {
@@ -483,6 +491,8 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
     touched: [...touched],
     files: [...files],
     acts,
+    choices: answered,
+    offered: optionWords,
     commits,
     plans,
     developer: developer.join('\n'),
