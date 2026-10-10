@@ -22,6 +22,7 @@ import {
   step,
   stepping,
   turn,
+  use,
   typing,
   verdict,
 } from './scribe-fixtures'
@@ -287,11 +288,20 @@ describe('Scribe does nothing at all', () => {
     expect(set.statuses).toEqual(['sign in with /mcp'])
   })
 
-  test('outside a repository', async ($, on) => {
-    const set = stage(on, { repo: null })
+  test('in a folder that is no repository, while the session touches no file of one', async ($, on) => {
+    const set = stage(on, { repo: null, cwdNow: () => '/work' })
 
-    await $.session.start(START)
-    await idle($, set)
+    await $.session.start({ ...START, cwd: '/work' })
+    await turn(
+      $,
+      set,
+      dev('make the mailer retry, here in the loose folder'),
+      claude('Retrying three times now.', use('Edit', { file_path: '/work/loose/send.ts', old_string: 'a', new_string: 'b' })),
+    )
+
+    expect(set.asked, 'no model call').toEqual([])
+    expect(set.calls, 'no call to Fylgja').toEqual([])
+    expect(await shown($)).toBe('engine: AbovePrompt')
   })
 
   test('in a headless run', async ($, on) => {

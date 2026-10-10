@@ -97,11 +97,18 @@ lines.push(
   '',
 )
 
-if (!read.isInRepository) {
+if (!read.isInRepository && read.trees > 0) {
+  lines.push(
+    `The session started in a folder that is no repository; its files lie in ${read.trees} working trees this machine still has, and what Scribe records is filed under those.`,
+    '',
+  )
+}
+
+if (!read.isInRepository && !(read.trees > 0)) {
   lines.push(
     read.isDirectoryGone
       ? 'The directory the session ran in is gone, so its repository cannot be told. Pass `--root <dir>` and `--remote <url>` to say which it was. Nothing was replayed.'
-      : 'The session did not run in a repository. Scribe is off there: nothing was replayed.',
+      : 'The session did not run in a repository and touched no file of one that this machine still has: nothing was replayed.',
     '',
   )
 }

@@ -206,9 +206,11 @@ Staying out of the way is the point, and the limits are in the code:
   offer, then two, then four, up to sixteen. Any key on an offer ends that.
 
 Scribe runs only where you are at the prompt of a terminal or desktop
-session inside a git repository, signed in to Fylgja. In a `claude -p` run,
-outside a repository or signed out it does nothing at all: no model call,
-no call to Fylgja.
+session, signed in to Fylgja. In a `claude -p` run or signed out it does
+nothing at all: no model call, no call to Fylgja. Started in a folder
+that is no git repository (one that holds several checkouts, say) it
+does nothing until the session reads or changes a file that lies in a
+repository, and then records for that repository.
 
 Before it asks a model anything in a session, one call of its own has to
 get through to Fylgja. That first call is waited for up to eight seconds;

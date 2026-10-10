@@ -41,7 +41,7 @@ git init -q . && git remote add origin git@github.com:probe/live.git
 printf 'export const RETRIES = 3\n' > src/app.ts
 git add -A && git -c user.name=probe -c user.email=probe@example.invalid commit -qm init
 timeout 240 claude -p "Read src/app.ts, then change RETRIES to 5 in it because the upstream API now needs five tries to settle. This relates to {{fylgja:note Retry count|$id}}. Answer in one line." \
-  --model sonnet --plugin-dir "$out/plugin" --permission-mode acceptEdits --setting-sources project,local \
+  --model sonnet --plugin-dir "$out/plugin" --permission-mode acceptEdits --setting-sources project,local --no-session-persistence \
   --output-format json --debug-file "$out/debug.log" < /dev/null > "$out/out.json" 2> "$out/err.txt"
 echo "exit=$?"
 echo "calls that reached the stand-in, in order:"

@@ -36,7 +36,7 @@ for model in $models; do
     result="$out/results/$model-$run.json"
     [ -s "$result" ] && [ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$result')).length)")" = "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$out/scenarios.json')).length)")" ] && continue
     timeout "$limit" claude -p "/scribe-scenarios $model $run $out/scenarios.json $result" \
-      --plugin-dir "$copy" --permission-mode default --setting-sources project,local \
+      --plugin-dir "$copy" --permission-mode default --setting-sources project,local --no-session-persistence \
       --output-format json --debug-file "$out/$model-$run.debug.log" > "$out/$model-$run.out.json" 2> "$out/$model-$run.err.txt"
     echo "$model run $run: exit=$?"
   done

@@ -145,6 +145,22 @@ describe('a record is about the repository its files lie in', () => {
     expect(set.of('remember')[0]).toMatchObject({ repo: REPO, anchors: [{ path: 'src/a.ts' }] })
   })
 
+  test('a session started in a folder that is no repository follows the work into the repository its files lie in', async ($, on) => {
+    const set = stage(on, {
+      repo: null,
+      cwdNow: () => '/work',
+      files: { [`${ROOT}/.git/config`]: origin('acme/web'), ...SIBLING },
+      replies: [verdict({ records: [decision({ anchors: [{ path: 'other/lib/y.ts' }] })] })],
+    })
+
+    await $.session.start({ ...START, cwd: '/work' })
+    await turn($, set, dev('fix the other service from up here'), edits('/work/other/lib/y.ts'))
+
+    expect(set.asked[0]?.prompt).toMatch("The session's repository: none")
+    expect(set.of('remember')[0]).toMatchObject({ repo: 'acme/other', anchors: [{ path: 'lib/y.ts' }] })
+    expect(set.of('attach_commit'), 'a session with no repository of its own attaches no commit').toEqual([])
+  })
+
   test('which repository a folder lies in is asked of the machine once', async ($, on) => {
     const set = stage(on, { files: NESTED })
 

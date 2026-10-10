@@ -67,7 +67,8 @@ export type Wake = {
   fixed: readonly Block[]
   /** The wake in hand. */
   current: string
-  repo: string
+  /** The repository the model's own lookups by words are made in; null when the turn has none. */
+  repo: string | null
   /** The records the wake is shown from the start. */
   shown: readonly Fact[]
   seen: Omit<Seen, 'facts'>
@@ -90,13 +91,13 @@ export type Woken = {
 
 const NOTHING: Verdict = { records: [], question: null, tells: [], withdrawn: [], stated: [] }
 
-function argsOf(tool: string, args: Record<string, unknown>, repo: string): Record<string, unknown> | undefined {
+function argsOf(tool: string, args: Record<string, unknown>, repo: string | null): Record<string, unknown> | undefined {
   const query = typeof args.query === 'string' ? args.query.trim().slice(0, 300) : ''
   const id = typeof args.id === 'string' ? idsIn(args.id)[0] : undefined
 
   // The repository is the session's, whatever the model wrote.
   if (tool === 'recall') {
-    return query === '' ? undefined : { query, repo }
+    return query === '' || repo === null ? undefined : { query, repo }
   }
 
   if (tool === 'search') {

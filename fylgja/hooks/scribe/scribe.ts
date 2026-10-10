@@ -81,8 +81,12 @@ export type ScribeHost = LoopHost & {
   destination: () => string | undefined
 }
 
-/** The session as Fylgja is told of it. */
-type Identity = { sessionId: string; repo: string; root: string }
+/**
+ * The session as Fylgja is told of it. A session started in a folder that
+ * is no repository has none of its own: its root is that folder, and what
+ * it records is filed under the repositories its files lie in.
+ */
+type Identity = { sessionId: string; repo: string | null; root: string }
 
 /** A working tree on this machine: where it begins, and the repository it is a checkout of, as `owner/name`. */
 type Tree = { root: string; repo: string }
@@ -420,7 +424,7 @@ async function treeAt(host: ScribeHost, scribe: Scribe, who: Identity, folder: s
 
     if (await host.exists(`${at}/.git`).catch(() => false)) {
       // The session's own tree is named as the session names it.
-      const repo = at === who.root ? who.repo : repoNameOf(await remoteOf(host, at), at)
+      const repo = at === who.root && who.repo !== null ? who.repo : repoNameOf(await remoteOf(host, at), at)
 
       tree = repo === undefined ? null : { root: at, repo }
       break
@@ -478,7 +482,7 @@ async function placesOf(host: ScribeHost, scribe: Scribe, who: Identity, files: 
 const MAX_PLACED = 200
 
 /** The repository most of `places` lie in, the session's own winning a tie; null with none. */
-function homeOf(places: readonly Place[], own: string): string | null {
+function homeOf(places: readonly Place[], own: string | null): string | null {
   const counts = new Map<string, number>()
 
   for (const place of places) {
@@ -526,10 +530,13 @@ async function identityOf(host: ScribeHost, scribe: Scribe): Promise<Identity | 
 
   const repo = await host.repo()
   const cwd = await host.cwd()
-  const root = repo === null ? undefined : await treeOf(host, cwd)
-  const name = repo === null ? undefined : repoNameOf(repo.remote, repo.root)
+  // In a repository the session is that repository's. In a folder that is
+  // none (one that holds several checkouts, say) it has no repository of
+  // its own and still follows the work into the ones its files lie in.
+  const root = repo === null ? cwd.replace(/\/+$/, '') : await treeOf(host, cwd)
+  const name = repo === null ? null : repoNameOf(repo.remote, repo.root)
 
-  if (root === undefined || name === undefined) {
+  if (root === undefined || root === '' || name === undefined) {
     return null
   }
 
@@ -725,7 +732,7 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
   const args: Record<string, unknown> = {
     content: draft.content,
     // The repository the record is about, which need not be the one the session sits in.
-    repo: draft.repo ?? who.repo,
+    repo: draft.repo,
     kind: draft.kind,
     author: 'scribe',
     session_id: who.sessionId,
@@ -1186,7 +1193,8 @@ async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe =
   scribe.paths = [...waiting.filter(place => !byRepo.has(place.repo)), ...scribe.paths.slice(MAX_LOOKUP_PATHS)]
 
   if (byRepo.size === 0) {
-    if (!isProbe) {
+    // With no repository of its own and no file of one touched yet, there is nothing to ask about.
+    if (!isProbe || who.repo === null) {
       return
     }
 
@@ -1486,13 +1494,19 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
           ...(scribe.folded.block === undefined ? [] : [scribe.folded.block]),
           ...past,
         ],
-        current: wakeText(who.repo, seen.lines, seen.dropped, shown, {
-          recorded: scribe.recorded,
-          stated: scribe.stated,
-          asked: scribe.asked,
-          told: [...scribe.band.told].slice(-MAX_LISTED),
-        }),
-        repo: who.repo,
+        current: wakeText(
+          who.repo ?? 'none: the session started in a folder that is no repository',
+          seen.lines,
+          seen.dropped,
+          shown,
+          {
+            recorded: scribe.recorded,
+            stated: scribe.stated,
+            asked: scribe.asked,
+            told: [...scribe.band.told].slice(-MAX_LISTED),
+          },
+        ),
+        repo: judged.home ?? who.repo,
         shown,
         seen: judged,
       })
@@ -1535,7 +1549,10 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   for (const sha of seen.commits) {
     if (!scribe.commits.has(sha)) {
       scribe.commits.add(sha)
-      await call(host, scribe, 'attach_commit', { repo: who.repo, sha, session_id: who.sessionId }).catch(() => undefined)
+      // A commit at the session's own root is its repository's; a session with none attaches none.
+      if (who.repo !== null) {
+        await call(host, scribe, 'attach_commit', { repo: who.repo, sha, session_id: who.sessionId }).catch(() => undefined)
+      }
     }
   }
 

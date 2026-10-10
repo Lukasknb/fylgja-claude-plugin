@@ -47,9 +47,10 @@ node "$here/replay-read.mjs" "$transcript" "$out" ${seed:+--seed "$seed"} ${root
 rm -f "$out"/pass-*.json
 number() { node -e "console.log(JSON.parse(require('fs').readFileSync('$out/read.json'))['$1'])"; }
 
-if [ "$(number isInRepository)" != "true" ]; then
+# A session in a folder that is no repository still records for the repositories its files lie in.
+if [ "$(number isInRepository)" != "true" ] && [ "$(number trees)" = "0" ]; then
   node "$here/replay-report.mjs" "$out" "$name"
-  echo "Scribe is off outside a repository: nothing was replayed. Report: $out/$name.md"
+  echo "The session touched no file of any repository this machine still has: nothing was replayed. Report: $out/$name.md"
   exit 0
 fi
 
