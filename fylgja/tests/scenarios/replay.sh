@@ -3,7 +3,10 @@
 # reports what Scribe would have done.
 #
 #   replay.sh <transcript.jsonl> --out <dir> [--seed <records.json>] [--policy none|ignore|answer|all]
-#             [--max-wakes N] [--max-calls N] [--dry] [--root <dir>] [--remote <url>]
+#             [--max-wakes N] [--max-calls N] [--dry] [--root <dir>] [--remote <url>] [--tree <dir>=<url>]...
+#
+# --root and --remote say where the session ran when that folder is gone. --tree names another working tree the
+# session touched files in that is gone, with its origin's address, so that those files can be placed.
 #
 # The transcript is only read. Everything this writes goes into <dir>, which
 # must lie outside the repository: the session as read, a copy of the plugin,
@@ -22,7 +25,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 plugin="$(cd "$here/../.." && pwd)"
 transcript="${1:?usage: replay.sh <transcript.jsonl> --out <dir> [--seed <records.json>] [--policy P] [--max-wakes N] [--max-calls N] [--dry]}"
 shift
-out=""; seed=""; policy="none"; wakes=40; calls=120; mode="live"; root=""; remote=""
+out=""; seed=""; policy="none"; wakes=40; calls=120; mode="live"; root=""; remote=""; trees=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) out="$2"; shift 2 ;;
@@ -32,6 +35,7 @@ while [ $# -gt 0 ]; do
     --max-calls) calls="$2"; shift 2 ;;
     --root) root="$2"; shift 2 ;;
     --remote) remote="$2"; shift 2 ;;
+    --tree) trees+=(--tree "$2"); shift 2 ;;
     --dry) mode="dry"; shift ;;
     *) echo "unknown option: $1"; exit 2 ;;
   esac
@@ -43,7 +47,7 @@ mkdir -p "$out" && out="$(cd "$out" && pwd)"
 case "$policy" in none|ignore|answer) policies="$policy" ;; all) policies="none ignore answer" ;; *) echo "unknown policy: $policy"; exit 2 ;; esac
 name="$(basename "$transcript" .jsonl)"
 
-node "$here/replay-read.mjs" "$transcript" "$out" ${seed:+--seed "$seed"} ${root:+--root "$root"} ${remote:+--remote "$remote"} || exit 2
+node "$here/replay-read.mjs" "$transcript" "$out" ${seed:+--seed "$seed"} ${root:+--root "$root"} ${remote:+--remote "$remote"} "${trees[@]}" || exit 2
 rm -f "$out"/pass-*.json
 number() { node -e "console.log(JSON.parse(require('fs').readFileSync('$out/read.json'))['$1'])"; }
 

@@ -536,6 +536,9 @@ async function play(
     lost: scribe.dropped,
     stillDeferred: scribe.deferred.length,
     plans: scribe.plans.docs.length,
+    reasonsLookedFor: scribe.checked,
+    reasonsFound: scribe.found,
+    notPlaced: scribe.unplaced,
     hourlyCeilingHit: outcome.notes.some(note => note.includes('wakes in the last hour')) ? 1 : 0,
   }
 

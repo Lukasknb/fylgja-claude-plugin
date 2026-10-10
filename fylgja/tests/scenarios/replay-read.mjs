@@ -4,6 +4,10 @@
 // the stand-in server holds (`scenarios.json`). Prints numbers only.
 //
 //   node replay-read.mjs <transcript.jsonl> <out-dir> [--seed <records.json>] [--root <dir>] [--remote <url>]
+//                        [--tree <dir>=<url>]...
+//
+// `--tree` names a working tree that is no longer on this machine, with the address of its origin (or nothing after
+// the `=` for one that had none), so that the files a session touched there can be placed in their repository.
 //
 // The transcript is read, never written. What a session holds is somebody's
 // work: nothing of it is printed, and it goes only into <out-dir>.
@@ -127,7 +131,15 @@ for (const turn of recorded.turns) {
 // Which working tree each file the session touched lies in, as this machine has them today: a repository checked
 // out inside another, a worktree and a checkout beside the session's own are each their own. A folder that is gone
 // is in none.
-const trees = {}
+const trees = Object.fromEntries(
+  rest
+    .flatMap((word, at) => (word === '--tree' ? [rest[at + 1] ?? ''] : []))
+    .map(pair => {
+      const cut = pair.indexOf('=')
+
+      return cut === -1 ? [pair.replace(/\/+$/, ''), null] : [pair.slice(0, cut).replace(/\/+$/, ''), pair.slice(cut + 1) || null]
+    }),
+)
 const looked = new Set()
 
 for (const turn of recorded.turns) {
