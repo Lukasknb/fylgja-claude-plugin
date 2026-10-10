@@ -102,7 +102,10 @@ export function anchorsOf(value: unknown, max: number, known?: ReadonlySet<strin
     const given: unknown = typeof entry === 'string' ? entry : (entry as { path?: unknown } | null)?.path
     const path = typeof given === 'string' ? withoutLine(given.trim()) : ''
 
-    if (!isAnchorPath(path) || (known !== undefined && !known.has(path))) {
+    // With the session's files given, a path is taken as the session wrote
+    // it, in full where the file lies outside the session's own tree; where
+    // it lies is then looked up. Without them it must be a path of the tree.
+    if (known === undefined ? !isAnchorPath(path) : !known.has(path)) {
       continue
     }
 

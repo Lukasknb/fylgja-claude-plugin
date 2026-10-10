@@ -124,9 +124,34 @@ for (const turn of recorded.turns) {
   size += text.length
 }
 
+// Which working tree each file the session touched lies in, as this machine has them today: a repository checked
+// out inside another, a worktree and a checkout beside the session's own are each their own. A folder that is gone
+// is in none.
+const trees = {}
+const looked = new Set()
+
+for (const turn of recorded.turns) {
+  for (const row of turn.rows) {
+    for (const use of row.toolUses) {
+      const file = use.input.file_path ?? use.input.notebook_path
+      const folder = typeof file === 'string' && file.startsWith('/') ? dirname(file) : undefined
+
+      if (folder !== undefined && !looked.has(folder)) {
+        looked.add(folder)
+
+        const tree = existsSync(folder) ? repoOf(folder) : null
+
+        if (tree !== null) {
+          trees[tree.root] = tree.remote
+        }
+      }
+    }
+  }
+}
+
 writeFileSync(
   join(out, 'session.json'),
-  JSON.stringify({ sessionId: recorded.sessionId ?? 'replayed-session', repo, parts: parts.length }),
+  JSON.stringify({ sessionId: recorded.sessionId ?? 'replayed-session', repo, trees, parts: parts.length }),
 )
 parts.forEach((turns, at) => writeFileSync(join(out, `session-${at}.json`), JSON.stringify(turns)))
 writeFileSync(join(out, 'scenarios.json'), JSON.stringify([{ id: 'replay', repo: name ?? 'none/none', records }]))
@@ -152,6 +177,7 @@ writeFileSync(
     isWorktree: found?.isWorktree ?? false,
     isDirectoryGone: cwd !== null && root === undefined && !existsSync(cwd),
     seeded: records.length,
+    trees: Object.keys(trees).length,
   }),
 )
 console.log(

@@ -96,7 +96,19 @@ at a time.
   that cost time: written to Fylgja at once, with the reason, what was
   rejected, and the files it concerns. Not naming, formatting, routine edits
   or status. A record points only at files the session itself opened, at
-  most twelve of them. Fylgja takes a record only in a certain form (one
+  most twelve of them. It is about the repository those files lie in, not
+  the folder the session started in: a repository checked out inside
+  another, a worktree and a checkout next door are each their own (the
+  nearest `.git` above the file decides, and the name is read from that
+  repository's `origin`, or is its folder's name). A record's files all
+  lie in one repository, the one most of them are in; a record without
+  files goes to the repository most of the turn's files are in; and a
+  turn that touched no file of any repository records nothing.
+  When a later turn of the same session changes a decision Scribe already
+  recorded, Scribe rewrites its own record (`✓ Updated · …`) or takes it
+  back (`✓ Withdrawn · …`) without asking: it is its own record, minutes
+  old. A record from another session or another person is never touched
+  that way; that is what the question below is for. Fylgja takes a record only in a certain form (one
   sentence, worded as a rule) and refuses rather than trims, saying why.
   When it refuses one for its form, Scribe hands its model that record and
   the refusal once (the refusal names the word it did not take and shows
@@ -127,7 +139,11 @@ at a time.
   it just worked"): a later reader sees that nothing in particular decided
   it, which is not the same as nobody having asked. A typed answer counts
   as "no reason" only when that is all it says; "none of the others
-  support ESM" is a reason. Skip saves nothing.
+  support ESM" is a reason. Skip saves nothing. It asks only for a
+  reason that is nowhere in the session: not in the turn, not in an
+  earlier one, not in a plan, not among the things you stated. When the
+  reason turns up in a later turn, the question goes and the record is
+  given the reason.
 - **It asks before anything is replaced.** When a new decision goes against
   a recorded one, the new one is not written until you have said which it
   is: `1 Yes, it replaces it  2 No, tell Claude  3 Different case  0 Skip`.
@@ -406,8 +422,17 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   a second and a half at most.
 - **Sent to the model, by Scribe:** at the end of a turn, what happened in
   it: the prompts you sent, Claude's replies, and one line per tool call
-  (the tool, the file or the command, whether it worked, and the first 160
-  characters of what a shell command printed). No file's contents and no
+  (the tool, the file or the command, whether it worked; of what a shell
+  command printed, the first 160 characters when it failed or made a
+  commit, and nothing otherwise). Files read one after the other are one
+  line, and Claude's own bookkeeping calls (its to-do list, its waiting
+  on background tasks) are left out. Earlier turns of the session are
+  sent again in brief, as what you and Claude said, at most four of them;
+  a plan document nobody has read or changed for five looks is sent as
+  its headings only. Scribe also keeps, in memory, up to twenty short
+  sentences of reasons and constraints you stated in the session, and
+  sends them along, so that it does not ask for a reason you already
+  gave. No file's contents and no
   other tool output, with one exception: the text of a plan document as
   described above, at most three of them, 12,000 characters each and
   24,000 together. A background task's report, a skill's text and a
@@ -421,7 +446,9 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   Nothing is sent with the question.
 - **Sent to Fylgja, by Scribe:** the repository as `owner/name` and the
   paths of the files Claude touched, to look up what is recorded about
-  them; at most three lookups a turn that the model asks for, one of them a
+  them (each repository is asked about its own files; to name a
+  repository the plugin reads the `config` git keeps for it, on this
+  machine, and takes the owner and name from its `origin`); at most three lookups a turn that the model asks for, one of them a
   search; the records it writes, each with its sentence, reason,
   alternatives, file anchors, your session's id, and `author: scribe`; your
   answers to its questions; your Fix and Remove; and the sha of a commit

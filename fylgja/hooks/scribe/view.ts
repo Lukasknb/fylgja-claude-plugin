@@ -212,6 +212,8 @@ const HEADS = {
   restored: 'Restored · ',
   reasoned: 'Reason saved · ',
   held: 'Already recorded by someone else · ',
+  updated: 'Updated · ',
+  withdrawn: 'Withdrawn · ',
 } as const
 
 /** A key that acts only when pressed twice: what it says before, and once it is waiting for the second press. */
@@ -237,9 +239,9 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
           parts: [mark('✓'), { text: HEADS[only.outcome], tone: 'good' }, ...written(only)],
         },
       ],
-      // A record another member holds is theirs to change: there is nothing to fix or remove from here.
+      // A record another member holds is theirs to change, and one that was taken back is gone: there is nothing to fix or remove from here.
       keys: withAbout(band, [
-        ...(only.outcome === 'held'
+        ...(only.outcome === 'held' || only.outcome === 'withdrawn'
           ? []
           : [{ key: 'fix:0', hotkey: '1', label: 'Fix' }, twice(band, 'remove:0', '2', 'Remove', 'Press again to remove')]),
         { key: 'ok', hotkey: '0', label: 'OK' },
@@ -270,7 +272,7 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
           ...written(record),
         ],
         keys:
-          record.outcome === 'held'
+          record.outcome === 'held' || record.outcome === 'withdrawn'
             ? []
             : [
                 { key: `fix:${index}`, hotkey: String(index * 2 + 1), label: 'Fix' },

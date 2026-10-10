@@ -16,7 +16,7 @@
 import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
 import * as Band from './band'
-import { isPrompt, observe, pathsOf, plain } from './delta'
+import { filesOf, isPrompt, observe, plain } from './delta'
 import type { Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
@@ -26,9 +26,9 @@ import type { LoopHost } from './loop'
 import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
 import type { Block } from './prompt'
-import { repoNameOf } from './repo'
+import { relativeTo, repoNameOf } from './repo'
 import { CALL_TIMEOUT_MS, limited } from './time'
-import type { Draft, Fact, Verdict, Written } from './types'
+import type { Draft, Fact, Place, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason } from './verdict'
 import type { Seen } from './verdict'
 import { NO_STRONG_REASON, NOT_STATED, provenanceOf, viewOf } from './view'
@@ -68,6 +68,11 @@ export type ScribeHost = LoopHost & {
   cwd: () => Promise<string>
   /** Whether a file or folder is at `path` (`$.fs.stat`). */
   exists: (path: string) => Promise<boolean>
+  /**
+   * `$.fs.read`: a file's text; rejects when it cannot be read. Used for one
+   * thing: the files git keeps about a repository, to read its name.
+   */
+  read: (path: string) => Promise<string>
   /** `$.session.surfaces`. */
   surfaces: () => Promise<readonly string[]>
   /** `$.session.messages`: the main conversation's rows. */
@@ -78,6 +83,9 @@ export type ScribeHost = LoopHost & {
 
 /** The session as Fylgja is told of it. */
 type Identity = { sessionId: string; repo: string; root: string }
+
+/** A working tree on this machine: where it begins, and the repository it is a checkout of, as `owner/name`. */
+type Tree = { root: string; repo: string }
 
 /** Something to do on Fylgja that could not be done when it was asked for, kept for the next turn. */
 type Deferred = ({ tool: string; args: Record<string, unknown> } | { draft: Draft }) & {
@@ -123,12 +131,26 @@ export type Scribe = {
   folded: { wakes: number; block: Block | undefined }
   wakes: number
   written: Written[]
-  /** The sentences recorded and asked about, for the model not to repeat. */
-  recorded: string[]
+  /** What was recorded, for the model not to repeat; one with an id is Scribe's own to rewrite or take back. */
+  recorded: { id: string | null; content: string }[]
+  /** The sentences asked about. */
   asked: string[]
-  /** Files waiting to be looked up, and every file of the tree the session touched. */
-  paths: string[]
+  /** Files waiting to be looked up, each with the repository it lies in. */
+  paths: Place[]
+  /** Every file the session touched, as its repository and its path there: looked up once. */
   lookedUp: Set<string>
+  /**
+   * Where each file the session touched lies, by the path a tool line
+   * writes for it and by its full path: what a record may be anchored to,
+   * and under which repository it is then filed.
+   */
+  places: Map<string, Place>
+  /** The working tree each folder seen so far lies in; null for a folder in none. */
+  trees: Map<string, Tree | null>
+  /** What the developer has stated in the session so far: reasons, constraints, standing preferences. */
+  stated: string[]
+  /** Records that were not written because the turn touched no file of any repository. */
+  unplaced: number
   /** The records the lookups found since the last wake. */
   anchored: Map<string, Fact>
   deferred: Deferred[]
@@ -180,10 +202,16 @@ export const MAX_WAKES_PER_HOUR = 30
 export const QUIET_TURN_CHARS = 200
 
 /** No more earlier wakes are sent again than this; older ones are folded into one line. */
-export const MAX_PAST = 8
+export const MAX_PAST = 4
 
-/** No more of one earlier wake is sent again than this. */
-export const MAX_PAST_CHARS = 3000
+/** No more of one earlier wake is sent again than this: what the developer and Claude said, without the tool calls. */
+export const MAX_PAST_CHARS = 1200
+
+/** No more things the developer stated are kept for a session than this; the oldest go first. */
+export const MAX_STATED = 20
+
+/** One lookup of files asks about no more repositories than this; the rest wait for the next. */
+const MAX_LOOKUP_REPOS = 3
 
 /** What the status line says, until the next prompt, when Scribe's calls are not let through. */
 export const OFF_STATUS = 'Scribe is off in this session: its calls to Fylgja are not let through here'
@@ -219,6 +247,10 @@ export function create(options: Options): Scribe {
     asked: [],
     paths: [],
     lookedUp: new Set(),
+    places: new Map(),
+    trees: new Map(),
+    stated: [],
+    unplaced: 0,
     anchored: new Map(),
     deferred: [],
     commits: new Set(),
@@ -262,6 +294,8 @@ export function startOver(scribe: Scribe): void {
   scribe.asked = []
   scribe.paths = []
   scribe.lookedUp.clear()
+  scribe.places.clear()
+  scribe.stated = []
   scribe.anchored.clear()
   scribe.deferred = []
 }
@@ -315,6 +349,153 @@ async function treeOf(host: ScribeHost, cwd: string): Promise<string | undefined
   }
 
   return undefined
+}
+
+/** An absolute path without its `.` and `..` parts. */
+function tidy(path: string): string {
+  const parts: string[] = []
+
+  for (const part of path.split('/')) {
+    if (part === '..') {
+      parts.pop()
+    } else if (part !== '' && part !== '.') {
+      parts.push(part)
+    }
+  }
+
+  return `/${parts.join('/')}`
+}
+
+const REMOTE = /\[remote "origin"\][^[]*?\burl\s*=\s*(\S+)/
+
+/**
+ * The address of the `origin` of the repository whose working tree begins
+ * at `root`, read from the files git keeps; null when it has none or they
+ * cannot be read. A worktree's `.git` is a file naming its own folder inside
+ * the repository it belongs to, and that repository's settings are read.
+ */
+async function remoteOf(host: ScribeHost, root: string): Promise<string | null> {
+  const origin = (config: string): string | null => REMOTE.exec(config)?.[1] ?? null
+
+  try {
+    return origin(await host.read(`${root}/.git/config`))
+  } catch {
+    // Not a folder: a worktree, or a repository checked out inside another.
+  }
+
+  try {
+    const named = /^gitdir:\s*(.+)$/m.exec(await host.read(`${root}/.git`))?.[1]?.trim() ?? ''
+    const own = tidy(named.startsWith('/') ? named : `${root}/${named}`)
+    const common = await host.read(`${own}/commondir`).then(
+      text => tidy(text.trim().startsWith('/') ? text.trim() : `${own}/${text.trim()}`),
+      () => own,
+    )
+
+    return origin(await host.read(`${common}/config`))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The working tree `folder` lies in: the nearest folder upward that holds a
+ * `.git`, and the repository it is a checkout of. So a repository checked
+ * out inside another, a worktree and a checkout beside the session's own are
+ * each their own. Asked of the machine once per folder.
+ */
+async function treeAt(host: ScribeHost, scribe: Scribe, who: Identity, folder: string): Promise<Tree | null> {
+  const walked: string[] = []
+  let tree: Tree | null = null
+  let at = folder.replace(/\/+$/, '')
+
+  for (let level = 0; level < 40 && at !== ''; level += 1) {
+    const known = scribe.trees.get(at)
+
+    if (known !== undefined) {
+      tree = known
+      break
+    }
+
+    walked.push(at)
+
+    if (await host.exists(`${at}/.git`).catch(() => false)) {
+      // The session's own tree is named as the session names it.
+      const repo = at === who.root ? who.repo : repoNameOf(await remoteOf(host, at), at)
+
+      tree = repo === undefined ? null : { root: at, repo }
+      break
+    }
+
+    at = at.slice(0, at.lastIndexOf('/'))
+  }
+
+  for (const one of walked) {
+    scribe.trees.set(one, tree)
+  }
+
+  return tree
+}
+
+/**
+ * Where each of `files` lies: its repository and its path from that
+ * repository's root. A file in no repository has no place. Each place is
+ * kept under the two ways a tool line may write the file: from the root of
+ * the session's own tree, and in full.
+ *
+ * @param files absolute paths
+ */
+async function placesOf(host: ScribeHost, scribe: Scribe, who: Identity, files: readonly string[]): Promise<Place[]> {
+  const places: Place[] = []
+
+  for (const file of files.slice(0, MAX_PLACED)) {
+    let place = scribe.places.get(file)
+
+    if (place === undefined) {
+      const tree = await treeAt(host, scribe, who, file.slice(0, file.lastIndexOf('/')))
+      const path = tree === null ? undefined : relativeTo(tree.root, file)
+
+      if (tree === null || path === undefined) {
+        continue
+      }
+
+      place = { repo: tree.repo, path }
+      scribe.places.set(file, place)
+
+      const fromHere = relativeTo(who.root, file)
+
+      if (fromHere !== undefined) {
+        scribe.places.set(fromHere, place)
+      }
+    }
+
+    places.push(place)
+  }
+
+  return places
+}
+
+/** No more files of one turn are placed than this. */
+const MAX_PLACED = 200
+
+/** The repository most of `places` lie in, the session's own winning a tie; null with none. */
+function homeOf(places: readonly Place[], own: string): string | null {
+  const counts = new Map<string, number>()
+
+  for (const place of places) {
+    counts.set(place.repo, (counts.get(place.repo) ?? 0) + 1)
+  }
+
+  let home: string | null = null
+
+  for (const [repo, count] of counts) {
+    const most = home === null ? 0 : (counts.get(home) ?? 0)
+
+    if (count > most || (count === most && repo === own)) {
+      home = repo
+    }
+  }
+
+  return home
 }
 
 /**
@@ -543,7 +724,8 @@ type Sent = { written: Written | undefined; code: string | undefined; refusal: s
 async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draft, prior?: Fact): Promise<Sent> {
   const args: Record<string, unknown> = {
     content: draft.content,
-    repo: who.repo,
+    // The repository the record is about, which need not be the one the session sits in.
+    repo: draft.repo ?? who.repo,
     kind: draft.kind,
     author: 'scribe',
     session_id: who.sessionId,
@@ -574,7 +756,11 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
     return none(codeOf(refusal))
   }
 
-  scribe.recorded = [...scribe.recorded, draft.content].slice(-MAX_LISTED)
+  const isOwn = (outcome === 'created' || outcome === 'restored') && typeof answer?.atom_id === 'string'
+
+  scribe.recorded = [...scribe.recorded, { id: isOwn ? String(answer?.atom_id) : null, content: draft.content }].slice(
+    -MAX_LISTED,
+  )
 
   if (typeof answer?.atom_id !== 'string') {
     return none()
@@ -705,7 +891,13 @@ async function lone(host: ScribeHost, scribe: Scribe): Promise<Budget> {
   return {
     steps: scribe.wakeTimes.length < MAX_WAKES_PER_HOUR ? 1 : 0,
     until: now + STEP_TIMEOUT_MS,
-    seen: { plans: scribe.plans.docs, saidNoReason: false, paths: new Set([...scribe.lookedUp, ...inTree]), facts: new Map() },
+    seen: {
+      plans: scribe.plans.docs,
+      saidNoReason: false,
+      paths: new Set([...scribe.places.keys(), ...inTree]),
+      places: scribe.places,
+      facts: new Map(),
+    },
     isLastTry: true,
   }
 }
@@ -727,6 +919,17 @@ async function written(
   budget: Budget,
   prior?: Fact,
 ): Promise<Written | undefined> {
+  // A record is about a repository. One from a turn that touched no file of any is about none, and is not written.
+  if (draft.repo === null) {
+    scribe.unplaced += 1
+
+    if (once(scribe, 'unplaced')) {
+      host.debug('Scribe: a record was not written because the turn touched no file of any repository')
+    }
+
+    return undefined
+  }
+
   const first = await send(host, scribe, who, draft, prior)
   const part = first.written === undefined ? teaches(first.code) : undefined
 
@@ -783,6 +986,86 @@ async function written(
   return second
 }
 
+/**
+ * Rewrites one of Scribe's own records of this session in place: the same
+ * decision as it now stands. What the receipt shows, or undefined when
+ * Fylgja did not take the change. A question still waiting about that
+ * record's reason goes once the reason is there.
+ */
+async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<Written | undefined> {
+  const own = scribe.written.find(one => one.id === draft.updates)
+
+  if (own === undefined) {
+    return undefined
+  }
+
+  const args: Record<string, unknown> = {
+    atom_id: own.id,
+    op: 'fix',
+    content: draft.content,
+    ...(draft.detail === '' ? {} : { detail: draft.detail }),
+    ...(draft.alternatives.length === 0 ? {} : { alternatives: draft.alternatives }),
+    ...(draft.reasonStatus === null ? {} : { reason_status: draft.reasonStatus }),
+  }
+  let outcome: unknown
+
+  try {
+    outcome = (await tried(host, scribe, 'amend_memory', args)).answer?.outcome
+  } catch {
+    outcome = undefined
+  }
+
+  if (outcome !== 'fixed' && outcome !== 'unchanged') {
+    scribe.refused += 1
+
+    return undefined
+  }
+
+  const now: Written = { ...own, content: draft.content, reasonStatus: draft.reasonStatus, outcome: 'updated', replaced: null }
+
+  scribe.written = scribe.written.map(one => (one.id === own.id ? now : one))
+  scribe.recorded = scribe.recorded.map(one => (one.id === own.id ? { id: one.id, content: draft.content } : one))
+
+  if (draft.reasonStatus !== 'not_stated') {
+    Band.withdrawQuestion(scribe.band, own.id)
+  }
+
+  return now
+}
+
+/**
+ * Takes back one of Scribe's own records of this session, because the
+ * decision it held was dropped. What the receipt shows, or undefined when
+ * it is not Scribe's or Fylgja did not remove it.
+ */
+async function takeBack(host: ScribeHost, scribe: Scribe, id: string): Promise<Written | undefined> {
+  const own = scribe.written.find(one => one.id === id)
+
+  if (own === undefined) {
+    return undefined
+  }
+
+  let outcome: unknown
+
+  try {
+    outcome = (await tried(host, scribe, 'amend_memory', { atom_id: id, op: 'remove' })).answer?.outcome
+  } catch {
+    outcome = undefined
+  }
+
+  if (outcome !== 'removed') {
+    scribe.refused += 1
+
+    return undefined
+  }
+
+  scribe.written = scribe.written.filter(one => one.id !== id)
+  scribe.recorded = scribe.recorded.filter(one => one.id !== id)
+  Band.withdrawQuestion(scribe.band, id)
+
+  return { ...own, outcome: 'withdrawn', replaced: null }
+}
+
 /** Acts on a wake's verdict: writes its records, and puts its question and its tells in line. */
 async function apply(
   host: ScribeHost,
@@ -795,9 +1078,34 @@ async function apply(
   const { band } = scribe
   const { question } = verdict
 
+  for (const said of verdict.stated) {
+    if (!scribe.stated.includes(said)) {
+      scribe.stated = [...scribe.stated, said].slice(-MAX_STATED)
+    }
+  }
+
+  for (const id of verdict.withdrawn) {
+    const gone = await takeBack(host, scribe, id)
+
+    if (gone !== undefined) {
+      Band.receive(band, [gone])
+    }
+  }
+
   for (const [index, draft] of verdict.records.entries()) {
     const isAskedOf = question?.record === index
     const prior = isAskedOf && question.form === 'reversal' ? facts.get(question.prior) : undefined
+
+    // Scribe's own record of this session, as the decision now stands: rewritten in place, with no key and no second record.
+    if (draft.updates !== null) {
+      const own = await rewrite(host, scribe, draft)
+
+      if (own !== undefined) {
+        Band.receive(band, [own])
+      }
+
+      continue
+    }
 
     if (isAskedOf) {
       scribe.asked = [...scribe.asked, draft.content].slice(-MAX_LISTED)
@@ -864,30 +1172,44 @@ async function apply(
  *   repository has: whether the call gets through is what is asked
  */
 async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe = false): Promise<void> {
-  const files = scribe.paths.slice(0, MAX_LOOKUP_PATHS)
+  const waiting = scribe.paths.slice(0, MAX_LOOKUP_PATHS)
   const { epoch } = scribe
+  // Each repository is asked about its own files, from its own root.
+  const byRepo = new Map<string, string[]>()
 
-  scribe.paths = scribe.paths.slice(MAX_LOOKUP_PATHS)
-
-  if (files.length === 0 && !isProbe) {
-    return
+  for (const place of waiting) {
+    if (byRepo.has(place.repo) || byRepo.size < MAX_LOOKUP_REPOS) {
+      byRepo.set(place.repo, [...(byRepo.get(place.repo) ?? []), place.path])
+    }
   }
 
-  const facts = factsOf(await call(host, scribe, 'recall', { repo: who.repo, paths: files.length === 0 ? [PROBE] : files }))
+  scribe.paths = [...waiting.filter(place => !byRepo.has(place.repo)), ...scribe.paths.slice(MAX_LOOKUP_PATHS)]
 
-  if (epoch !== scribe.epoch) {
-    return
-  }
-
-  for (const fact of facts) {
-    if (scribe.written.some(own => own.id === fact.id)) {
-      continue
+  if (byRepo.size === 0) {
+    if (!isProbe) {
+      return
     }
 
-    scribe.anchored.set(fact.id, fact)
+    byRepo.set(who.repo, [])
+  }
 
-    if (isAnchoredTo(fact, files)) {
-      Band.offerTell(scribe.band, fact)
+  for (const [repo, files] of byRepo) {
+    const facts = factsOf(await call(host, scribe, 'recall', { repo, paths: files.length === 0 ? [PROBE] : files }))
+
+    if (epoch !== scribe.epoch) {
+      return
+    }
+
+    for (const fact of facts) {
+      if (scribe.written.some(own => own.id === fact.id)) {
+        continue
+      }
+
+      scribe.anchored.set(fact.id, fact)
+
+      if (isAnchoredTo(fact, files)) {
+        Band.offerTell(scribe.band, fact)
+      }
     }
   }
 
@@ -902,12 +1224,14 @@ function within(host: ScribeHost, work: Promise<unknown>, ms: number): Promise<v
   )
 }
 
-/** Notes files of the tree the session touched: to be looked up once, and to be what a record may point at. */
-function wanted(scribe: Scribe, files: readonly string[]): void {
-  for (const file of files) {
-    if (!scribe.lookedUp.has(file)) {
-      scribe.lookedUp.add(file)
-      scribe.paths.push(file)
+/** Notes files the session touched, each in its repository: to be looked up once. */
+function wanted(scribe: Scribe, places: readonly Place[]): void {
+  for (const place of places) {
+    const key = `${place.repo}\u0000${place.path}`
+
+    if (!scribe.lookedUp.has(key)) {
+      scribe.lookedUp.add(key)
+      scribe.paths.push(place)
     }
   }
 }
@@ -933,7 +1257,7 @@ export async function stepped(
     return
   }
 
-  wanted(scribe, pathsOf(uses, who.root))
+  wanted(scribe, await placesOf(host, scribe, who, filesOf(uses, who.root)))
 
   if ((index + 1) % LOOKUP_EVERY !== 0 || scribe.paths.length === 0 || (await connected(host)) === undefined) {
     return
@@ -977,20 +1301,37 @@ function startOf(scribe: Scribe, rows: readonly Row[]): number {
 
 function summaryOf(verdict: Verdict, written: readonly Written[]): string {
   return JSON.stringify({
-    outcome: verdict.records.length === 0 && verdict.question === null && verdict.tells.length === 0 ? 'nothing' : 'act',
+    outcome:
+      verdict.records.length === 0 && verdict.question === null && verdict.tells.length === 0 && verdict.withdrawn.length === 0
+        ? 'nothing'
+        : 'act',
     recorded: written.map(one => one.content),
     asked: verdict.question !== null,
     told: verdict.tells.length,
+    // What it changed of its own: records rewritten in place, and records taken back.
+    ...(verdict.records.some(draft => draft.updates !== null)
+      ? { updated: verdict.records.filter(draft => draft.updates !== null).length }
+      : {}),
+    ...(verdict.withdrawn.length === 0 ? {} : { withdrawn: verdict.withdrawn.length }),
   })
 }
 
-/** An earlier wake's lines, cut from the old end to what a later wake needs to follow the thread. */
+/**
+ * An earlier wake's lines as a later wake needs them to follow the thread:
+ * what the developer and Claude said, each cut short, the newest kept when
+ * there is more than fits. The tool calls are left out: what they led to is
+ * in what was said and in what was recorded.
+ */
 function gist(lines: readonly string[]): string[] {
   const kept: string[] = []
   let size = 0
 
   for (const line of [...lines].reverse()) {
-    const short = line.length > 400 ? `${line.slice(0, 400)}…` : line
+    if (line.startsWith('[tool]')) {
+      continue
+    }
+
+    const short = line.length > 300 ? `${line.slice(0, 300)}…` : line
 
     if (size + short.length > MAX_PAST_CHARS) {
       break
@@ -1066,9 +1407,22 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     } else {
       Plans.edit(scribe.plans, plan.key, plan.before, plan.after)
     }
+
+    // Read or changed in this turn: sent whole for the wakes that follow.
+    scribe.plans.docs = scribe.plans.docs.map(doc => (doc.key === plan.key ? { ...doc, touchedAt: scribe.wakes } : doc))
   }
 
-  wanted(scribe, seen.touched)
+  // Which repository each file of the turn lies in: a record is filed under
+  // the one its files are in, and each repository is asked about its own.
+  const here = await placesOf(host, scribe, who, seen.files)
+
+  await placesOf(
+    host,
+    scribe,
+    who,
+    scribe.plans.docs.flatMap(doc => (doc.key.startsWith('/') ? [doc.key] : [])),
+  )
+  wanted(scribe, here)
 
   // The developer's rows are told from every other by the prompt they sent.
   // Where no row holds it, their words are not labelled as theirs; that is
@@ -1113,10 +1467,17 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     try {
       const { epoch } = scribe
       const shown = [...scribe.anchored.values()].slice(0, MAX_SHOWN)
-      const plans = planBlock(scribe.plans.docs)
+      const plans = planBlock(scribe.plans.docs, scribe.wakes)
       const past = scribe.past.map((block, at) => (at === scribe.past.length - 1 ? { ...block, cache: true as const } : block))
-      const inTree = scribe.plans.docs.flatMap(doc => (doc.path === null ? [] : [doc.path]))
-      const allowed = new Set([...scribe.lookedUp, ...inTree])
+      const allowed = new Set(scribe.places.keys())
+      const judged = {
+        plans: scribe.plans.docs,
+        saidNoReason: mentionsNoReason(seen.developer),
+        paths: allowed,
+        places: scribe.places,
+        home: homeOf(here, who.repo),
+        own: new Set(scribe.written.filter(one => one.outcome !== 'held').map(one => one.id)),
+      }
       const woken = await wake(host, {
         model: scribe.model,
         system: SYSTEM,
@@ -1127,16 +1488,13 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         ],
         current: wakeText(who.repo, seen.lines, seen.dropped, shown, {
           recorded: scribe.recorded,
+          stated: scribe.stated,
           asked: scribe.asked,
           told: [...scribe.band.told].slice(-MAX_LISTED),
         }),
         repo: who.repo,
         shown,
-        seen: {
-          plans: scribe.plans.docs,
-          saidNoReason: mentionsNoReason(seen.developer),
-          paths: allowed,
-        },
+        seen: judged,
       })
 
       if (woken.ending === 'verdict' && epoch === scribe.epoch) {
@@ -1150,7 +1508,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         await apply(host, scribe, who, woken.verdict, woken.facts, {
           steps: MAX_STEPS - woken.steps,
           until: woken.startedAt + WAKE_DEADLINE_MS,
-          seen: { plans: scribe.plans.docs, saidNoReason: mentionsNoReason(seen.developer), paths: allowed, facts: woken.facts },
+          seen: { ...judged, facts: woken.facts },
         })
         scribe.past = [
           ...scribe.past,

@@ -201,6 +201,24 @@ export function offerQuestion(band: Band, question: Question, about: string): bo
 }
 
 /**
+ * Takes down the question about why the record `id` was decided: its reason
+ * has turned up, or the record is gone. One that was never shown gives its
+ * place among the session's questions back.
+ */
+export function withdrawQuestion(band: Band, id: string): void {
+  const isAbout = (item: Item): boolean => item.kind === 'question' && item.form === 'reason' && item.id === id
+  const waiting = band.queue.filter(isAbout).length
+
+  band.queue = band.queue.filter(item => !isAbout(item))
+  band.questions = Math.max(0, band.questions - waiting)
+
+  if (band.current !== null && isAbout(band.current)) {
+    band.current = null
+    band.editing = band.editing?.what === 'reason' ? null : band.editing
+  }
+}
+
+/**
  * Notes what was just written, to be shown as a receipt once nothing stands
  * in the way (`settle`). The newest are kept when there are more than a
  * line can list.

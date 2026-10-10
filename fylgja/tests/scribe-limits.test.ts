@@ -705,7 +705,7 @@ describe('what Scribe spends', () => {
     await turn($, set, dev('write three plans'), claude('Written.', plan(1), plan(2), plan(3)))
 
     const prompt = set.asked[0]?.prompt ?? ''
-    const plans = prompt.slice(0, prompt.indexOf('Repository:'))
+    const plans = prompt.slice(0, prompt.indexOf("The session's repository:"))
 
     expect(plans.length < MAX_PLANS_CHARS + 1500).toBe(true)
     expect(plans).toMatch('END-OF-3')

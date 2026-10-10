@@ -88,7 +88,7 @@ export type Woken = {
   startedAt: number
 }
 
-const NOTHING: Verdict = { records: [], question: null, tells: [] }
+const NOTHING: Verdict = { records: [], question: null, tells: [], withdrawn: [], stated: [] }
 
 function argsOf(tool: string, args: Record<string, unknown>, repo: string): Record<string, unknown> | undefined {
   const query = typeof args.query === 'string' ? args.query.trim().slice(0, 300) : ''

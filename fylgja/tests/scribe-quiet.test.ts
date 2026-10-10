@@ -563,10 +563,12 @@ describe('Scribe’s model', () => {
     expect(second?.prompt).toMatch('Earlier wake 1:')
     expect(second?.prompt).toMatch('"recorded":["Use Postgres advisory locks for the job queue, not Redis."]')
     expect(
-      third?.prompt.startsWith(second?.prompt.slice(0, second.prompt.indexOf('Repository:')) ?? 'x'),
+      third?.prompt.startsWith(second?.prompt.slice(0, second.prompt.indexOf("The session's repository:")) ?? 'x'),
       'the earlier part is unchanged',
     ).toBe(true)
-    expect(third?.prompt).toMatch('Already recorded in this session, do not record again:\n- Use Postgres advisory locks')
+    expect(third?.prompt).toMatch(
+      /Already recorded in this session, do not record again; one with an id is yours to update or withdraw:\n- \(id=[0-9a-f-]{36}\) Use Postgres advisory locks/,
+    )
   })
 })
 

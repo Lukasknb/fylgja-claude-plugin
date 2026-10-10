@@ -11,7 +11,7 @@ import type { Part } from './gate'
 import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
-import type { Anchor, Ask, Draft, Fact, ReasonStatus, RecordKind, Verdict } from './types'
+import type { Anchor, Ask, Draft, Fact, Place, ReasonStatus, RecordKind, Verdict } from './types'
 
 /** No record's sentence is longer than this; a longer one is not written at all. */
 export const MAX_CONTENT = MAX_CONTENT_CHARS
@@ -82,6 +82,57 @@ export type Seen = {
   plans: readonly PlanDoc[]
   /** Whether the developer's own words in this turn say there was no particular reason. */
   saidNoReason: boolean
+  /**
+   * Where each path of `paths` lies: its repository and its path from that
+   * repository's root. When given, a record's anchors are held to one
+   * repository and written from its root.
+   */
+  places?: ReadonlyMap<string, Place>
+  /** The repository a record without anchors is about: the one most of the turn's files lie in. Null with none. */
+  home?: string | null
+  /** The ids of the records Scribe itself wrote in this session: the only ones it may rewrite or take back. */
+  own?: ReadonlySet<string>
+}
+
+/**
+ * The anchors of a record held to one repository: the one most of them lie
+ * in, the first named winning a tie, each written from that repository's
+ * root. Anchors in any other repository are left off: a record is about one
+ * repository, and is filed under it.
+ */
+function inOnePlace(anchors: readonly Anchor[], places: ReadonlyMap<string, Place>): { repo: string | null; anchors: Anchor[] } {
+  const placed = anchors.flatMap(anchor => {
+    const place = places.get(anchor.path)
+
+    return place === undefined ? [] : [{ repo: place.repo, anchor: { ...anchor, path: place.path } }]
+  })
+  const counts = new Map<string, number>()
+
+  for (const one of placed) {
+    counts.set(one.repo, (counts.get(one.repo) ?? 0) + 1)
+  }
+
+  let repo: string | null = null
+
+  for (const [name, count] of counts) {
+    if (repo === null || count > (counts.get(repo) ?? 0)) {
+      repo = name
+    }
+  }
+
+  const seen = new Set<string>()
+  const kept: Anchor[] = []
+
+  for (const one of placed) {
+    const key = `${one.anchor.path}\u0000${one.anchor.symbol ?? ''}`
+
+    if (one.repo === repo && !seen.has(key)) {
+      seen.add(key)
+      kept.push(one.anchor)
+    }
+  }
+
+  return { repo, anchors: kept }
 }
 
 const KINDS: ReadonlySet<string> = new Set(['decision', 'gotcha', 'correction'])
@@ -145,7 +196,10 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   }
 
   const plan = planOf(value.plan, seen.plans)
-  const anchors: Anchor[] = anchorsOf(value.anchors, MAX_ANCHORS - 1, seen.paths)
+  const named = anchorsOf(value.anchors, MAX_ANCHORS - 1, seen.paths)
+  const held = seen.places === undefined ? { repo: null, anchors: named } : inOnePlace(named, seen.places)
+  const { anchors } = held
+  let repo = held.repo ?? seen.home ?? null
   const suffix =
     plan === undefined ? '' : ` (per ${plan.doc.title}${plan.heading === undefined ? '' : `, section ${plan.heading}`})`
   // Cut to what the server takes, with room for the plan's name after it.
@@ -168,8 +222,21 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   if (plan !== undefined) {
     // A plan in the tree is a place a later reader can open; one outside it
     // will be gone, so only its name is carried, beside the reason.
-    if (plan.doc.path !== null && !anchors.some(anchor => anchor.path === plan.doc.path)) {
-      anchors.push(plan.heading === undefined ? { path: plan.doc.path } : { path: plan.doc.path, symbol: plan.heading })
+    const at =
+      plan.doc.path === null
+        ? undefined
+        : seen.places === undefined
+          ? { repo, path: plan.doc.path }
+          : seen.places.get(plan.doc.path)
+
+    // The plan is an anchor only where it lies in the repository the record is about.
+    if (
+      at !== undefined &&
+      (repo === null || at.repo === null || at.repo === repo) &&
+      !anchors.some(anchor => anchor.path === at.path)
+    ) {
+      anchors.push(plan.heading === undefined ? { path: at.path } : { path: at.path, symbol: plan.heading })
+      repo ??= at.repo
     }
 
     if (detail !== '' && !detail.includes(plan.doc.title)) {
@@ -178,6 +245,7 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   }
 
   const supersedes = idOf(value.supersedes)
+  const updates = idOf(value.updates)
   const triggers = kind === 'gotcha' ? sentences(value.triggers, 5, 80) : []
 
   return {
@@ -190,6 +258,9 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
     reasonStatus,
     // Only a recorded decision a lookup of this wake returned can be replaced.
     supersedes: kind === 'decision' && supersedes !== null && seen.facts.get(supersedes)?.kind === 'decision' ? supersedes : null,
+    repo,
+    // Only a record Scribe itself wrote in this session is rewritten in place.
+    updates: updates !== null && seen.own?.has(updates) === true ? updates : null,
   }
 }
 
@@ -233,7 +304,7 @@ function askOf(value: unknown, records: readonly (Draft | undefined)[], kept: re
  */
 export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
   if (value.outcome !== 'act') {
-    return { records: [], question: null, tells: [] }
+    return { records: [], question: null, tells: [], withdrawn: [], stated: [] }
   }
 
   const given = (Array.isArray(value.records) ? value.records : []).slice(0, MAX_RECORDS).map(record => draftOf(record, seen))
@@ -265,8 +336,43 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     }
   }
 
-  return { records, question, tells }
+  // A record that rewrites one of Scribe's own replaces nothing of anybody else's.
+  for (const draft of records) {
+    if (draft.updates !== null) {
+      draft.supersedes = null
+    }
+  }
+
+  if (question?.form === 'reversal' && records[question.record]?.updates !== null) {
+    question = null
+  }
+
+  const rewritten = new Set(records.map(draft => draft.updates))
+  const withdrawn: string[] = []
+
+  for (const entry of Array.isArray(value.withdraw) ? value.withdraw : []) {
+    const id = idOf(entry)
+
+    if (
+      id !== null &&
+      seen.own?.has(id) === true &&
+      !rewritten.has(id) &&
+      !withdrawn.includes(id) &&
+      withdrawn.length < MAX_WITHDRAWN
+    ) {
+      withdrawn.push(id)
+    }
+  }
+
+  return { records, question, tells, withdrawn, stated: sentences(value.stated, MAX_STATED, MAX_STATED_CHARS) }
 }
+
+/** No more of Scribe's own records are taken back by one verdict than this. */
+const MAX_WITHDRAWN = 2
+
+/** No more things the developer stated are taken from one verdict than this, and none longer. */
+const MAX_STATED = 3
+const MAX_STATED_CHARS = 200
 
 /**
  * A record Fylgja refused, put right by the model: the same record with the
@@ -298,7 +404,8 @@ export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen
           ? { ...draft, detail, reasonStatus, alternatives: answered.alternatives }
           : part === 'alternatives'
             ? { ...draft, alternatives: answered.alternatives }
-            : { ...draft, anchors: answered.anchors }
+            : // Places put right stay in the repository the record is about.
+              { ...draft, anchors: answered.repo === null || answered.repo === draft.repo ? answered.anchors : draft.anchors }
 
   return JSON.stringify(better) === JSON.stringify(draft) ? undefined : better
 }

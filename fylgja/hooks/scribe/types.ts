@@ -28,7 +28,19 @@ export type Draft = {
   reasonStatus: ReasonStatus | null
   /** The id of a recorded decision this one replaces, one a lookup of this wake returned. */
   supersedes: string | null
+  /**
+   * The repository the record is about, as `owner/name`: the one its anchors
+   * lie in, or, with no anchor, the one most of the turn's files lie in.
+   * Null when the turn touched no file of any repository; such a record is
+   * not written.
+   */
+  repo: string | null
+  /** The id of one of Scribe's own records of this session that this one rewrites in place; null for a new record. */
+  updates: string | null
 }
+
+/** Where a file lies: its repository as `owner/name`, and its path from that repository's root. */
+export type Place = { repo: string; path: string }
 
 /** The one question a wake may ask about a record it proposed, by that record's place in the list. */
 export type Ask =
@@ -40,6 +52,10 @@ export type Verdict = {
   question: Ask | null
   /** Ids of records worth telling the developer about, each one a lookup returned. */
   tells: string[]
+  /** Ids of Scribe's own records of this session whose decision was dropped: they are removed. */
+  withdrawn: string[]
+  /** Reasons and constraints the developer stated in this turn, each a short sentence. */
+  stated: string[]
 }
 
 /** A record as Fylgja returned it, as much as the band shows. Its texts are held as received and made safe where drawn. */
@@ -73,11 +89,12 @@ export type Written = {
   reasonStatus: ReasonStatus | null
   /**
    * Whether it is new, one that had been removed and is back, one whose
-   * reason the developer just gave, or one another member of the team
-   * already holds: theirs to change, so it can be neither fixed nor removed
-   * from here.
+   * reason the developer just gave, one another member of the team already
+   * holds (theirs to change, so it can be neither fixed nor removed from
+   * here), or one of Scribe's own of this session that it rewrote in place
+   * or took back because the session moved on.
    */
-  outcome: 'created' | 'restored' | 'reasoned' | 'held'
+  outcome: 'created' | 'restored' | 'reasoned' | 'held' | 'updated' | 'withdrawn'
   /** The sentence of the recorded decision it replaced, when it replaced one. */
   replaced: string | null
 }

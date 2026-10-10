@@ -23,6 +23,8 @@ const sum = (steps, pick) => steps.reduce((total, step) => total + pick(step), 0
 function didOf(step) {
   const did = [
     ...(step.records.length > 0 ? [`recorded ${step.records.length}`] : []),
+    ...((step.updated ?? []).length > 0 ? [`updated ${step.updated.length}`] : []),
+    ...((step.withdrawn ?? []).length > 0 ? [`withdrew ${step.withdrawn.length}`] : []),
     ...(step.questions.length > 0 ? [`asked ${step.questions.length}`] : []),
     ...(step.tells.length > 0 ? [`told ${step.tells.length}`] : []),
     ...(step.corrected > 0 ? [`corrected ${step.corrected}`] : []),
@@ -74,6 +76,8 @@ function summaryOf(pass) {
     wakeSecondsMedian: median(woken.map(step => step.ms)) / 1000,
     wakeSecondsMax: Math.max(0, ...woken.map(step => step.ms)) / 1000,
     records: pass.steps.flatMap(step => step.records.map(record => ({ turn: step.n, ...record }))),
+    updates: pass.steps.flatMap(step => (step.updated ?? []).map(record => ({ turn: step.n, ...record }))),
+    withdrawals: pass.steps.flatMap(step => (step.withdrawn ?? []).map(id => ({ turn: step.n, id }))),
     questions: pass.steps.flatMap(step => step.questions.map(question => ({ turn: step.n, ...question }))),
     tells: pass.steps.flatMap(step => step.tells.map(tell => ({ turn: step.n, ...tell }))),
     refusals: pass.calls.filter(call => call.isRefused).map(call => ({ tool: call.tool, code: call.outcome })),
@@ -148,6 +152,7 @@ for (const [at, pass] of passes.entries()) {
     `|Turns worth a look that got none because the hour's share was used up|${summary.cappedTurns}|`,
     `|Records written|${summary.records.length}|`,
     `|Questions put in line (of at most ${pass.counters.maxQuestions} a session)|${summary.questions.length}, ${pass.counters.questions} shown, ${pass.counters.unanswered} left unanswered|`,
+    `|Own records rewritten in place / taken back|${summary.updates.length} / ${summary.withdrawals.length}|`,
     `|Tells offered|${summary.tells.length}|`,
     `|Writes refused / records put right / records lost|${summary.refusals.length} / ${pass.counters.corrections} / ${pass.counters.lost}|`,
     `|Items shown, and per hour of the session|${pass.counters.itemsShown}${summary.itemsShownPerHour === null ? '' : `, ${summary.itemsShownPerHour.toFixed(1)}`}|`,
@@ -162,7 +167,7 @@ for (const [at, pass] of passes.entries()) {
 
     for (const record of summary.records) {
       lines.push(
-        `- Turn ${record.turn}, ${record.kind ?? 'record'}: ${record.content}`,
+        `- Turn ${record.turn}, ${record.kind ?? 'record'}, filed under ${record.repo}${record.id ? `, id ${String(record.id).slice(0, 8)}` : ''}: ${record.content}`,
         `  - Reason (${record.reason_status ?? 'stated'}): ${record.detail ?? 'none'}`,
         `  - Alternatives: ${(record.alternatives ?? []).join('; ') || 'none'}`,
         `  - Anchors: ${(record.anchors ?? []).map(anchor => (anchor.symbol ? `${anchor.path} (${anchor.symbol})` : anchor.path)).join(', ') || 'none'}`,
@@ -171,6 +176,19 @@ for (const [at, pass] of passes.entries()) {
     }
 
     lines.push('')
+  }
+
+  if (summary.updates.length > 0 || summary.withdrawals.length > 0) {
+    lines.push(
+      '### Own records changed',
+      '',
+      ...summary.updates.map(
+        update =>
+          `- Turn ${update.turn}, rewrote ${String(update.atom_id).slice(0, 8)}: ${update.content} (reason ${update.reason_status ?? 'unchanged'}: ${update.detail ?? 'none'})`,
+      ),
+      ...summary.withdrawals.map(gone => `- Turn ${gone.turn}, took back ${gone.id.slice(0, 8)}`),
+      '',
+    )
   }
 
   if (summary.questions.length > 0) {

@@ -129,6 +129,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     repo: () => Promise.resolve({ root: ROOT, remote: `git@github.com:${world.scenario.repo}.git` }),
     cwd: () => Promise.resolve(ROOT),
     exists: path => Promise.resolve(path === `${ROOT}/.git`),
+    // The files git keeps are not read: every tree but the session's own is named by its folder.
+    read: () => Promise.reject(new Error('not read')),
     surfaces: () => Promise.resolve(['terminal']),
     rows: () => Promise.resolve(world.rows),
     destination: () => undefined,

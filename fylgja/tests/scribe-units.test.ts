@@ -64,7 +64,7 @@ describe('a file’s path from the tree’s root', () => {
 describe('what Scribe is told of a turn', () => {
   const said = (...prompts: string[]) => new Set(prompts.map(plain))
 
-  test('prompts, replies and one line per tool call; no file’s contents and no tool’s output but a shell command’s head', () => {
+  test('prompts, replies and one line per tool call; no file’s contents and no tool’s output but the head of a shell command that failed', () => {
     const seen = observe(
       [
         dev('<system-reminder>ENGINE-NOTE</system-reminder>make it retry'),
@@ -92,7 +92,7 @@ describe('what Scribe is told of a turn', () => {
       '[tool] Write src/b.ts ok',
       '[tool] Edit /elsewhere/c.ts (outside the working tree) ok',
     ])
-    expect(seen.lines[5]).toMatch(/^\[tool\] Bash `npm test` ok: 3 passed and more.{0,200}… \(\d+ more characters\)$/)
+    expect(seen.lines[5], 'a command that worked is its own short line: what it printed is not shown').toBe('[tool] Bash `npm test` ok')
     expect(seen.lines.slice(6)).toEqual([
       '[tool] Bash `npm run lint` failed: boom',
       '[tool] Grep retry ok',
@@ -431,7 +431,7 @@ describe('small rules', () => {
       anchors: [],
       triggers: [],
       reasonStatus: null,
-      supersedes: null,
+      supersedes: null, repo: null, updates: null,
     } as const
     const question = (n: number): Band.Question => ({
       kind: 'question',

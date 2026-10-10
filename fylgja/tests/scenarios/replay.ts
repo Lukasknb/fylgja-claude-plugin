@@ -35,6 +35,8 @@ import type { Turn } from './transcript'
 type Session = {
   sessionId: string
   repo: { root: string; remote: string | null } | null
+  /** The working trees the session's files lie in, as the machine had them when the recording was read: each root, and its remote. */
+  trees: Record<string, string | null>
   turns: Turn[]
 }
 
@@ -69,6 +71,9 @@ type Step = {
   isCapped: boolean
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number }
   records: Record<string, unknown>[]
+  /** Scribe's own records of the session that it rewrote in place, and the ids of those it took back. */
+  updated: Record<string, unknown>[]
+  withdrawn: string[]
   refused: number
   corrected: number
   lost: number
@@ -154,11 +159,20 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
           ? (/^refused:([a-z_]+)/.exec(text)?.[1] ?? 'refused')
           : (/"outcome":"([a-z_]+)"/.exec(text)?.[1] ?? null)
 
+        if (tool === 'amend_memory' && world.step !== undefined && !made.isRefused) {
+          if (args.op === 'remove') {
+            world.step.withdrawn.push(String(args.atom_id))
+          } else {
+            world.step.updated.push(args)
+          }
+        }
+
         if (tool === 'remember' && world.step !== undefined) {
           if (made.isRefused) {
             world.step.refused += 1
           } else {
-            world.step.records.push(args)
+            // With the id the stand-in gave it, so that a later change to it can be told.
+            world.step.records.push({ ...args, id: /"atom_id":"([0-9a-f-]+)"/.exec(text)?.[1] ?? null })
           }
         }
 
@@ -268,7 +282,20 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     sessionId: () => Promise.resolve(world.session.sessionId),
     repo: () => Promise.resolve(world.session.repo),
     cwd: () => Promise.resolve(world.cwd),
-    exists: path => Promise.resolve(world.session.repo !== null && path === `${world.session.repo.root}/.git`),
+    exists: path =>
+      Promise.resolve(
+        path.endsWith('/.git') &&
+          (path.slice(0, -5) === world.session.repo?.root || Object.hasOwn(world.session.trees, path.slice(0, -5))),
+      ),
+    // What git keeps about a tree, as far as Scribe reads it: the address of its origin.
+    read: path => {
+      const root = path.endsWith('/.git/config') ? path.slice(0, -12) : undefined
+      const remote = root === undefined ? undefined : world.session.trees[root]
+
+      return root === undefined || !Object.hasOwn(world.session.trees, root)
+        ? Promise.reject(new Error('not read'))
+        : Promise.resolve(remote === null || remote === undefined ? '' : `[remote "origin"]\n\turl = ${remote}\n`)
+    },
     surfaces: () => Promise.resolve(['terminal']),
     rows: () => Promise.resolve(world.rows),
     destination: () => undefined,
@@ -386,6 +413,8 @@ async function play(
         isCapped: false,
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         records: [],
+        updated: [],
+        withdrawn: [],
         refused: 0,
         corrected: 0,
         lost: 0,
@@ -532,8 +561,13 @@ export function register(on: On): void {
   on('command.run', { command: 'scribe-replay' }, async ($, e) => {
     const [from = '', to = '', policy = 'none', maxWakes = '40', maxCalls = '120', mode = 'live'] = e.args.trim().split(/\s+/)
     // The turns lie beside the session's own file, in parts small enough for the engine to read.
-    const head = JSON.parse(await $.fs.read(from)) as { sessionId: string; repo: Session['repo']; parts: number }
-    const session: Session = { sessionId: head.sessionId, repo: head.repo, turns: [] }
+    const head = JSON.parse(await $.fs.read(from)) as {
+      sessionId: string
+      repo: Session['repo']
+      trees?: Session['trees']
+      parts: number
+    }
+    const session: Session = { sessionId: head.sessionId, repo: head.repo, trees: head.trees ?? {}, turns: [] }
 
     for (let part = 0; part < head.parts; part += 1) {
       session.turns.push(...(JSON.parse(await $.fs.read(from.replace(/\.json$/, `-${part}.json`))) as Turn[]))

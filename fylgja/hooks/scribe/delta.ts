@@ -34,6 +34,11 @@ export type Seen = {
   dropped: number
   /** Files of the working tree Claude read or changed, each once, as paths from its root. */
   touched: string[]
+  /**
+   * Every file Claude read or changed, wherever it lies, each once, as an
+   * absolute path: which repository each belongs to is found out from these.
+   */
+  files: string[]
   /** The sha of every commit a shell call made in this repository. */
   commits: string[]
   plans: PlanSighting[]
@@ -51,6 +56,10 @@ export const MAX_DELTA_CHARS = 14_000
 const MAX_PROMPT = 2500
 const MAX_REPLY = 2500
 const MAX_COMMAND = 200
+/** A shell command that worked is shown this short; what it printed is not shown at all. */
+const MAX_QUIET_COMMAND = 120
+/** One line lists no more files read than fit in this. */
+const MAX_READS = 400
 const MAX_HEAD = 160
 
 const FILE_TOOLS: ReadonlySet<string> = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -175,9 +184,13 @@ function lineOf(
   const outcome = printed === undefined ? '' : isError ? ' failed' : ' ok'
 
   if (tool === 'Bash' && typeof input.command === 'string') {
-    const head = printed === undefined || printed.trim() === '' ? '' : `: ${clip(printed, MAX_HEAD)}`
+    // What a command printed is shown where it says something a reader of
+    // the turn needs: when it failed, and the line of a commit it made. A
+    // command that simply worked is its own short line.
+    const isTelling = isError || /\bgit\b[^\n]*\bcommit\b/.test(input.command)
+    const head = !isTelling || printed === undefined || printed.trim() === '' ? '' : `: ${clip(printed, MAX_HEAD)}`
 
-    return `[tool] Bash \`${clip(input.command, MAX_COMMAND)}\`${outcome}${head}`
+    return `[tool] Bash \`${clip(input.command, isTelling ? MAX_COMMAND : MAX_QUIET_COMMAND)}\`${outcome}${head}`
   }
 
   const file = fileOf(input)
@@ -194,6 +207,28 @@ function lineOf(
 }
 
 const CHANGING: ReadonlySet<string> = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+// Calls that keep Claude's own books or wait on its own tasks: they say
+// nothing of what was decided, and are left out of what a wake is told.
+const BOOKKEEPING: ReadonlySet<string> = new Set([
+  'TodoWrite',
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TaskGet',
+  'TaskOutput',
+  'TaskStop',
+  'ToolSearch',
+  'Monitor',
+  'BashOutput',
+  'KillShell',
+  'SendMessage',
+])
+
+/** A file path as a tool call gives it, made absolute from the working tree's root. */
+function absolute(root: string, file: string): string {
+  return file.startsWith('/') ? file : `${root.replace(/\/+$/, '')}/${file.replace(/^(?:\.\/)+/, '')}`
+}
 
 /** A prompt as it is compared: without the engine's notes, its spaces evened out. */
 export function plain(text: string): string {
@@ -252,6 +287,7 @@ export function isPrompt(row: Row, prompts: ReadonlySet<string>): boolean {
 export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet<string>): Seen {
   const lines: string[] = []
   const touched = new Set<string>()
+  const files = new Set<string>()
   const commits: string[] = []
   const plans: PlanSighting[] = []
   const developer: string[] = []
@@ -277,14 +313,29 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
       const input = isRecord(use.input) ? use.input : {}
       const isError = use.isError === true
 
-      lines.push(lineOf(use.tool, input, use.text, isError, root))
+      const line = lineOf(use.tool, input, use.text, isError, root)
+      const last = lines.at(-1)
+
+      if (BOOKKEEPING.has(use.tool)) {
+        // Left out.
+      } else if (use.tool === 'Read' && !isError && last !== undefined && READS.test(last) && last.length < MAX_READS) {
+        // Files read one after the other are one line.
+        lines[lines.length - 1] = `${last.slice(0, -3)}, ${line.slice('[tool] Read '.length)}`
+      } else {
+        lines.push(line)
+      }
 
       const file = FILE_TOOLS.has(use.tool) ? fileOf(input) : undefined
       const path = file === undefined ? undefined : relativeTo(root, file)
 
+      if (file !== undefined) {
+        files.add(absolute(root, file))
+        // A change counts wherever the file lies: the session may be working in another repository.
+        hasChange ||= CHANGING.has(use.tool) && !isError
+      }
+
       if (path !== undefined) {
         touched.add(path)
-        hasChange ||= CHANGING.has(use.tool) && !isError
       }
 
       const sha = use.tool === 'Bash' && typeof input.command === 'string' ? commitOf(input.command, use.text, root) : undefined
@@ -310,7 +361,36 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
     dropped += 1
   }
 
-  return { lines, dropped, touched: [...touched], commits, plans, developer: developer.join('\n'), hasChange, words }
+  return {
+    lines,
+    dropped,
+    touched: [...touched],
+    files: [...files],
+    commits,
+    plans,
+    developer: developer.join('\n'),
+    hasChange,
+    words,
+  }
+}
+
+// A line of files read that worked, to which the next file read is added.
+const READS = /^\[tool\] Read .* ok$/
+
+/** The files one step's tool calls name, wherever they lie, as absolute paths: what Claude is about to read or change. */
+export function filesOf(uses: readonly { name: string; input: unknown }[], root: string): string[] {
+  const files: string[] = []
+
+  for (const use of uses) {
+    const file = FILE_TOOLS.has(use.name) && isRecord(use.input) ? fileOf(use.input) : undefined
+    const path = file === undefined ? undefined : absolute(root, file)
+
+    if (path !== undefined && !files.includes(path)) {
+      files.push(path)
+    }
+  }
+
+  return files
 }
 
 /**

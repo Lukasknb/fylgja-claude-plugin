@@ -32,6 +32,8 @@ export type PlanDoc = {
   clipped: number
   /** Its headings, as written, for a record to name the section it follows. */
   headings: string[]
+  /** The wake count of the session when it was last read or changed; unset where that is not kept. */
+  touchedAt?: number
 }
 
 export type Plans = {

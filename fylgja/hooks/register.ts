@@ -122,6 +122,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live)
         () => true,
         () => false,
       ),
+    read: path => $.fs.read(path),
     surfaces: () => $.session.surfaces(),
     rows: () => $.session.messages(),
     destination: () =>

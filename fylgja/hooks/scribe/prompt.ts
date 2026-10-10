@@ -8,10 +8,20 @@
  */
 
 import type { PlanDoc } from './plans'
+import { CONDITIONAL_OPENERS, SHAPE_LIMITS, STATEMENT_WORDS, STATUS_PHRASES, STATUS_WORDS, VERB_OPENERS } from './shape'
 import type { Fact } from './types'
 
 /** A piece of a request; `cache` keeps the request up to it in the prompt cache. */
 export type Block = { text: string; cache?: true }
+
+const quoted = (words: readonly string[]): string => words.map(word => `"${word}"`).join(', ')
+
+/**
+ * How a record's sentence must be shaped for Fylgja's server to take it, in
+ * the server's own lists. Stated once, in the instruction, so that a record
+ * passes the first time it is sent.
+ */
+const SHAPE = `The knowledge base refuses a sentence by how it opens, so open it in one of two ways and in no other. (1) As an instruction, with one of these words: ${CONDITIONAL_OPENERS.join(', ')}; or with one of these verbs: ${VERB_OPENERS.join(' ')}. (2) Only for a decision or a correction: as a statement that holds one of the words ${quoted(STATEMENT_WORDS)} ("The queue lock is a Postgres advisory lock, not Redlock"). A sentence that opens with any other word and holds none of those is refused: "Meeting times come from the daemon's clock" fails, "Meeting times are taken from the daemon's clock" and "Take meeting times from the daemon's clock" pass. A gotcha always opens the first way. A record is a rule, not a report of where something stands: no ticket numbers, no dates, none of ${quoted(STATUS_PHRASES)}, and none of ${quoted(STATUS_WORDS)} beside a ticket, a pull request or a date.`
 
 export const SYSTEM = `You are Scribe, a background note-taker inside a coding session. You never talk to the developer or to the coding assistant. You read what the developer and the coding assistant (Claude) did since you last looked, and decide whether anything belongs in the team's knowledge base, so that a later reader of the code can find out WHY it was built that way. You answer with one JSON object and nothing else.
 
@@ -34,13 +44,14 @@ Never: doing what the developer asked for when no alternative was weighed ("cach
 
 ## A record
 - "kind": "decision", "correction" or "gotcha".
-- "content": ONE sentence of at most 220 characters that stands alone, with the exact names and values. One means one: a single full stop at the very end and no other ". ", "! " or "? " in it (no "e.g.", write file names and code in backticks). It opens with an instruction word (Use, Do not, Never, Always, Keep, Store, Read, Write, Send, Run, Set, Put, Avoid, Prefer, Before, After, When, Only, If, For) or, for a decision or a correction, says what is so with "is", "are" or "must" ("The queue lock is a Postgres advisory lock, not Redlock"). A gotcha always opens with an instruction word. No ticket numbers, no dates, no "pending" or "merged": a record is a rule, not a report.
-- "detail": for a decision, the reason, in the words it was given. Empty when no reason was given. Never invent a reason.
+- "content": ONE sentence of at most ${SHAPE_LIMITS.content} characters that stands alone, with the exact names and values. One means one: a single full stop at the very end and no other ". ", "! " or "? " in it (no "e.g.", write file names and code in backticks). ${SHAPE}
+- "detail": for a decision, the reason, in the words it was given, in at most ${SHAPE_LIMITS.detail} characters. Empty when no reason was given. Never invent a reason.
 - "reason_status" (decision only): "stated" only when the developer gave or confirmed the reason in their own words, when the assistant gave the reason for a choice it made itself, or when a plan document gives it. When the assistant only listed what speaks for each option and the developer picked one without saying why, the reason is "not_stated": those points go into the question's "options", never into "detail". "no_strong_reason" ONLY when the developer said in so many words that there was no particular reason.
-- "alternatives" (decision only): what was considered and rejected, as short phrases.
-- "anchors": the files the record concerns, as [{"path":"src/a.ts","symbol":"optionalName"}]. Paths exactly as the session's tool lines write them. Only files that appear in the session.
+- "alternatives" (decision only): what was considered and rejected, as at most ${SHAPE_LIMITS.alternatives} short phrases.
+- "anchors": the files the record concerns, as [{"path":"src/a.ts","symbol":"optionalName"}]. Paths exactly as the session's tool lines write them, a full path where the line writes a full path. Only files that appear in the session. A record belongs to the repository its files lie in, and to one repository only: when a decision concerns files of two repositories, anchor it to the files of the one it is mainly about.
 - "triggers" (gotcha only, required): 1 to 3 words or error strings a later shell command or error message would contain.
 - "supersedes": the id of a recorded decision this one replaces. Only an id from a record shown to you. Otherwise null.
+- "updates": the id of one of YOUR OWN records of this session, from the list "Already recorded in this session", when this record is that same decision as it now stands: the developer changed their mind, the plan moved on, the decision was refined, or its reason has now been given. The earlier record is then rewritten in place and no second one is written. Never write a second record about a subject you already recorded in this session: update the first. Otherwise null.
 - "plan": when the reason or the alternatives come from a plan document, {"doc":<its number>,"section":"<the heading as written, or null>"}; then "detail" gives the reason in the plan's own words and "reason_status" is "stated". Otherwise null.
 
 ## Plan documents
@@ -56,8 +67,14 @@ You are given the result and answer again. Most turns need no lookup.
 ## A question
 At most one, and only about a decision in "records".
 - When you record a decision with reason_status "not_stated" and a later reader would want to know why, ask for the reason: {"form":"reason","record":<its place in records, from 0>,"options":["...","..."]}. "options" are 2 or 3 plausible reasons of under 80 characters each, taken from what the session shows, for the developer to pick from. A choice between real alternatives that came with no reason is exactly what to ask about. Leave the question out only when the decision is small.
-- {"form":"reversal","record":<place>,"prior":"<id>","options":[]}: the decision goes against a recorded decision shown to you. Give that record the same id as "supersedes". The developer is asked whether it replaces the old one; you never decide that.
-Never about a gotcha or a correction, and never when the session or a plan gives the reason. With no such decision, "question" is null.
+- {"form":"reversal","record":<place>,"prior":"<id>","options":[]}: the decision goes against a recorded decision shown to you. Give that record the same id as "supersedes". The developer is asked whether it replaces the old one; you never decide that. This is for a record somebody else wrote or an earlier session wrote; your own record of this session you simply update.
+Never about a gotcha or a correction, and never when the reason is to be found anywhere in the session. Before you ask why, look for the reason in this turn, in the earlier wakes, in the list of what the developer has stated so far, and in the plan documents. If the reason is there, in the developer's words or as the assistant's own account of a choice it made, the decision is "stated" with that reason in "detail" and there is no question. If every option you would offer is something the session already says, you have found the reason: record it, do not ask. Ask only when the reason is nowhere. With no such decision, "question" is null.
+
+## What the developer has stated
+"stated": at most 3 short sentences, each under 160 characters, giving a reason, a constraint or a standing preference the developer stated in THIS turn in their own words ("patient text must stay in the EU", "no new dependencies in the worker"), whether or not you record anything. They are kept for the rest of the session, so that a later decision that rests on one of them is recorded with its reason and nobody is asked. Usually [].
+
+## Your own earlier records
+The records you wrote earlier in this session are listed with their ids. When a later turn replaces or refines one, give the new record that id as "updates". When a decision you recorded was dropped altogether (the developer took it back, the approach was abandoned and nothing replaced it), name its id in "withdraw": it is removed. When the reason of a decision you recorded as "not_stated" turns up later, send that record again with "updates", the reason in "detail" and "reason_status" "stated". Only ids from that list: a record of another session or another author is never yours to update or withdraw.
 
 ## Telling the developer (rare)
 "tells": at most 2 ids of records shown to you that the developer should see now, because this turn's work touches what they say, above all when it goes against one. Not when the session shows the developer already knows it, and not anything listed as already told. Usually [].
@@ -66,7 +83,7 @@ Never about a gotcha or a correction, and never when the session or a plan gives
 One JSON object, nothing before or after it, no code fence. Either
 {"outcome":"nothing"}
 or
-{"outcome":"act","records":[at most 3],"question":null,"tells":[]}`
+{"outcome":"act","records":[at most 3],"question":null,"tells":[],"stated":[],"withdraw":[]}`
 
 /** `text` as it stands between the fence lines: it can end no fence and open none. */
 function inert(text: string): string {
@@ -108,8 +125,25 @@ export function recordText(fact: Fact): string {
 /** No more plan text than this goes into a request, all documents together; the newest come first. */
 export const MAX_PLANS_CHARS = 24_000
 
-/** The plan documents as one block that stays the same until a document changes; undefined with none. */
-export function planBlock(docs: readonly PlanDoc[]): Block | undefined {
+/** A plan document nobody has read or changed for this many wakes is sent as its headings alone. */
+export const PLAN_FRESH_WAKES = 5
+
+/** No more headings of such a document are sent than this. */
+const MAX_OUTLINE = 40
+
+/**
+ * The plan documents as one block that stays the same until a document
+ * changes or goes stale; undefined with none.
+ *
+ * A document is sent whole while the session works with it. Once nobody has
+ * read or changed it for `PLAN_FRESH_WAKES` wakes it is sent as its headings
+ * alone, and whole again as soon as it is touched: its text is the largest
+ * thing a request carries, and a plan the session has moved on from is
+ * seldom where the next reason is.
+ *
+ * @param wakes how many wakes the session has had
+ */
+export function planBlock(docs: readonly PlanDoc[], wakes = 0): Block | undefined {
   if (docs.length === 0) {
     return undefined
   }
@@ -119,10 +153,21 @@ export function planBlock(docs: readonly PlanDoc[]): Block | undefined {
 
   // The newest is given its room first; an older one gets what is left.
   for (const doc of [...docs].reverse()) {
-    const body = doc.text.slice(0, room)
-    const cut = doc.clipped + (doc.text.length - body.length)
     const where =
       doc.path === null ? 'outside the working tree, a later reader will not have it' : `in the working tree at ${doc.path}`
+
+    if (wakes - (doc.touchedAt ?? wakes) >= PLAN_FRESH_WAKES) {
+      texts.unshift(
+        fenced(
+          `plan document ${doc.n}: ${doc.title} (${where}); not read or changed lately, so only its headings are shown`,
+          doc.headings.slice(0, MAX_OUTLINE).join('\n'),
+        ),
+      )
+      continue
+    }
+
+    const body = doc.text.slice(0, room)
+    const cut = doc.clipped + (doc.text.length - body.length)
 
     room -= body.length
     texts.unshift(
@@ -138,8 +183,10 @@ export function planBlock(docs: readonly PlanDoc[]): Block | undefined {
 
 /** What Scribe did earlier in the session, so it does not do it twice. */
 export type Done = {
-  /** The sentences already recorded. */
-  recorded: readonly string[]
+  /** The records already written, each with its id when it is one of Scribe's own to update. */
+  recorded: readonly { id: string | null; content: string }[]
+  /** What the developer has stated in the session so far: reasons, constraints, standing preferences. */
+  stated: readonly string[]
   /** The sentences of the decisions already asked about. */
   asked: readonly string[]
   /** The ids already told. */
@@ -158,13 +205,16 @@ export function wakeText(repo: string, lines: readonly string[], dropped: number
   const list = (items: readonly string[]): string =>
     items.length === 0 ? '(nothing yet)' : items.map(item => `- ${inert(item)}`).join('\n')
 
+  const own = done.recorded.map(one => (one.id === null ? one.content : `(id=${one.id}) ${one.content}`))
+
   return [
-    `Repository: ${inert(repo)}`,
+    `The session's repository: ${inert(repo)}`,
     `What happened since you last looked:\n${fenced('session', `${head}${lines.join('\n')}`)}`,
     anchored.length === 0
       ? 'Records anchored to the files of this turn: none.'
       : `Records anchored to the files of this turn:\n${anchored.slice(0, MAX_SHOWN).map(recordText).join('\n')}`,
-    `Already recorded in this session, do not record again:\n${list(done.recorded)}`,
+    `What the developer has stated so far in this session:\n${list(done.stated)}`,
+    `Already recorded in this session, do not record again; one with an id is yours to update or withdraw:\n${list(own)}`,
     `Already asked about in this session, do not ask again:\n${list(done.asked)}`,
     `Already told in this session, do not tell again:\n${list(done.told)}`,
   ].join('\n\n')
