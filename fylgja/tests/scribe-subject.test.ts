@@ -2,7 +2,23 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { restates, wholeSentences } from '../hooks/scribe/loop'
 import { answer, idOf } from './fixtures'
-import { claude, decision, dev, edit, fact, press, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import {
+  claude,
+  decision,
+  dev,
+  edit,
+  fact,
+  NOTHING,
+  press,
+  shown,
+  stage,
+  START,
+  step,
+  stepping,
+  turn,
+  use,
+  verdict,
+} from './scribe-fixtures'
 
 const TALK = 'x'.repeat(260)
 const NEW = decision({ content: 'Product analytics is PostHog Cloud on the EU host, not a self-hosted PostHog.', anchors: [] })
@@ -154,7 +170,7 @@ describe('a decision recorded before its code exists gets its places later', () 
     await turn($, set, dev('now build it'), claude('Built.', edit('src/queue/lock.ts')))
 
     expect(set.asked[1]?.prompt, 'its own record is listed with its id').toMatch(
-      `(id=${OWN}) The retry queue lock is a Postgres advisory lock.`,
+      `(id=${OWN}, no place in the code yet) The retry queue lock is a Postgres advisory lock.`,
     )
     expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'fix', anchors: [{ path: 'src/queue/lock.ts' }] }])
     expect(await shown($), 'no receipt for places alone').toBe('engine: AbovePrompt')
@@ -219,6 +235,109 @@ describe('a decision recorded before its code exists gets its places later', () 
     )
 
     expect(set.of('amend_memory')).toEqual([])
+  })
+})
+
+describe('a commit is where a decision gets its place', () => {
+  const DESIGN = decision({ content: 'The retry queue lock is a Postgres advisory lock.', anchors: [] })
+  const OWN = idOf(101)
+  const commit = (output = '[main 1a2b3c4] lock the queue\n 2 files changed') =>
+    use('Bash', { command: 'git commit -m "lock the queue"' }, output)
+  const pairs = (paths: string[], id = OWN) => JSON.stringify({ outcome: 'act', records: [], anchor: [{ id, paths }] })
+
+  test('at a commit the wake is given its own records without a place and the files the commit holds, once, and what it pairs is added', async ($, on) => {
+    const set = stage(on, { replies: [verdict({ records: [DESIGN] }), NOTHING, pairs(['src/queue/lock.ts']), NOTHING] })
+
+    await $.session.start(START)
+    await turn($, set, dev(`we lock the retry queue with an advisory lock ${TALK}`), claude('Agreed.'))
+    await turn($, set, dev('build it'), claude('Built.', edit('src/queue/lock.ts'), edit('src/queue/worker.ts')))
+
+    expect(set.asked[1]?.prompt, 'no commit yet: nothing is asked about one').not.toMatch('A commit was made')
+
+    await turn($, set, dev('commit it'), claude('Committed.', commit()))
+
+    const asked = set.asked[2]?.prompt ?? ''
+
+    expect(asked).toMatch('A commit was made in acme/web. These records of yours have no place in the code yet:')
+    expect(asked).toMatch(`- (id=${OWN}) The retry queue lock is a Postgres advisory lock.`)
+    expect(asked).toMatch('The files the commit holds:\n- src/queue/lock.ts\n- src/queue/worker.ts')
+    expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'fix', anchors: [{ path: 'src/queue/lock.ts' }] }])
+    expect(set.of('attach_commit').length, 'and the commit is attached as before').toBe(1)
+
+    await turn($, set, dev('one more change to the worker afterwards'), claude('Done.', edit('src/queue/worker.ts')))
+
+    expect(set.asked[3]?.prompt, 'asked once per commit').not.toMatch('A commit was made')
+  })
+
+  test('files an agent of the session changed are files of the session: a record may point at them, and the agent’s commit holds them', async ($, on) => {
+    let agentUses: { name: string; input: unknown }[] = []
+    const set = stage(on, { replies: [verdict({ records: [DESIGN] }), pairs(['src/queue/lock.ts'])] })
+
+    stepping(on, () => agentUses)
+
+    await $.session.start(START)
+    await turn($, set, dev(`we lock the retry queue with an advisory lock ${TALK}`), claude('Agreed, an agent will build it.'))
+
+    agentUses = [
+      { name: 'Edit', input: { file_path: '/work/repo/src/queue/lock.ts', old_string: 'SECRET-OLD', new_string: 'SECRET-NEW' } },
+    ]
+    await step($, 0, agentUses, 'agent-1')
+    agentUses = [{ name: 'Bash', input: { command: 'git add -A && git commit -m "lock"' } }]
+    await step($, 1, agentUses, 'agent-1')
+    agentUses = []
+
+    await turn($, set, dev(`the agent is done, anything else to do here ${TALK}`), claude('It built and committed the lock.'))
+
+    const asked = set.asked[1]?.prompt ?? ''
+
+    expect(asked).toMatch('A commit was made in acme/web.')
+    expect(asked).toMatch('The files the commit holds:\n- src/queue/lock.ts')
+    expect(asked, 'the path only: nothing of what the agent wrote').not.toMatch(/SECRET-OLD|SECRET-NEW/)
+    expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'fix', anchors: [{ path: 'src/queue/lock.ts' }] }])
+    expect(
+      set.of('recall').some(args => JSON.stringify(args.paths ?? []).includes('src/queue/lock.ts')),
+      'nothing is looked up for an agent’s step',
+    ).toBe(false)
+  })
+
+  test('a commit with no record waiting for a place asks nothing, and a record that fits no file stays without one', async ($, on) => {
+    const anchored = { ...DESIGN, anchors: [{ path: 'src/queue/lock.ts' }] }
+    const set = stage(on, { replies: [verdict({ records: [anchored] }), NOTHING, verdict({ records: [DESIGN] }), NOTHING] })
+
+    await $.session.start(START)
+    await turn($, set, dev('build the lock'), claude('Built.', edit('src/queue/lock.ts')))
+    await turn($, set, dev('commit it'), claude('Committed.', commit()))
+
+    expect(set.asked[1]?.prompt).not.toMatch('A commit was made')
+
+    await turn($, set, dev(`and a second decision in talk only ${TALK}`), claude('Agreed.'))
+    await turn(
+      $,
+      set,
+      dev('change the worker and commit'),
+      claude('Done.', edit('src/queue/worker.ts'), commit('[main 2b3c4d5] worker')),
+    )
+
+    expect(set.asked[3]?.prompt, 'the model is asked, and may pair nothing').toMatch('A commit was made')
+    expect(set.of('amend_memory'), 'no guessing').toEqual([])
+  })
+})
+
+describe('a decision written beside one it may go against says so', () => {
+  test('when the question whether it replaces a recorded decision went unanswered, the receipt names the earlier record', async ($, on) => {
+    const set = stage(on, { tools: holding, replies: [verdict({ records: [NEW] }), NOTHING], relate: relation('contradicts') })
+
+    await $.session.start(START)
+    await turn($, set, ...steer)
+
+    expect(await shown($)).toMatch('This looks like it replaces a recorded decision')
+
+    // The developer types past it; the decision is written at the next turn's end, replacing nothing.
+    await turn($, set, dev(`go on with the dashboards ${TALK}`), claude('Done.', edit('src/a.ts')))
+
+    expect(set.of('remember')[0]).toMatchObject({ content: NEW.content })
+    expect(set.of('remember')[0]?.supersedes).toBeUndefined()
+    expect(await shown($)).toMatch(`may contradict an earlier decision ${idOf(5).slice(0, 8)}`)
   })
 })
 

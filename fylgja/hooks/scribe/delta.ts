@@ -39,6 +39,8 @@ export type Seen = {
    * absolute path: which repository each belongs to is found out from these.
    */
   files: string[]
+  /** Those among them that were written or changed, as absolute paths. */
+  changed: string[]
   /** The sha of every commit a shell call made in this repository. */
   commits: string[]
   plans: PlanSighting[]
@@ -362,6 +364,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
   const lines: string[] = []
   const touched = new Set<string>()
   const files = new Set<string>()
+  const changed = new Set<string>()
   const commits: string[] = []
   const plans: PlanSighting[] = []
   const developer: string[] = []
@@ -444,6 +447,10 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
         files.add(absolute(root, file))
         // A change counts wherever the file lies: the session may be working in another repository.
         hasChange ||= CHANGING.has(use.tool) && !isError
+
+        if (CHANGING.has(use.tool) && !isError) {
+          changed.add(absolute(root, file))
+        }
       }
 
       if (path !== undefined) {
@@ -490,6 +497,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
     dropped,
     touched: [...touched],
     files: [...files],
+    changed: [...changed],
     acts,
     choices: answered,
     offered: optionWords,
@@ -503,6 +511,28 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
 
 // A line of files read that worked, to which the next file read is added.
 const READS = /^\[tool\] Read .* ok$/
+
+/** The files one step's tool calls write or change, as absolute paths, and whether one of them is a git commit. */
+export function changesOf(
+  uses: readonly { name: string; input: unknown }[],
+  root: string,
+): { files: string[]; hasCommit: boolean } {
+  const files: string[] = []
+  let hasCommit = false
+
+  for (const use of uses) {
+    const input = isRecord(use.input) ? use.input : {}
+    const file = CHANGING.has(use.name) ? fileOf(input) : undefined
+
+    if (file !== undefined && !files.includes(absolute(root, file))) {
+      files.push(absolute(root, file))
+    }
+
+    hasCommit ||= use.name === 'Bash' && typeof input.command === 'string' && /\bgit\b[^\n]*\bcommit\b/.test(input.command)
+  }
+
+  return { files, hasCommit }
+}
 
 /** The files one step's tool calls name, wherever they lie, as absolute paths: what Claude is about to read or change. */
 export function filesOf(uses: readonly { name: string; input: unknown }[], root: string): string[] {

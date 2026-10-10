@@ -377,12 +377,15 @@ export function register(on: On, options: PluginOptions = {}): void {
 
       await briefly(host.after, looked, SHORT_WAIT_MS)
 
-      if (e.agentId === undefined) {
-        try {
+      try {
+        if (e.agentId === undefined) {
           await Scribe.stepped(scribeHostOf($, session, live), scribe, e.index, stepped.toolUses)
-        } catch {
-          // The turn goes on.
+        } else {
+          // An agent's step: the paths of the files it changes, and whether it commits. Nothing else of it.
+          await Scribe.agentStepped(scribeHostOf($, session, live), scribe, stepped.toolUses)
         }
+      } catch {
+        // The turn goes on.
       }
 
       return stepped

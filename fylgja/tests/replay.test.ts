@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { observe, plain } from '../hooks/scribe/delta'
-import { labelOf, recordedOf } from './scenarios/transcript'
+import { agentUsesOf, labelOf, recordedOf } from './scenarios/transcript'
 
 const ROOT = '/work/app'
 let serial = 0
@@ -244,6 +244,42 @@ describe('a recorded session is read into the turns of its main conversation', (
     expect(seen.lines).toContain('[developer rejected ExitPlanMode] no Redis, we have Postgres')
     expect(seen.lines).toContain('[developer approved the plan]')
     expect(seen.acts).toEqual(['no Redis, we have Postgres', 'The developer approved the plan.'])
+  })
+
+  test('of an agent’s own transcript only the paths it wrote or changed and its commit commands are taken', () => {
+    const agent = (content: unknown) => line('assistant', content, { isSidechain: true, agentId: 'agent-1' })
+    const uses = [
+      agent([{ type: 'text', text: 'AGENT-TALK about the work' }]),
+      agent([{ type: 'tool_use', id: 'a1', name: 'Read', input: { file_path: `${ROOT}/src/read-only.ts` } }]),
+      agent([
+        {
+          type: 'tool_use',
+          id: 'a2',
+          name: 'Edit',
+          input: { file_path: `${ROOT}/src/queue/lock.ts`, old_string: 'SECRET-OLD', new_string: 'SECRET-NEW' },
+        },
+      ]),
+      agent([
+        {
+          type: 'tool_use',
+          id: 'a3',
+          name: 'Write',
+          input: { file_path: `${ROOT}/src/queue/new.ts`, content: 'SECRET-CONTENT' },
+        },
+      ]),
+      agent([{ type: 'tool_use', id: 'a4', name: 'Bash', input: { command: 'git add -A && git commit -m "SECRET-MESSAGE"' } }]),
+      agent([{ type: 'tool_use', id: 'a5', name: 'Bash', input: { command: 'npm test' } }]),
+      line('user', [{ type: 'tool_result', tool_use_id: 'a4', content: '[main 1a2b3c4] SECRET-MESSAGE' }], { isSidechain: true }),
+      'not json',
+    ].flatMap(agentUsesOf)
+
+    expect(uses.map(use => [use.name, use.input])).toEqual([
+      ['Edit', { file_path: `${ROOT}/src/queue/lock.ts` }],
+      ['Write', { file_path: `${ROOT}/src/queue/new.ts` }],
+      ['Bash', { command: 'git commit' }],
+    ])
+    expect(JSON.stringify(uses), 'nothing of what was written, and nothing the agent said').not.toMatch(/SECRET|AGENT-TALK/)
+    expect(uses.every(use => use.at > 0)).toBe(true)
   })
 
   test('a session of an older build, which does not say what began a turn, has every plain prompt taken as the developer’s', () => {

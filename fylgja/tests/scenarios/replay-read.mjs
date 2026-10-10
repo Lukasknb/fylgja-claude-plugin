@@ -22,11 +22,11 @@
 //      "date": "2026-09-12" }]
 //
 // Only id, kind and content are needed.
-import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 
-import { reader } from './transcript.ts'
+import { agentUsesOf, reader } from './transcript.ts'
 
 const [transcript, out, ...rest] = process.argv.slice(2)
 const flag = name => (rest.includes(name) ? rest[rest.indexOf(name) + 1] : undefined)
@@ -69,6 +69,36 @@ for await (const line of createInterface({ input: createReadStream(transcript, '
 }
 
 const recorded = reading.done()
+
+// The agents the session started keep transcripts of their own beside it. Of those only the paths of the files
+// they wrote or changed, and their commit commands, are taken, each into the turn it happened in.
+const agents = join(
+  dirname(transcript),
+  transcript
+    .split('/')
+    .at(-1)
+    .replace(/\.jsonl$/, ''),
+  'subagents',
+)
+const agentUses = []
+
+if (existsSync(agents)) {
+  for (const file of readdirSync(agents).filter(name => name.endsWith('.jsonl'))) {
+    for await (const line of createInterface({ input: createReadStream(join(agents, file), 'utf8'), crlfDelay: Infinity })) {
+      agentUses.push(...agentUsesOf(line))
+    }
+  }
+}
+
+agentUses.sort((a, b) => a.at - b.at)
+
+for (const use of agentUses) {
+  const turn = recorded.turns.findLast(one => one.at > 0 && one.at <= use.at && (one.kind === 'prompt' || one.kind === 'other'))
+
+  if (turn !== undefined) {
+    turn.agentUses = [...(turn.agentUses ?? []), { name: use.name, input: use.input }]
+  }
+}
 const cwd = recorded.turns.find(turn => turn.cwd !== null)?.cwd ?? recorded.cwd
 const root = flag('--root')
 const found =
@@ -143,19 +173,26 @@ const trees = Object.fromEntries(
 const looked = new Set()
 
 for (const turn of recorded.turns) {
-  for (const row of turn.rows) {
-    for (const use of row.toolUses) {
-      const file = use.input.file_path ?? use.input.notebook_path
-      const folder = typeof file === 'string' && file.startsWith('/') ? dirname(file) : undefined
+  for (const use of [...turn.rows.flatMap(row => row.toolUses), ...(turn.agentUses ?? [])]) {
+    const file = use.input.file_path ?? use.input.notebook_path
+    const folder = typeof file === 'string' && file.startsWith('/') ? dirname(file) : undefined
 
-      if (folder !== undefined && !looked.has(folder)) {
-        looked.add(folder)
+    if (folder !== undefined && !looked.has(folder)) {
+      looked.add(folder)
 
-        const tree = existsSync(folder) ? repoOf(folder) : null
+      const tree = existsSync(folder) ? repoOf(folder) : null
 
-        if (tree !== null) {
-          trees[tree.root] = tree.remote
-        }
+      if (tree !== null) {
+        trees[tree.root] = tree.remote
+      }
+
+      // A worktree an agent worked in is usually gone afterwards. Where it lay under a repository that is still
+      // there, it was a checkout of that repository, with its own root.
+      const worktree = /^(.*)\/\.claude\/worktrees\/[^/]+/.exec(folder)
+      const above = tree === null && worktree !== null && existsSync(worktree[1]) ? repoOf(worktree[1]) : null
+
+      if (worktree !== null && above !== null && above.root === worktree[1]) {
+        trees[worktree[0]] = above.remote
       }
     }
   }
@@ -189,6 +226,8 @@ writeFileSync(
     isWorktree: found?.isWorktree ?? false,
     isDirectoryGone: cwd !== null && root === undefined && !existsSync(cwd),
     seeded: records.length,
+    agentFileChanges: agentUses.filter(use => use.name !== 'Bash').length,
+    agentCommits: agentUses.filter(use => use.name === 'Bash').length,
     trees: Object.keys(trees).length,
   }),
 )

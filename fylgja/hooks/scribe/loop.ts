@@ -410,6 +410,84 @@ function even(text: string): string {
     .trim()
 }
 
+/** The whole look for a reason is held to about this many characters of session, proposals and plans together. */
+export const MAX_LOOK_CHARS = 40_000
+
+/** No more of the assistant's replies are shown to it than this, and no more of each, and of one plan section. */
+const MAX_LOOK_PROPOSALS = 3
+const MAX_LOOK_PROPOSAL_CHARS = 2000
+const MAX_LOOK_SECTION_CHARS = 3000
+
+/**
+ * What a look for a reason is shown, within `MAX_LOOK_CHARS`: first
+ * everything the developer wrote, whole; then the assistant's replies that
+ * are about this decision (they share two of its words), the newest first;
+ * then, with what room is left, only those sections of the plan documents
+ * whose heading or text mentions the decision's words, the most telling
+ * first, each cut to a length and the plan marked as shown in part.
+ */
+export function lookParts(input: {
+  decision: string
+  spoken: readonly string[]
+  plans: readonly PlanDoc[]
+  proposals: readonly string[]
+}): { spoken: string[]; proposals: string[]; plans: { n: number; title: string; note: string; text: string }[] } {
+  const own = new Set(wordsOf(input.decision))
+  const score = (text: string): number => new Set(wordsOf(text).filter(word => own.has(word))).size
+  const spoken = [...input.spoken]
+  let room = MAX_LOOK_CHARS - spoken.reduce((sum, one) => sum + one.length, 0)
+  const proposals: string[] = []
+
+  for (const reply of [...input.proposals].reverse()) {
+    const text = reply.slice(0, MAX_LOOK_PROPOSAL_CHARS)
+
+    if (proposals.length < MAX_LOOK_PROPOSALS && score(text) >= 2 && text.length <= room) {
+      proposals.unshift(text)
+      room -= text.length
+    }
+  }
+
+  // A plan's sections, each from its heading to the next; what stands before the first heading is one too.
+  const sections = input.plans
+    .flatMap(doc =>
+      doc.text
+        .split(/\n(?=#{1,6}\s)/)
+        .map(text => ({ doc, text: text.trim(), score: score(text) }))
+        .filter(section => section.text !== '' && section.score >= 2),
+    )
+    .sort((a, b) => b.score - a.score)
+  const taken = new Map<number, string[]>()
+
+  for (const section of sections) {
+    const text =
+      section.text.length <= MAX_LOOK_SECTION_CHARS
+        ? section.text
+        : `${section.text.slice(0, MAX_LOOK_SECTION_CHARS)}\n[this section is cut here]`
+
+    if (text.length <= room) {
+      taken.set(section.doc.n, [...(taken.get(section.doc.n) ?? []), text])
+      room -= text.length
+    }
+  }
+
+  return {
+    spoken,
+    proposals,
+    plans: input.plans.flatMap(doc =>
+      taken.has(doc.n)
+        ? [
+            {
+              n: doc.n,
+              title: doc.title,
+              note: 'only the sections that mention the decision are shown',
+              text: (taken.get(doc.n) ?? []).join('\n\n'),
+            },
+          ]
+        : [],
+    ),
+  }
+}
+
 /**
  * The reason for `decision`, when one model call finds it: in the
  * developer's or a plan's own words, or in the assistant's when it proposed
@@ -441,9 +519,10 @@ export async function reasonIn(
     input.unspoken === 0
       ? ''
       : `[${input.unspoken} earlier prompts of the session are not shown: they were let go for length]\n\n`
-  const wrote = input.spoken.join('\n\n')
-  const proposed = input.proposals.join('\n\n')
-  const plans = input.plans.map(doc => fenced(`plan document ${doc.n}: ${doc.title}`, doc.text))
+  const shown = lookParts(input)
+  const wrote = shown.spoken.join('\n\n')
+  const proposed = shown.proposals.join('\n\n')
+  const plans = shown.plans.map(part => fenced(`plan document ${part.n}: ${part.title} (${part.note})`, part.text))
 
   try {
     const reply = await host.complete({
@@ -479,7 +558,7 @@ export async function reasonIn(
     }
 
     // Word for word where it is said to stand, and completed to whole sentences of it: or it is nobody's reason.
-    const sources = isProposed ? input.proposals : [...input.spoken, ...input.plans.map(doc => doc.text)]
+    const sources = isProposed ? shown.proposals : [...shown.spoken, ...shown.plans.map(part => part.text)]
     const reason = sources.map(source => wholeSentences(quoted, source)).find(found => found !== undefined)
 
     if (

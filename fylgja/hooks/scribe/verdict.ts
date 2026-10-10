@@ -414,14 +414,22 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     }
   }
 
-  return { records, question, tells, withdrawn, stated: sentences(value.stated, MAX_STATED, MAX_STATED_CHARS), anchored }
+  return {
+    records,
+    question,
+    tells,
+    withdrawn,
+    stated: sentences(value.stated, MAX_STATED, MAX_STATED_CHARS),
+    anchored,
+    proposed: Array.isArray(value.anchor) ? value.anchor.length : 0,
+  }
 }
 
 /** Beside the records of a wake, no more records of the developer's own choices than this. */
 export const MAX_CHOICE_RECORDS = 4
 
 /** No more of Scribe's own records are given later anchors by one verdict than this. */
-const MAX_LATE = 3
+const MAX_LATE = 6
 
 /** No more of Scribe's own records are taken back by one verdict than this. */
 const MAX_WITHDRAWN = 2

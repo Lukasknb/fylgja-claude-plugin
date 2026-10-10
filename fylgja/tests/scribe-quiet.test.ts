@@ -577,7 +577,7 @@ describe('Scribe’s model', () => {
       'the earlier part is unchanged',
     ).toBe(true)
     expect(third?.prompt).toMatch(
-      /Already recorded in this session, do not record again; one with an id is yours to update or withdraw:\n- \(id=[0-9a-f-]{36}\) Use Postgres advisory locks/,
+      /Already recorded in this session, do not record again; one with an id is yours to update or withdraw:\n- \(id=[0-9a-f-]{36}(?:, no place in the code yet)?\) Use Postgres advisory locks/,
     )
   })
 })

@@ -111,10 +111,22 @@ at a time.
   exists, and then points at no file. When a later turn of the same
   session touches the files that implement it, Scribe adds them to its
   own record as places, without a receipt (the opened list shows them).
+  A commit is the moment for it: at the look after a commit, in the
+  main conversation or by an agent the session started, the model is
+  given Scribe's own records of the session that still have no place and
+  the files changed in that repository since the commit before, and pairs
+  them or pairs none; that is asked once per commit. Files an agent of
+  the session wrote or changed count as files of the session for this:
+  only their paths are taken, never what was written to them and nothing
+  the agent said. Whether an agent's commit went through cannot be seen
+  from its step, so its commit command is taken as the commit. A record
+  that fits no file stays without a place: nothing is guessed.
   A choice you made between options Claude put to you is recorded with
-  the options you turned down as its alternatives; such records do not
-  count against the three a turn may write, up to four more, and you are
-  never asked why about one.
+  the options you turned down as its alternatives, when it is a decision
+  by the same bar as any other: which of two designs, not which task
+  first, whether to go ahead, or how to be told about progress. Such
+  records do not count against the three a turn may write, up to four
+  more, and you are never asked why about one.
   When a later turn of the same session changes a decision Scribe already
   recorded, Scribe rewrites its own record (`✓ Updated · …`) or takes it
   back (`✓ Withdrawn · …`) without asking: it is its own record, minutes
@@ -158,8 +170,11 @@ at a time.
   own words, quoted, or "absent". A quote is taken only if it stands in
   what you wrote, or in a plan, word for word; then the decision is
   recorded with that reason and you are not asked. Only on "absent" is
-  the question put. A quote is completed to the whole sentences it
-  touches, so that a reason never begins or ends mid-sentence. A quote
+  the question put. The request is held to about 40,000 characters:
+  everything you wrote comes first and whole, then what Claude said about
+  this very decision, then only those sections of the plan documents that
+  mention the decision's words, each cut to a length and marked. A quote
+  is completed to the whole sentences it touches, so that a reason never begins or ends mid-sentence. A quote
   that only says the decision again is not a reason and is not taken:
   that is one with seven tenths of its words being the decision's own,
   or holding half of the decision's words, or with nothing left once the
@@ -181,7 +196,11 @@ at a time.
   a recorded one, the new one is not written until you have said which it
   is: `1 Yes, it replaces it  2 No, tell Claude  3 Different case  0 Skip`.
   Only the first key makes it the replacement, and the receipt then names
-  what it replaced. Left unanswered, it is written beside the old one.
+  what it replaced. Left unanswered, the new decision is recorded without
+  replacing the old one: both stand, and the receipt of the new one says
+  `may contradict an earlier decision` with the start of the earlier
+  record's id. Fylgja's own linker may later propose the replacement for
+  review in Fylgja; the plugin does nothing more about it.
 - **It tells.** When Claude reads or changes a file that a recorded decision
   or gotcha is anchored to:
 

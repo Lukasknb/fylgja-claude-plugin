@@ -16,7 +16,7 @@
 import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
 import * as Band from './band'
-import { filesOf, isPrompt, observe, plain } from './delta'
+import { changesOf, filesOf, isPrompt, observe, plain } from './delta'
 import type { Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
@@ -98,7 +98,7 @@ type Identity = { sessionId: string; repo: string | null; root: string }
 type Tree = { root: string; repo: string }
 
 /** Something to do on Fylgja that could not be done when it was asked for, kept for the next turn. */
-type Deferred = ({ tool: string; args: Record<string, unknown> } | { draft: Draft }) & {
+type Deferred = ({ tool: string; args: Record<string, unknown> } | { draft: Draft; against?: string }) & {
   /** The turn it was put off in, when it is not to be done before a later one ends. */
   notIn?: number
 }
@@ -185,6 +185,18 @@ export type Scribe = {
   earlier: string[]
   /** The words of the questions the developer was asked and of the options offered: never a reason for anything. */
   offered: string[]
+  /**
+   * The files written or changed in each repository since its last commit,
+   * by the main conversation or by an agent of the session, each as a tool
+   * line writes it: what a commit there holds.
+   */
+  edited: Map<string, Set<string>>
+  /** Commits made since the last look, each with the files it holds: asked about once, at the next look. */
+  commitsToPair: { repo: string; files: string[] }[]
+  /** The repository an agent of the session last changed a file in: where a commit it makes belongs. */
+  agentRepo: string | null
+  /** How many pairings of a record with files the model proposed, before any was checked. */
+  lateProposed: number
   /** How many places were added later to records written before the code they concern existed. */
   lateAnchors: number
   /** How many times a new decision was compared with records on its subject, and how often it went against one. */
@@ -255,6 +267,9 @@ export const MAX_STATED = 20
 /** No more of what the developer wrote is kept for a session than this, in characters; the oldest prompts go first. */
 export const MAX_SPOKEN_CHARS = 30_000
 
+/** No more files of one commit are listed to a look than this. */
+const MAX_COMMIT_FILES = 60
+
 /** No more questions and option names are kept for telling a reason from an echo of the question. */
 const MAX_OFFERED = 80
 
@@ -314,6 +329,10 @@ export function create(options: Options): Scribe {
     proposals: [],
     earlier: [],
     offered: [],
+    edited: new Map(),
+    commitsToPair: [],
+    agentRepo: null,
+    lateProposed: 0,
     lateAnchors: 0,
     compared: 0,
     opposed: 0,
@@ -370,6 +389,9 @@ export function startOver(scribe: Scribe): void {
   scribe.acted.clear()
   scribe.hasActed = false
   scribe.offered = []
+  scribe.edited.clear()
+  scribe.commitsToPair = []
+  scribe.agentRepo = null
   scribe.proposals = []
   scribe.earlier = []
   scribe.anchored.clear()
@@ -929,7 +951,8 @@ async function flush(host: ScribeHost, scribe: Scribe, who: Identity): Promise<v
     if ('draft' in work) {
       const one = await written(host, scribe, who, work.draft, await lone(host, scribe))
 
-      Band.receive(scribe.band, one === undefined ? [] : [one])
+      // Written beside a decision it may go against, because nobody said whether it replaces it: the receipt says so.
+      Band.receive(scribe.band, one === undefined ? [] : [work.against === undefined ? one : { ...one, against: work.against }])
     } else {
       await call(host, scribe, work.tool, work.args).catch(() => undefined)
     }
@@ -945,7 +968,7 @@ function settle(host: ScribeHost, scribe: Scribe): void {
     // The question is let go; the decision it was about is still recorded,
     // beside the one it might have replaced.
     if (item.kind === 'question' && item.form === 'reversal') {
-      defer(scribe, { draft: { ...item.draft, supersedes: null } })
+      defer(scribe, { draft: { ...item.draft, supersedes: null }, against: item.prior.id })
     }
   }
 
@@ -1650,6 +1673,70 @@ function mayWake(host: ScribeHost, scribe: Scribe, now: number): boolean {
   return false
 }
 
+/** Notes files written or changed, each under its repository, as a tool line writes it. */
+function noteEdits(scribe: Scribe, who: Identity, files: readonly string[], places: readonly Place[]): void {
+  for (const file of files) {
+    const place = scribe.places.get(file)
+
+    if (place !== undefined && places.includes(place)) {
+      const shown = relativeTo(who.root, file) ?? file
+
+      scribe.edited.set(place.repo, new Set([...(scribe.edited.get(place.repo) ?? []), shown]))
+    }
+  }
+}
+
+/** A commit was made in `repo`: it holds what was changed there since the one before. */
+function committed(scribe: Scribe, repo: string): void {
+  const files = [...(scribe.edited.get(repo) ?? [])]
+
+  scribe.edited.delete(repo)
+
+  if (files.length > 0) {
+    scribe.commitsToPair = [...scribe.commitsToPair, { repo, files }].slice(-MAX_PENDING_COMMITS)
+  }
+}
+
+/** No more commits wait to be asked about than this; the oldest are let go. */
+const MAX_PENDING_COMMITS = 5
+
+/**
+ * One step of an agent the session started ended. Only the paths of the
+ * files it writes or changes are taken, never their content and nothing the
+ * agent said: they are files of this session, a record may point at them,
+ * and a commit the agent makes holds them. Nothing is looked up or asked
+ * here.
+ *
+ * Whether an agent's commit went through cannot be seen from its step: the
+ * command is taken as the commit, and the files changed in that repository
+ * since the last one as what it holds.
+ */
+export async function agentStepped(
+  host: ScribeHost,
+  scribe: Scribe,
+  uses: readonly { name: string; input: unknown }[],
+): Promise<void> {
+  if (scribe.identity === null) {
+    return
+  }
+
+  const who = await identityOf(host, scribe)
+
+  if (who === null) {
+    return
+  }
+
+  const { files, hasCommit } = changesOf(uses, who.root)
+  const places = await placesOf(host, scribe, who, files)
+
+  noteEdits(scribe, who, files, places)
+  scribe.agentRepo = places.at(-1)?.repo ?? scribe.agentRepo
+
+  if (hasCommit && scribe.agentRepo !== null) {
+    committed(scribe, scribe.agentRepo)
+  }
+}
+
 /**
  * A turn of the main conversation ended. Scribe reads what happened since
  * it last looked, looks up the files touched, runs one wake over it, acts on
@@ -1703,6 +1790,16 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     scribe.plans.docs.flatMap(doc => (doc.key.startsWith('/') ? [doc.key] : [])),
   )
   wanted(scribe, here)
+
+  // What was written or changed, per repository, since its last commit; and
+  // the commits made since the last look, each with those files. A commit is
+  // the moment a decision recorded before its code existed can be given its
+  // place: the next look is asked to pair them, once.
+  noteEdits(scribe, who, seen.changed, await placesOf(host, scribe, who, seen.changed))
+
+  if (who.repo !== null && seen.commits.some(sha => !scribe.commits.has(sha))) {
+    committed(scribe, who.repo)
+  }
 
   // The developer's rows are told from every other by the prompt they sent.
   // Where no row holds it, their words are not labelled as theirs; that is
@@ -1769,6 +1866,27 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
       const plans = planBlock(scribe.plans.docs, scribe.wakes)
       const past = scribe.past.map((block, at) => (at === scribe.past.length - 1 ? { ...block, cache: true as const } : block))
       const allowed = new Set(scribe.places.keys())
+      // Scribe's own records of the session that point at no file yet, and the first commit that has some to place.
+      const unplaced = new Map(
+        scribe.written.flatMap(one =>
+          one.outcome !== 'held' && (one.anchors ?? []).length === 0 && typeof one.repo === 'string'
+            ? [[one.id, one] as const]
+            : [],
+        ),
+      )
+      const due = scribe.commitsToPair.find(
+        commit => commit.files.length > 0 && [...unplaced.values()].some(one => one.repo === commit.repo),
+      )
+      const pairing =
+        due === undefined
+          ? undefined
+          : {
+              repo: due.repo,
+              files: due.files.slice(0, MAX_COMMIT_FILES),
+              records: [...unplaced.values()]
+                .filter(one => one.repo === due.repo)
+                .map(one => ({ id: one.id, content: one.content })),
+            }
       const judged = {
         plans: scribe.plans.docs,
         saidNoReason: mentionsNoReason(seen.developer),
@@ -1806,7 +1924,8 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
           seen.dropped,
           shown,
           {
-            recorded: scribe.recorded,
+            recorded: scribe.recorded.map(one => ({ ...one, hasPlace: one.id === null ? undefined : !unplaced.has(one.id) })),
+            commit: pairing,
             stated: scribe.stated,
             asked: scribe.asked,
             told: [...scribe.band.told].slice(-MAX_LISTED),
@@ -1824,6 +1943,9 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         scribe.mark = markOf(rows.at(-1))
         scribe.hasPrompt = false
         scribe.hasActed = false
+        // Each commit is asked about once: the ones this look could be asked about are done with.
+        scribe.commitsToPair = []
+        scribe.lateProposed += woken.verdict.proposed ?? 0
         scribe.earlier = replies.slice(-MAX_PROPOSALS)
         scribe.anchored.clear()
         scribe.wakes += 1
@@ -1921,7 +2043,7 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
   }
 
   if (item?.kind === 'question' && item.form === 'reversal') {
-    defer(scribe, { draft: { ...item.draft, supersedes: null } })
+    defer(scribe, { draft: { ...item.draft, supersedes: null }, against: item.prior.id })
   }
 
   keep(host, band)

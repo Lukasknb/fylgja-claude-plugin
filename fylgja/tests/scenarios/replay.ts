@@ -66,6 +66,8 @@ type Step = {
   sent: number
   /** Of those, the characters that are not the standing instruction: the turn, what came before in brief, plans and records. */
   delta: number
+  /** Every model call of the turn: what kind it was, and how many characters it carried. */
+  calls: { kind: 'wake' | 'reason' | 'relation' | 'correction'; chars: number }[]
   /** What the first call of the turn's wake weighed, part by part, in characters. */
   weights: { instruction: number; plans: number; history: number; turn: number } | null
   /** Whether the turn was worth a look and got none because the hour's share of wakes was used up. */
@@ -205,6 +207,16 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
 
       if (world.step !== undefined) {
         world.step.sent += sent
+        world.step.calls.push({
+          kind: /^You check one thing/.test(request.system[0]?.text ?? '')
+            ? 'reason'
+            : /^You compare one new decision/.test(request.system[0]?.text ?? '')
+              ? 'relation'
+              : /^A knowledge base refused/.test(request.system[0]?.text ?? '')
+                ? 'correction'
+                : 'wake',
+          chars: sent,
+        })
         world.step.delta += request.prompt.reduce((sum, part) => sum + part.text.length, 0)
         world.step.weights ??= {
           instruction: request.system.reduce((sum, part) => sum + part.text.length, 0),
@@ -423,6 +435,7 @@ async function play(
         ms: 0,
         sent: 0,
         delta: 0,
+        calls: [],
         weights: null,
         isCapped: false,
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -485,6 +498,11 @@ async function play(
         if (policy === 'ignore') {
           Scribe.typed(host, scribe, '')
         }
+      }
+
+      // What agents did while the turn ran reaches the plugin as their own steps: paths and commit commands only.
+      for (const use of turn.agentUses ?? []) {
+        await Scribe.agentStepped(host, scribe, [use])
       }
 
       // The rows arrive as the turn runs, and each step of Claude's names its tool calls, as the plugin's own hook is told them.
@@ -569,6 +587,7 @@ async function play(
     stillDeferred: scribe.deferred.length,
     plans: scribe.plans.docs.length,
     lateAnchors: scribe.lateAnchors,
+    pairingsProposed: scribe.lateProposed,
     comparedWithRecorded: scribe.compared,
     foundContradicting: scribe.opposed,
     reasonsLookedFor: scribe.checked,

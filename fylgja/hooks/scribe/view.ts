@@ -226,6 +226,10 @@ function written(record: Written): Part[] {
   return [
     { text: drawn(record.content, MAX_CONTENT) },
     ...(record.replaced === null ? [] : [{ text: ` · replaces: ${drawn(record.replaced, MAX_OPTION)}`, tone: 'dim' } as const]),
+    // Written beside a recorded decision it may go against, because nobody said whether it replaces it.
+    ...(record.against === undefined
+      ? []
+      : [{ text: ` · may contradict an earlier decision ${shortId(record.against)}`, tone: 'dim' } as const]),
   ]
 }
 

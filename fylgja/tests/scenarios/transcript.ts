@@ -34,6 +34,12 @@ export type Turn = {
   rows: Row[]
   /** Whether the turn left plan mode with a plan. */
   hasPlan: boolean
+  /**
+   * What agents the session started did while the turn ran, as far as Scribe
+   * is told of it: each file they wrote or changed (the path alone) and each
+   * commit command, in the order they happened.
+   */
+  agentUses?: { name: string; input: Record<string, unknown> }[]
 }
 
 export type Recorded = {
@@ -340,4 +346,41 @@ export function labelOf(turn: Turn): string {
   const head = flat.length <= 60 ? flat : `${flat.slice(0, 59)}…`
 
   return turn.kind === 'prompt' ? head : turn.kind === 'other' ? `(${turn.source}) ${head}`.slice(0, 70) : `(${turn.kind})`
+}
+
+const CHANGING = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+/**
+ * What one line of an agent's own transcript holds for Scribe: the path of
+ * a file the agent wrote or changed, or a commit command, with when it
+ * happened. Nothing of what was written, and nothing the agent said.
+ */
+export function agentUsesOf(line: string): { at: number; name: string; input: Record<string, unknown> }[] {
+  let entry: unknown
+
+  try {
+    entry = JSON.parse(line)
+  } catch {
+    return []
+  }
+
+  if (!isRecord(entry) || entry.type !== 'assistant' || !isRecord(entry.message)) {
+    return []
+  }
+
+  const at = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : Number.NaN
+  const uses: { at: number; name: string; input: Record<string, unknown> }[] = []
+
+  for (const block of blocksOf(entry.message.content, 'tool_use')) {
+    const name = typeof block.name === 'string' ? block.name : ''
+    const input = isRecord(block.input) ? block.input : {}
+
+    if (CHANGING.has(name) && typeof input.file_path === 'string') {
+      uses.push({ at, name, input: { file_path: input.file_path } })
+    } else if (name === 'Bash' && typeof input.command === 'string' && /\bgit\b[^\n]*\bcommit\b/.test(input.command)) {
+      uses.push({ at, name, input: { command: 'git commit' } })
+    }
+  }
+
+  return Number.isFinite(at) ? uses : []
 }

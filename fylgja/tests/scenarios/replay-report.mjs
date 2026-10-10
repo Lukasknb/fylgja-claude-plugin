@@ -168,6 +168,8 @@ for (const [at, pass] of passes.entries()) {
     `|Own records rewritten in place / taken back|${summary.updates.length} / ${summary.withdrawals.length}|`,
     `|Records written without an anchor / of those, given a place later|${summary.records.filter(record => (record.anchors ?? []).length === 0).length} / ${new Set(summary.lateAnchors.filter(late => summary.records.some(record => record.id === late.id && (record.anchors ?? []).length === 0)).map(late => late.id)).size}|`,
     `|New decisions compared with records on their subject / found to go against one|${pass.counters.comparedWithRecorded ?? 0} / ${pass.counters.foundContradicting ?? 0}|`,
+    `|Pairings of a record with files the model proposed / places added|${pass.counters.pairingsProposed ?? 0} / ${pass.counters.lateAnchors ?? 0}|`,
+    `|Looks for a reason, in characters: each|${pass.steps.flatMap(step => (step.calls ?? []).filter(call => call.kind === 'reason').map(call => call.chars)).join(', ') || 'none'}|`,
     `|Tells offered|${summary.tells.length}|`,
     `|Decisions without a reason checked against the developer's words / reason found|${pass.counters.reasonsLookedFor ?? 0} / ${pass.counters.reasonsFound ?? 0}|`,
     `|Records not written because the session had touched no file of any repository|${pass.counters.notPlaced ?? 0}|`,

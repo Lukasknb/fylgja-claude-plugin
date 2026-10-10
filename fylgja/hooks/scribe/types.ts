@@ -65,6 +65,8 @@ export type Verdict = {
   stated: string[]
   /** Files of this session that carry out a decision Scribe recorded earlier in it: added to that record as anchors. */
   anchored?: { id: string; anchors: Anchor[] }[]
+  /** How many such pairings the model proposed, before any was checked. */
+  proposed?: number
 }
 
 /** A record as Fylgja returned it, as much as the band shows. Its texts are held as received and made safe where drawn. */
@@ -109,4 +111,9 @@ export type Written = {
   /** The repository it is filed under, and the places it points at: what a later anchor is checked against and added to. */
   repo?: string | null
   anchors?: Anchor[]
+  /**
+   * The id of a recorded decision it may go against: it was written beside
+   * that one because the question whether it replaces it went unanswered.
+   */
+  against?: string
 }
