@@ -3,7 +3,7 @@
  * state to its model so that a record passes the first time it is sent.
  *
  * Written by tests/scenarios/shape-from-gate.mjs out of the server's own
- * rules as they stood at its commit b6114a1c. Not edited by hand.
+ * rules as they stood at its commit 0a369ec7. Not edited by hand.
  */
 
 /** Words that may open a sentence before its instruction: "Never run …". */
@@ -218,6 +218,54 @@ export const INSTRUCTION_EXAMPLES: readonly string[] = [
 
 /** Statements they give as acceptable: how a decision is worded. */
 export const STATEMENT_EXAMPLES: readonly string[] = ['The live database is fylgja_rebuild']
+
+/** The server's rule for a decision, in its own words, and the two rewrites its refusal offers. */
+export const DECISION_RULE =
+  'a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done'
+export const DECISION_REWRITES =
+  '"<The thing> uses <the choice> for <the purpose>" or "Use <the choice> for <the purpose>, not <the other>"'
+
+/** Words a decision may not open with: who did it, when it was, how far it has got. Such a sentence is an account. */
+export const ACCOUNT_OPENERS: readonly string[] = [
+  'i',
+  "i'll",
+  "i'm",
+  "i've",
+  'my',
+  'our',
+  'we',
+  "we'll",
+  "we're",
+  "we've",
+  'already',
+  'apparently',
+  'currently',
+  'earlier',
+  'finally',
+  'fyi',
+  'he',
+  'it',
+  'just',
+  'lately',
+  'maybe',
+  'meanwhile',
+  'now',
+  'perhaps',
+  'probably',
+  'recently',
+  'she',
+  'so',
+  'still',
+  'tbd',
+  'they',
+  'today',
+  'todo',
+  'tomorrow',
+  'tonight',
+  'update',
+  'wip',
+  'yesterday',
+]
 
 /** Words a sentence opens with when it tells what happened or what is the case, and gives no instruction. */
 export const NARRATIVE_OPENERS: readonly string[] = [

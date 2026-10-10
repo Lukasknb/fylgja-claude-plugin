@@ -41,6 +41,13 @@ export const INSTRUCTION_EXAMPLES: readonly string[] = ${list(examples.filter(is
 /** Statements they give as acceptable: how a decision is worded. */
 export const STATEMENT_EXAMPLES: readonly string[] = ${list(examples.filter(sentence => !isInstruction(sentence)))}
 
+/** The server's rule for a decision, in its own words, and the two rewrites its refusal offers. */
+export const DECISION_RULE = ${JSON.stringify(gate.narrative.rule)}
+export const DECISION_REWRITES = ${JSON.stringify(gate.narrative.rewrites)}
+
+/** Words a decision may not open with: who did it, when it was, how far it has got. Such a sentence is an account. */
+export const ACCOUNT_OPENERS: readonly string[] = ${list([...gate.narrative.first_person, ...gate.narrative.report_openers])}
+
 /** Words a sentence opens with when it tells what happened or what is the case, and gives no instruction. */
 export const NARRATIVE_OPENERS: readonly string[] = ${list(gate.subjects)}
 

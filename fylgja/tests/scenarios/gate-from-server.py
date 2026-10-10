@@ -28,8 +28,61 @@ out = {
     "statement_verbs": gate._STATEMENT_VERBS.pattern,
     "status_phrases": gate._UNAMBIGUOUS_STATUS.pattern,
     "status_words": gate._AMBIGUOUS_STATUS.pattern,
+    # What a decision may not be: an account of what happened.
+    "narrative": {
+        "first_person": sorted(gate.FIRST_PERSON),
+        "report_openers": sorted(gate.REPORT_OPENERS),
+        "report_times": gate.REPORT_TIMES.pattern,
+        "past_forms": sorted(gate.PAST_FORMS),
+        "not_past_in_ed": sorted(gate.NOT_PAST_IN_ED),
+        "only_ever_a_verb": sorted(gate.ONLY_EVER_A_VERB),
+        "after_a_verb": sorted(gate.AFTER_A_VERB),
+        "relatives": sorted(gate._RELATIVES),
+        "main_verb_within": gate.MAIN_VERB_WITHIN,
+        "says": gate._NARRATIVE_SAYS,
+        "rule": gate._DECISION_RULE,
+        "rewrites": gate._DECISION_REWRITES,
+    },
     "hints": gate.HINT_BY_REASON,
     "examples": gate.EXAMPLE_BY_REASON,
 }
+
+# Sentences of every shape the gate tells apart, with what the server itself says of each: the stand-in's own
+# reading of the rules is checked against these (gate-selfcheck.mjs), so that it cannot drift from the server's.
+# Every sentence here is made up for the purpose.
+SUBJECTS = ["The reducer", "Rows without a start", "The old job", "Lukas", "A deduplicated upload", "`is_default`", "Meetings uploaded by daemons"]
+TAILS = ["rejects stale tokens", "stay NULL", "was killed", "chose Redis for the queue", "adds its uploader as an attendee", "finished without errors", "failed", "uses offset paging", "moved to Postgres", "is a Postgres advisory lock", "get their times from the daemon"]
+SENTENCES = (
+    [f"{subject} {tail}." for subject in SUBJECTS for tail in TAILS]
+    + [f"{opener.capitalize()} the queue uses Postgres." for opener in sorted(gate.FIRST_PERSON | gate.REPORT_OPENERS)]
+    + [f"{verb.capitalize()} the retry queue before the worker starts." for verb in ["use", "never", "backfill", "flag", "render", "translate", "gate", "identify", "name", "record", "reconstruct", "investigating", "fixed", "page", "launch"]]
+    + [
+        "Is the queue lock a Postgres advisory lock?",
+        "The queue lock is on main now.",
+        "The deploy went out this morning.",
+        "The index moved two days ago.",
+        "Use `was_live=False` for rows that were created before the cutover.",
+        "Rows that were created before the cutover keep NULL.",
+        "`src/a.py` (the worker) \"runs\" 08:00.",
+        "Flag a silent transcript for review.",
+        "PLA-266 pending.",
+        "Use Postgres. It is already there.",
+        "x" * 230,
+    ]
+)
+out["cases"] = []
+for kind in ("decision", "gotcha", "correction"):
+    for sentence in SENTENCES:
+        triggers = ["queue"] if kind == "gotcha" else []
+        verdict = gate.check_memory(sentence, "because it is so" if kind == "decision" else None, kind, triggers)
+        out["cases"].append(
+            {
+                "kind": kind,
+                "content": sentence,
+                "triggers": triggers,
+                "refusal": None if verdict.ok else gate.refusal_text(verdict.reason_code, verdict.hint),
+            }
+        )
+
 target = pathlib.Path(__file__).with_name("server-gate.json")
 target.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

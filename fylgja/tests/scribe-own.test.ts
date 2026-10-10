@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { SYSTEM } from '../hooks/scribe/prompt'
-import { CONDITIONAL_OPENERS, SHAPE_LIMITS, VERB_OPENERS } from '../hooks/scribe/shape'
+import { ACCOUNT_OPENERS, CONDITIONAL_OPENERS, DECISION_RULE, SHAPE_LIMITS, VERB_OPENERS } from '../hooks/scribe/shape'
 import { answer, idOf } from './fixtures'
 import { claude, decision, dev, edit, fact, NOTHING, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 
@@ -158,7 +158,12 @@ describe('the shape the server takes is in the instruction', () => {
     expect(SYSTEM).toMatch(` ${VERB_OPENERS.slice(0, 6).join(' ')} `)
     expect(SYSTEM).toMatch(' page ')
     expect(SYSTEM).toMatch(`ONE sentence of at most ${SHAPE_LIMITS.content} characters`)
-    expect(SYSTEM).toMatch('holds one of the words "is", "are", "must", "stays", "becomes"')
+    expect(SYSTEM, 'a correction may be a statement with one of the server’s statement words').toMatch(
+      'holds one of the words "is", "are", "must", "stays", "becomes"',
+    )
+    expect(SYSTEM, 'a decision is said in whatever words say what holds, by the server’s own rule').toMatch(DECISION_RULE)
+    expect(SYSTEM).toMatch(`opens with one of ${ACCOUNT_OPENERS.slice(0, 4).join(', ')}`)
+    expect(SYSTEM).toMatch('do not put "Always" before it')
     expect(SYSTEM).toMatch('"open PR"')
   })
 })

@@ -24,6 +24,7 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import * as Band from '../../hooks/scribe/band'
+import { choicesOf } from '../../hooks/scribe/delta'
 import type { Row } from '../../hooks/scribe/delta'
 import { REFUSED, verdictFor } from '../../hooks/scribe/grant'
 import * as Scribe from '../../hooks/scribe/scribe'
@@ -79,6 +80,10 @@ type Step = {
   lost: number
   questions: { form: string; text: string; options: string[]; prior: string | null }[]
   tells: { id: string; text: string }[]
+  /** What the developer chose in the turn when Claude put a question to them: each question, what was offered, what they chose. */
+  chose: { question: string; offered: string[]; chosen: string }[]
+  /** How many plans they approved in it. */
+  approved: number
   /** What the band showed when the turn was over. */
   shown: string | null
   keys: string[]
@@ -422,6 +427,25 @@ async function play(
         lost: 0,
         questions: [],
         tells: [],
+        chose: turn.rows.flatMap(row =>
+          row.toolUses.flatMap(use =>
+            use.tool === 'AskUserQuestion' && use.isError !== true
+              ? choicesOf(use.input, use.text).map(choice => ({
+                  question: choice.question,
+                  offered: choice.offered.map(
+                    option => `${option.label}${option.description === '' ? '' : ` (${option.description})`}`,
+                  ),
+                  chosen: choice.chosen,
+                }))
+              : [],
+          ),
+        ),
+        approved: turn.rows.reduce(
+          (sum, row) =>
+            sum +
+            row.toolUses.filter(use => use.tool === 'ExitPlanMode' && use.isError !== true && use.text !== undefined).length,
+          0,
+        ),
         shown: null,
         keys: [],
       }

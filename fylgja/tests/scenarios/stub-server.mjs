@@ -13,6 +13,8 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
+import { GATE, gate, refusalText } from './stub-gate.mjs'
+
 const scenarios = JSON.parse(readFileSync(process.env.SCRIBE_SCENARIOS, 'utf8'))
 const LOG = process.env.SCRIBE_STUB_LOG
 
@@ -36,94 +38,8 @@ const json = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }
 const failed = text => ({ content: [{ type: 'text', text }], isError: true })
 const everything = () => [...held.values()].flat()
 
-// ---- the server's gate (domain/services/memory_gate.py) ----
-// Its word lists and refusal texts are read from server-gate.json, which gate-from-server.py writes out of the server's
-// own file; nothing of them is typed here.
-const GATE = JSON.parse(readFileSync(new URL('./server-gate.json', import.meta.url), 'utf8'))
-const OPENERS = [...GATE.conditionals, ...GATE.verbs]
-const SUBJECTS = new Set(GATE.subjects)
-const STATES = /\b(is|are|must|stays|becomes)\b/i
-const STATUS = /\b(open PR|draft PR|in review|awaiting review|blocked on|waiting for|as of 20\d\d|is now live)\b/i
-const STATUS_WORD = /\b(merged|pending|landed|WIP|awaiting|deployed on)\b/gi
-const STATUS_ANCHOR = /#\d+|\b[A-Z]{2,6}-\d+\b|\b20\d\d-\d{2}-\d{2}\b|\b20\d\d\b/g
-const TICKET = /#\d+|\b[A-Z]{2,6}-\d+\b/g
-const HINTS = GATE.hints
-
-/** What the gate says of a sentence that does not open with an instruction: the word it opened with, the rule, two rewrites. */
-function notImperative(sentence) {
-  const word = sentence.match(/^[A-Za-z][A-Za-z'_-]*/)?.[0].slice(0, GATE.max_echoed_word)
-  const rule = HINTS.not_imperative
-
-  if (word === undefined) {
-    return `content does not open with a word. Rule: ${rule}. Rewrite it as, for example, "Run <the command> when <the symptom>" or "Never <do this> without <that>"`
-  }
-
-  const verb = word.toLowerCase()
-
-  return SUBJECTS.has(verb) || verb.endsWith('ed') || verb.endsWith('ing')
-    ? `content opens with "${word}", which tells what happened or what is the case. Rule: ${rule}. State the rule that came out of it, for example "Always <do this> before <that>" or "Check <this> when <that happens>"`
-    : `content opens with "${word}", which is not an opener the gate knows as an instruction. Rule: ${rule}. Keep your sentence and open it with one it knows, for example "Always ${verb} <…>" or "Use <…> to ${verb} <…>"`
-}
-
-/** The one line a refused write gets: its code, what to do, and one acceptable rewrite. */
-function refusal(rule, content) {
-  const hint = rule === 'not_imperative' ? notImperative(String(content ?? '').trim()) : HINTS[rule]
-  const example = GATE.examples[rule]
-
-  return failed(example === undefined ? `refused:${rule} — ${hint}` : `refused:${rule} — ${hint}. Acceptable instead: ${example}`)
-}
-
-function readsAsStatus(text) {
-  if (STATUS.test(text)) {
-    return true
-  }
-
-  const anchors = [...text.matchAll(STATUS_ANCHOR)].map(match => [match.index, match.index + match[0].length])
-
-  return [...text.matchAll(STATUS_WORD)].some(word =>
-    anchors.some(([from, to]) => word.index + word[0].length >= from - 40 && word.index <= to + 40),
-  )
-}
-
-function gate(kind, content, detail, triggers, reasonStatus, alternatives) {
-  const sentence = String(content ?? '').trim()
-  const both = `${sentence}\n${detail ?? ''}`
-  const opens = OPENERS.some(opener =>
-    new RegExp(`^${opener.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(sentence.toLowerCase()),
-  )
-  const rules = [
-    ['too_long', sentence.length > 220],
-    ['detail_too_long', typeof detail === 'string' && detail.trim().length > 1200],
-    ['not_one_sentence', (sentence.replace(/`[^`]*`/g, ' ').match(/[.!?](?:\s|$)/g) ?? []).length > 1],
-    ['status_not_memory', readsAsStatus(both) || (both.match(TICKET) ?? []).length > 2],
-    ['not_imperative', !(opens || ((kind === 'decision' || kind === 'correction') && STATES.test(sentence)))],
-    ['no_trigger', (kind === 'gotcha' || kind === 'runbook') && !(triggers ?? []).some(trigger => String(trigger).trim() !== '')],
-  ]
-  const broken = rules.find(([, isBroken]) => isBroken)?.[0]
-
-  if (broken !== undefined) {
-    return broken
-  }
-
-  const hasReason = String(detail ?? '').trim() !== ''
-  const options = alternatives ?? []
-
-  if (kind !== 'decision') {
-    return reasonStatus !== undefined || options.length > 0 ? 'not_a_decision' : undefined
-  }
-
-  if (options.length > 6 || options.some(option => String(option).length > 220)) {
-    return 'alternatives_too_many'
-  }
-
-  if (reasonStatus === undefined) {
-    return hasReason ? undefined : 'reason_missing'
-  }
-
-  return (reasonStatus === 'stated' && !hasReason) || (reasonStatus === 'not_stated' && hasReason)
-    ? 'reason_contradiction'
-    : undefined
-}
+// ---- the server's gate (domain/services/memory_gate.py): see stub-gate.mjs ----
+const refusal = (rule, content, kind) => failed(refusalText(rule, content, kind))
 
 // ---- the server's anchor rules (domain/services/code_anchor.py) ----
 const PATH_RULE =
@@ -319,7 +235,7 @@ function call(name, args) {
     const rule = gate(args.kind ?? 'gotcha', args.content, args.detail, args.triggers, args.reason_status, args.alternatives)
 
     if (rule !== undefined) {
-      return refusal(rule, args.content)
+      return refusal(rule, args.content, args.kind ?? 'gotcha')
     }
 
     // No more than the server's own number of records from one session and one author inside its window; the next is refused.
@@ -434,7 +350,7 @@ function call(name, args) {
     )
 
     if (rule !== undefined) {
-      return refusal(rule, content)
+      return refusal(rule, content, record.type)
     }
 
     const gone = args.remove_anchors ?? []

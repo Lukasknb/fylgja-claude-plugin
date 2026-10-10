@@ -74,7 +74,7 @@ sed "s#'\.\./\.\./hooks/#'../#g" "$here/replay.ts" > "$copy/hooks/replay/replay.
 sed "s#'\.\./\.\./hooks/#'../#g" "$here/transcript.ts" > "$copy/hooks/replay/transcript.ts"
 echo '{ "modules": ["./replay/replay.ts"] }' > "$copy/hooks/hooks.json"
 echo '{ "name": "fylgja", "version": "0.0.0", "description": "Scribe replay." }' > "$copy/.claude-plugin/plugin.json"
-cp "$here/stub-server.mjs" "$here/server-gate.json" "$copy/"
+cp "$here/stub-server.mjs" "$here/stub-gate.mjs" "$here/server-gate.json" "$copy/"
 cat > "$copy/.mcp.json" <<JSON
 { "mcpServers": { "fylgja": { "command": "node", "args": ["$copy/stub-server.mjs"],
   "env": { "SCRIBE_SCENARIOS": "$out/scenarios.json", "SCRIBE_STUB_LOG": "$out/stub.log", "SCRIBE_STUB_CLOCK": "$out/clock" } } } }

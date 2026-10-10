@@ -9,7 +9,10 @@
 
 import type { PlanDoc } from './plans'
 import {
+  ACCOUNT_OPENERS,
   CONDITIONAL_OPENERS,
+  DECISION_REWRITES,
+  DECISION_RULE,
   INSTRUCTION_EXAMPLES,
   SHAPE_LIMITS,
   STATEMENT_EXAMPLES,
@@ -31,10 +34,10 @@ const quoted = (words: readonly string[]): string => words.map(word => `"${word}
  * acceptable. Stated once, in the instruction, so that a record passes the
  * first time it is sent.
  */
-const SHAPE = `The knowledge base takes a sentence in one of two shapes, by its kind.
-  A decision is a STATEMENT of what is so. It names its subject and holds one of the words ${quoted(STATEMENT_WORDS)}: ${quoted(STATEMENT_EXAMPLES)}, "The queue lock is a Postgres advisory lock, not Redlock", "Meeting times are taken from the daemon's clock, not from recorded_at". One of those words must stand in the sentence, literally: a statement with any other verb is refused. So write "The detector must reject corked streams" or "Corked streams are rejected by the detector", not "The detector rejects corked streams"; "Times are taken from the daemon's clock", not "Times come from the daemon's clock"; "The website is a Vite single-page app", not "The website uses Vite". Never turn a decision into an order: what was decided is how things are, not a command to the reader, and "Always …" claims more than was decided.
-  A gotcha or a correction is an INSTRUCTION. It opens with one of these words: ${CONDITIONAL_OPENERS.join(', ')}; or with one of these verbs and no other: ${VERB_OPENERS.join(' ')}. As in ${quoted(INSTRUCTION_EXAMPLES)}. When the verb you want is not in that list, word it with one that is ("Use …", "Keep …", "Run …") or open with "When …" or "Before …".
-  A sentence in neither shape is refused. Either way a record is a rule, not a report of where something stands: no ticket numbers, no dates, none of ${quoted(STATUS_PHRASES)}, and none of ${quoted(STATUS_WORDS)} beside a ticket, a pull request or a date.`
+const SHAPE = `The knowledge base takes a sentence by its kind.
+  A decision says what holds: ${DECISION_RULE}. Any words that say it will do, as a statement ("The reducer rejects stale tokens", "Rows without a start stay NULL", ${quoted(STATEMENT_EXAMPLES)}) or as an instruction ("Use offset paging for the audit log, not a cursor"). The server's own patterns are ${DECISION_REWRITES}. Say it the way it was decided: do not make a statement into an order, and do not put "Always" before it. It is refused when it reads as an account of what happened: a question; a sentence that opens with one of ${ACCOUNT_OPENERS.join(', ')}, or with a word ending in -ing; one that says when it was ("today", "yesterday", "this week", "two days ago", or "now" at its end); or one whose verb, among its first four words, is a past form ("fixed", "chose", "moved", "was killed", "failed").
+  A gotcha or a correction is an INSTRUCTION. It opens with one of these words: ${CONDITIONAL_OPENERS.join(', ')}; or with one of these verbs and no other: ${VERB_OPENERS.join(' ')}. As in ${quoted(INSTRUCTION_EXAMPLES)}. When the verb you want is not in that list, word it with one that is ("Use …", "Keep …", "Run …") or open with "When …" or "Before …". A correction may instead be a statement that holds one of the words ${quoted(STATEMENT_WORDS)}.
+  Whatever its kind a record is a rule, not a report of where something stands: no ticket numbers, no dates, none of ${quoted(STATUS_PHRASES)}, and none of ${quoted(STATUS_WORDS)} beside a ticket, a pull request or a date.`
 
 export const SYSTEM = `You are Scribe, a background note-taker inside a coding session. You never talk to the developer or to the coding assistant. You read what the developer and the coding assistant (Claude) did since you last looked, and decide whether anything belongs in the team's knowledge base, so that a later reader of the code can find out WHY it was built that way. You answer with one JSON object and nothing else.
 
