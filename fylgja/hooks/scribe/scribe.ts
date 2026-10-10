@@ -169,6 +169,18 @@ export type Scribe = {
   spoken: string[]
   /** How many of the oldest prompts were let go to keep that within its length. */
   unspoken: number
+  /** What the developer decided without typing a prompt, each once: a turn's rows are read again until a wake has been through them. */
+  acted: Set<string>
+  /** Whether they decided something since Scribe last came to a verdict. */
+  hasActed: boolean
+  /**
+   * What the assistant wrote in the turn in hand and in the one before, for
+   * one purpose: a reason it gave for something it proposed, which the
+   * developer then accepted, is looked for here.
+   */
+  proposals: string[]
+  /** What it wrote in the turn before, kept until the next wake. */
+  earlier: string[]
   /** How many times a decision without a reason was checked against what the developer wrote, and how often a reason was there. */
   checked: number
   found: number
@@ -234,6 +246,10 @@ export const MAX_STATED = 20
 /** No more of what the developer wrote is kept for a session than this, in characters; the oldest prompts go first. */
 export const MAX_SPOKEN_CHARS = 30_000
 
+/** No more of the assistant's replies are handed to the look for a reason than this, and no more of each. */
+const MAX_PROPOSALS = 6
+const MAX_PROPOSAL_CHARS = 2500
+
 /** One lookup of files asks about no more repositories than this; the rest wait for the next. */
 const MAX_LOOKUP_REPOS = 3
 
@@ -277,6 +293,10 @@ export function create(options: Options): Scribe {
     unplaced: 0,
     spoken: [],
     unspoken: 0,
+    acted: new Set(),
+    hasActed: false,
+    proposals: [],
+    earlier: [],
     checked: 0,
     found: 0,
     anchored: new Map(),
@@ -326,6 +346,10 @@ export function startOver(scribe: Scribe): void {
   scribe.stated = []
   scribe.spoken = []
   scribe.unspoken = 0
+  scribe.acted.clear()
+  scribe.hasActed = false
+  scribe.proposals = []
+  scribe.earlier = []
   scribe.anchored.clear()
   scribe.deferred = []
 }
@@ -1124,7 +1148,7 @@ async function withReason(
   }
 
   // With nothing to look in, there is nothing to find.
-  if (scribe.spoken.length === 0 && scribe.plans.docs.length === 0) {
+  if (scribe.spoken.length === 0 && scribe.plans.docs.length === 0 && scribe.proposals.length === 0) {
     return { draft, isAbsent: true }
   }
 
@@ -1144,6 +1168,7 @@ async function withReason(
     spoken: scribe.spoken,
     unspoken: scribe.unspoken,
     plans: scribe.plans.docs,
+    proposals: scribe.proposals,
     timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
   })
 
@@ -1232,13 +1257,19 @@ async function apply(
 
     Band.receive(band, [one])
 
-    // Asked only when the reason was looked for and is nowhere.
+    // Asked only when the reason was looked for and is nowhere, and only
+    // about a decision a later reader of the code would trip over: one that
+    // concerns code in hand or ruled something out. The bar for asking is
+    // higher than the bar for recording.
+    const isWorthAsking = checked.draft.anchors.length > 0 || checked.draft.alternatives.length > 0
+
     if (
       isAskedOf &&
       question.form === 'reason' &&
       one.reasonStatus === 'not_stated' &&
       one.outcome !== 'held' &&
-      checked.isAbsent
+      checked.isAbsent &&
+      isWorthAsking
     ) {
       Band.offerQuestion(
         band,
@@ -1560,9 +1591,26 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   await flush(host, scribe, who)
 
   const now = await host.now()
-  const isWorthAsking = seen.lines.length > 0 && (seen.hasChange || seen.words >= QUIET_TURN_CHARS)
+  // What the developer decided without typing: an answer to a question put
+  // to them, a plan approved, a plan or a call turned down with a word. Kept
+  // with their prompts, each once, and enough to make the turn theirs: a
+  // turn a background task began is looked at when they decided something in it.
+  for (const act of seen.acts) {
+    if (!scribe.acted.has(act)) {
+      scribe.acted.add(act)
+      spoke(scribe, act.replace(/\s+/g, ' ').trim())
+      scribe.hasActed = true
+    }
+  }
 
-  if (scribe.hasPrompt && isWorthAsking && mayWake(host, scribe, now)) {
+  const isWorthAsking = seen.lines.length > 0 && (seen.hasChange || seen.words >= QUIET_TURN_CHARS || scribe.hasActed)
+
+  // What the assistant said in this turn and the one before it, cut to a length.
+  const replies = seen.lines.filter(line => line.startsWith('[claude] ')).map(line => line.slice(9))
+
+  scribe.proposals = [...scribe.earlier, ...replies].slice(-MAX_PROPOSALS).map(reply => reply.slice(0, MAX_PROPOSAL_CHARS))
+
+  if ((scribe.hasPrompt || scribe.hasActed) && isWorthAsking && mayWake(host, scribe, now)) {
     scribe.wakingSince = now
     scribe.wakeTimes.push(now)
 
@@ -1611,6 +1659,8 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         scribe.consumed = rows.length
         scribe.mark = markOf(rows.at(-1))
         scribe.hasPrompt = false
+        scribe.hasActed = false
+        scribe.earlier = replies.slice(-MAX_PROPOSALS)
         scribe.anchored.clear()
         scribe.wakes += 1
         await apply(host, scribe, who, woken.verdict, woken.facts, {
@@ -1655,6 +1705,20 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   settle(host, scribe)
 }
 
+/** Keeps something the developer wrote or chose, for the session, within its length: the oldest go first. */
+function spoke(scribe: Scribe, text: string): void {
+  if (text === '') {
+    return
+  }
+
+  scribe.spoken.push(text)
+
+  for (let size = scribe.spoken.reduce((sum, one) => sum + one.length, 0); size > MAX_SPOKEN_CHARS && scribe.spoken.length > 1;) {
+    size -= scribe.spoken.shift()?.length ?? 0
+    scribe.unspoken += 1
+  }
+}
+
 /**
  * The developer sent a prompt. Only what is already in hand is worked on,
  * and nothing is waited for: the prompt goes on at once.
@@ -1672,17 +1736,7 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
 
   // The developer's own words are kept for the session: a reason they gave
   // is looked for here before they are asked for it.
-  if (plain(text) !== '') {
-    scribe.spoken.push(plain(text))
-
-    for (
-      let size = scribe.spoken.reduce((sum, one) => sum + one.length, 0);
-      size > MAX_SPOKEN_CHARS && scribe.spoken.length > 1;
-    ) {
-      size -= scribe.spoken.shift()?.length ?? 0
-      scribe.unspoken += 1
-    }
-  }
+  spoke(scribe, plain(text))
 
   for (const old of scribe.prompts) {
     if (scribe.prompts.size <= MAX_PROMPTS) {

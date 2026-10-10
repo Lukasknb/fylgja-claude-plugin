@@ -190,6 +190,62 @@ describe('a recorded session is read into the turns of its main conversation', (
     expect(seen.commits).toEqual(['1a2b3c4'])
   })
 
+  test('an answer the developer gave to a question, in a turn a background task began, is there as their choice', () => {
+    const question = 'Which lock should the retry queue use?'
+    const recorded = recordedOf([
+      line('user', '<task-notification>agent finished</task-notification>', { origin: { kind: 'task-notification' } }),
+      calls('q1', 'AskUserQuestion', {
+        questions: [
+          {
+            question,
+            header: 'Lock',
+            multiSelect: false,
+            options: [
+              { label: 'Postgres advisory lock', description: 'No new service.' },
+              { label: 'Redis lock', description: 'Fast, but one more service.' },
+            ],
+          },
+        ],
+      }),
+      returns(
+        'q1',
+        `Your questions have been answered: "${question}"="Postgres advisory lock". You can now continue with the user's answers in mind.`,
+      ),
+      says('Going with the advisory lock.'),
+    ])
+    const [turn] = recorded.turns
+
+    expect(turn?.kind, 'no prompt of the developer began it').toBe('other')
+
+    const seen = observe(turn?.rows ?? [], ROOT, new Set())
+
+    expect(seen.lines).toContain(
+      `[developer chose] Question: ${question} | Offered: Postgres advisory lock (No new service.); Redis lock (Fast, but one more service.) | Chosen: Postgres advisory lock`,
+    )
+    expect(seen.acts.length).toBe(1)
+    expect(seen.lines.join('\n'), 'what the task reported is not handed over').not.toMatch('agent finished')
+    expect(seen.lines).toContain('[claude] Going with the advisory lock.')
+  })
+
+  test('a plan the developer approved, and one they turned down with a word, are there as theirs', () => {
+    const recorded = recordedOf([
+      human('plan the lock'),
+      calls('p1', 'ExitPlanMode', { plan: '# Plan\n\nUse Redis.' }),
+      returns(
+        'p1',
+        "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nno Redis, we have Postgres",
+        true,
+      ),
+      calls('p2', 'ExitPlanMode', { plan: '# Plan\n\nUse a Postgres advisory lock.' }),
+      returns('p2', 'User has approved your plan. You can now start coding.'),
+    ])
+    const seen = observe(recorded.turns[0]?.rows ?? [], ROOT, new Set([plain('plan the lock')]))
+
+    expect(seen.lines).toContain('[developer rejected ExitPlanMode] no Redis, we have Postgres')
+    expect(seen.lines).toContain('[developer approved the plan]')
+    expect(seen.acts).toEqual(['no Redis, we have Postgres', 'The developer approved the plan.'])
+  })
+
   test('a session of an older build, which does not say what began a turn, has every plain prompt taken as the developer’s', () => {
     const recorded = recordedOf([
       line('user', 'make the mailer retry'),

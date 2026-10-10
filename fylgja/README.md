@@ -147,8 +147,16 @@ at a time.
   own words, quoted, or "absent". A quote is taken only if it stands in
   what you wrote, or in a plan, word for word; then the decision is
   recorded with that reason and you are not asked. Only on "absent" is
-  the question put. When the reason turns up in a later turn, the
-  question goes and the record is given the reason.
+  the question put. A quote that only says the decision again is not a
+  reason and is not taken (seven tenths of its words being the
+  decision's own words is the line). The same request is shown what
+  Claude wrote in the turn and the one before: when Claude gave the
+  reason for something it proposed and you accepted it without
+  objecting, that is recorded as the reason, marked "proposed by the
+  assistant, accepted by the developer". And a question is only for a
+  decision that concerns code in hand or ruled something out; a decision
+  with neither is recorded and nobody is asked. When the reason turns up
+  in a later turn, the question goes and the record is given the reason.
 - **It asks before anything is replaced.** When a new decision goes against
   a recorded one, the new one is not written until you have said which it
   is: `1 Yes, it replaces it  2 No, tell Claude  3 Different case  0 Skip`.
@@ -335,7 +343,10 @@ Scribe thinks with Sonnet, on your own Claude plan. Claude Code shows no
 cost line for these requests, so here is what they are.
 
 - **When a model is asked.** Once at the end of a turn that you started
-  with a prompt. Not for a turn a background task or a hook started, not
+  with a prompt, or in which you decided something without typing one:
+  you answered a question Claude put to you, approved a plan, or turned a
+  plan or an action down with a word. Not for a turn a background task or
+  a hook started in which you did none of that, not
   for a turn that changed no file and holds under 200 characters of talk
   (its lines are read with the next turn's), and no more than 30 times in
   any hour; past that Scribe is quiet until the hour has rolled on. A
@@ -447,7 +458,10 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   none of them holds your prompt: the start of a session and a step wait
   a second and a half at most.
 - **Sent to the model, by Scribe:** at the end of a turn, what happened in
-  it: the prompts you sent, Claude's replies, and one line per tool call
+  it: the prompts you sent, your answers to questions Claude put to you
+  (the question, the options offered with what each was said to mean,
+  and the one you chose), what you said when you turned a plan or an
+  action down, Claude's replies, and one line per tool call
   (the tool, the file or the command, whether it worked; of what a shell
   command printed, the first 160 characters when it failed or made a
   commit, and nothing otherwise). Files read one after the other are one
@@ -458,14 +472,17 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   its headings only. Scribe also keeps, in memory, up to twenty short
   sentences of reasons and constraints you stated in the session, and
   sends them along. And it keeps, in memory and for the session, the
-  prompts you sent themselves, up to 30,000 characters of them (the
-  oldest go first): they are sent, with the plan documents and one
+  prompts you sent themselves and the choices you made, up to 30,000
+  characters of them (the oldest go first; a background task's report is
+  never among them): they are sent, with the plan documents and one
   sentence of a decision, in the small request that looks for a reason
   you already gave before you are asked for it. No file's contents and no
   other tool output, with one exception: the text of a plan document as
   described above, at most three of them, 12,000 characters each and
   24,000 together. A background task's report, a skill's text and a
-  summary after compaction are not your words and are left out. With it go
+  summary after compaction are not your words and are left out. When a
+  turn is too long, tool lines are dropped first, then Claude's oldest
+  replies; what you wrote or chose is never what is dropped. With it go
   the Fylgja records Scribe looked up for that turn. This goes to your
   model provider through Claude Code, on your own Claude plan; how much,
   and how often, is under "What Scribe costs".

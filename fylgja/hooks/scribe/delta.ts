@@ -44,6 +44,12 @@ export type Seen = {
   plans: PlanSighting[]
   /** Everything the developer wrote, for checks on their own words. */
   developer: string
+  /**
+   * What the developer decided without typing a prompt: each answer to a
+   * question Claude put to them, and each word of theirs on a plan or a tool
+   * call they turned down. Their own words, to be kept with their prompts.
+   */
+  acts: string[]
   /** Whether a file was written or changed, or a commit made. */
   hasChange: boolean
   /** How many characters the developer and Claude wrote between them. */
@@ -208,6 +214,70 @@ function lineOf(
 
 const CHANGING: ReadonlySet<string> = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
+const MAX_QUESTION = 300
+const MAX_OPTION_TEXT = 200
+const MAX_CHOSEN = 600
+
+/** One choice the developer made between options Claude offered: the question, what was offered, and what they chose. */
+export type Choice = { question: string; offered: { label: string; description: string }[]; chosen: string }
+
+/**
+ * The developer's answers to the questions of one `AskUserQuestion` call,
+ * read from the call and from what it returned. The engine writes each
+ * answer back as `"<question>"="<answer>"`; an answer is what stands between
+ * its own question and the next. A question that got no answer is left out.
+ */
+export function choicesOf(input: Record<string, unknown>, printed: string | undefined): Choice[] {
+  const asked = (Array.isArray(input.questions) ? input.questions : []).flatMap(one =>
+    isRecord(one) && typeof one.question === 'string' && one.question !== '' ? [one] : [],
+  )
+  const text = printed ?? ''
+  const marks = asked.map(one => text.indexOf(`"${String(one.question)}"="`))
+  const choices: Choice[] = []
+
+  for (const [at, one] of asked.entries()) {
+    const mark = marks[at] ?? -1
+
+    if (mark === -1) {
+      continue
+    }
+
+    const question = String(one.question)
+    const from = mark + question.length + 4
+    const next = Math.min(...marks.filter(other => other > mark), Number.POSITIVE_INFINITY)
+    // Up to the quote that closes it: the one before the next question, or the last of the text.
+    const until = next === Number.POSITIVE_INFINITY ? text.lastIndexOf('"') : text.lastIndexOf('"', next - 1)
+    const chosen = text.slice(from, until > from ? until : text.length).trim()
+
+    if (chosen !== '') {
+      choices.push({
+        question,
+        offered: (Array.isArray(one.options) ? one.options : []).flatMap(option =>
+          isRecord(option) && typeof option.label === 'string'
+            ? [{ label: option.label, description: typeof option.description === 'string' ? option.description : '' }]
+            : [],
+        ),
+        chosen,
+      })
+    }
+  }
+
+  return choices
+}
+
+// How the engine words a tool call the developer turned down, before what they said about it.
+const REJECTED = /The user doesn't want to proceed with this tool use/
+const FEEDBACK = /the user said:\s*([\s\S]+)$/i
+
+/** What the developer said when they turned a tool call down; empty when they said nothing. */
+function feedbackOf(printed: string | undefined): string | undefined {
+  if (printed === undefined || !REJECTED.test(printed)) {
+    return undefined
+  }
+
+  return FEEDBACK.exec(printed)?.[1]?.trim() ?? ''
+}
+
 // Calls that keep Claude's own books or wait on its own tasks: they say
 // nothing of what was decided, and are left out of what a wake is told.
 const BOOKKEEPING: ReadonlySet<string> = new Set([
@@ -291,6 +361,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
   const commits: string[] = []
   const plans: PlanSighting[] = []
   const developer: string[] = []
+  const acts: string[] = []
   let hasChange = false
   let words = 0
 
@@ -315,8 +386,41 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
 
       const line = lineOf(use.tool, input, use.text, isError, root)
       const last = lines.at(-1)
+      const choices = use.tool === 'AskUserQuestion' && !isError ? choicesOf(input, use.text) : []
+      const feedback = isError ? feedbackOf(use.text) : undefined
 
-      if (BOOKKEEPING.has(use.tool)) {
+      if (choices.length > 0) {
+        // The developer's own choice between named options: theirs as a prompt is.
+        for (const choice of choices) {
+          const offered = choice.offered
+            .map(
+              option =>
+                `${clip(option.label, MAX_OPTION_TEXT)}${option.description === '' ? '' : ` (${clip(option.description, MAX_OPTION_TEXT)})`}`,
+            )
+            .join('; ')
+          const told = `Question: ${clip(choice.question, MAX_QUESTION)} | Offered: ${offered} | Chosen: ${clip(choice.chosen, MAX_CHOSEN)}`
+
+          lines.push(`[developer chose] ${told}`)
+          developer.push(choice.chosen)
+          // Kept with their prompts: the question, their answer, and what the chosen option was said to mean.
+          acts.push(
+            `Asked "${choice.question}" the developer chose "${choice.chosen}"${choice.offered
+              .filter(option => choice.chosen.includes(option.label) && option.description !== '')
+              .map(option => `, an option described as: ${option.description}`)
+              .join('')}`,
+          )
+          words += choice.question.length + choice.chosen.length
+        }
+      } else if (feedback !== undefined && feedback !== '') {
+        // A plan or a call the developer turned down, with what they said: a correction in their own words.
+        lines.push(`[developer rejected ${clip(use.tool, 40)}] ${clip(feedback, MAX_PROMPT)}`)
+        developer.push(feedback)
+        acts.push(feedback)
+        words += feedback.length
+      } else if (use.tool === 'ExitPlanMode' && !isError && use.text !== undefined) {
+        lines.push('[developer approved the plan]')
+        acts.push('The developer approved the plan.')
+      } else if (BOOKKEEPING.has(use.tool)) {
         // Left out.
       } else if (use.tool === 'Read' && !isError && last !== undefined && READS.test(last) && last.length < MAX_READS) {
         // Files read one after the other are one line.
@@ -356,9 +460,21 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
   let size = lines.reduce((sum, line) => sum + line.length + 1, 0)
   let dropped = 0
 
-  while (size > MAX_DELTA_CHARS && lines.length > 1) {
-    size -= (lines.shift()?.length ?? 0) + 1
-    dropped += 1
+  // A turn too long to hand over loses its tool lines first, oldest first,
+  // then its notices, then Claude's oldest replies. What the developer wrote
+  // or chose is never what goes.
+  for (const mark of ['[tool]', '[notice]', '[claude]']) {
+    for (let at = 0; size > MAX_DELTA_CHARS && at < lines.length;) {
+      const line = lines[at] ?? ''
+
+      if (line.startsWith(mark) && lines.length > 1) {
+        lines.splice(at, 1)
+        size -= line.length + 1
+        dropped += 1
+      } else {
+        at += 1
+      }
+    }
   }
 
   return {
@@ -366,6 +482,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
     dropped,
     touched: [...touched],
     files: [...files],
+    acts,
     commits,
     plans,
     developer: developer.join('\n'),

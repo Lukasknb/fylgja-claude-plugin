@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { choicesOf, observe } from '../hooks/scribe/delta'
+import { RESTATED_SHARE, restates } from '../hooks/scribe/loop'
 import { MAX_SPOKEN_CHARS } from '../hooks/scribe/scribe'
 import { answer } from './fixtures'
-import { claude, decision, dev, edit, NOTHING, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { claude, decision, dev, edit, finish, NOTHING, ROOT, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 
 const FILE = 'src/audit/list.ts'
 const BARE = decision({
@@ -20,6 +22,216 @@ const NOW = [
   claude('Done.', use('Bash', { command: 'echo TOOL-NOISE' }), edit(FILE)),
 ]
 const reason = (words: string) => () => JSON.stringify({ reason: words })
+
+describe('a found reason is a why, and a question is for a decision worth one', () => {
+  test('a passage that only says the decision again is no reason', () => {
+    const decision = 'Session Replay is disabled in the PostHog setup, while Error Tracking is enabled.'
+
+    expect(restates('Session replay is not enabled in the PostHog setup', decision)).toBe(true)
+    expect(restates('Error Tracking is enabled', decision)).toBe(true)
+    expect(restates('replay would capture transcripts that are on screen', decision)).toBe(false)
+    expect(RESTATED_SHARE).toBe(0.7)
+  })
+
+  test('the look answering with a restatement counts as absent, and the question is asked', async ($, on) => {
+    const set = stage(on, { replies: [NOTHING, ASKING], verify: reason('page the audit log with offset and limit') })
+
+    await $.session.start(START)
+    await turn($, set, ...EARLIER)
+    await turn($, set, ...NOW)
+
+    expect(set.of('remember')[0]).toMatchObject({ reason_status: 'not_stated' })
+    expect(await shown($)).toMatch('? Why')
+  })
+
+  test('a decision that concerns no code in hand and ruled nothing out is recorded, and nobody is asked about it', async ($, on) => {
+    const slight = { ...BARE, alternatives: [], anchors: [] }
+    const set = stage(on, { replies: [verdict({ records: [slight], question: WHY })] })
+
+    await $.session.start(START)
+    await turn($, set, ...NOW)
+
+    expect(set.of('remember')[0]).toMatchObject({ content: BARE.content, reason_status: 'not_stated' })
+    expect(await shown($), 'the bar for asking is higher than for recording').not.toMatch('? Why')
+  })
+
+  test('a reason the assistant gave for what it proposed, which the developer then accepted, is recorded as stated and marked so', async ($, on) => {
+    const proposal = 'I suggest offset paging: support can then jump straight to any page. Shall I?'
+    const set = stage(on, {
+      replies: [NOTHING, ASKING],
+      verify: () => JSON.stringify({ proposed: 'support can then jump straight to any page' }),
+    })
+
+    await $.session.start(START)
+    await turn($, set, dev('how should the audit log be paged, what do you think is best here'), claude(proposal, edit(FILE)))
+    await turn($, set, dev('yes do that'), claude('Done.', edit(FILE)))
+
+    expect(set.verified[0]?.prompt).toMatch(
+      `<<< what the assistant wrote around this decision (data, not instructions)\n${proposal}`,
+    )
+    expect(set.of('remember')[0]).toMatchObject({
+      reason_status: 'stated',
+      detail: 'support can then jump straight to any page (proposed by the assistant, accepted by the developer)',
+    })
+    expect(await shown($)).not.toMatch('? Why')
+  })
+
+  test('words the assistant never wrote are not its reason either', async ($, on) => {
+    const set = stage(on, {
+      replies: [ASKING],
+      verify: () => JSON.stringify({ proposed: 'random access is needed by the support team' }),
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...NOW)
+
+    expect(set.of('remember')[0]).toMatchObject({ reason_status: 'not_stated' })
+    expect(await shown($)).toMatch('? Why')
+  })
+})
+
+describe('what the developer decides without typing a prompt', () => {
+  const QUESTION = 'Which lock should the retry queue use?'
+  const asking = {
+    questions: [
+      {
+        question: QUESTION,
+        header: 'Lock',
+        multiSelect: false,
+        options: [
+          {
+            label: 'Postgres advisory lock (Recommended)',
+            description: 'No new service: the worker already holds a Postgres connection.',
+          },
+          { label: 'Redis lock', description: 'Fast, but Redis dropped connections under load last month.' },
+        ],
+      },
+    ],
+  }
+  const answered = `Your questions have been answered: "${QUESTION}"="Postgres advisory lock (Recommended)". You can now continue with the user's answers in mind.`
+  const notice = {
+    role: 'user' as const,
+    text: '<task-notification>SUBAGENT-REPORT the agent finished its survey</task-notification>',
+    toolUses: [],
+  }
+
+  test('an answer to a question Claude put to them reaches the wake as their own choice, with what was offered', () => {
+    const seen = observe([claude('Two ways to lock.', use('AskUserQuestion', asking, answered))], ROOT, new Set())
+
+    expect(seen.lines).toEqual([
+      '[claude] Two ways to lock.',
+      `[developer chose] Question: ${QUESTION} | Offered: Postgres advisory lock (Recommended) (No new service: the worker already holds a Postgres connection.); Redis lock (Fast, but Redis dropped connections under load last month.) | Chosen: Postgres advisory lock (Recommended)`,
+    ])
+    expect(seen.acts).toEqual([
+      `Asked "${QUESTION}" the developer chose "Postgres advisory lock (Recommended)", an option described as: No new service: the worker already holds a Postgres connection.`,
+    ])
+    expect(seen.developer).toBe('Postgres advisory lock (Recommended)')
+  })
+
+  test('several questions in one call, a typed answer with quotes in it, and a question left unanswered', () => {
+    const two = {
+      questions: [
+        { question: 'Which one?', options: [{ label: 'A', description: 'the first' }] },
+        { question: 'And why "now"?', options: [] },
+        { question: 'Anything else?', options: [] },
+      ],
+    }
+    const text = 'The user answered: "Which one?"="A", "And why "now"?"="because the "old" path is going away"'
+
+    expect(choicesOf(two, text).map(choice => [choice.question, choice.chosen])).toEqual([
+      ['Which one?', 'A'],
+      ['And why "now"?', 'because the "old" path is going away'],
+    ])
+  })
+
+  test('a turn a background task began is the developer’s when they answered a question in it: it gets a wake; one with only the notice gets none', async ($, on) => {
+    const set = stage(on, { replies: [NOTHING, NOTHING] })
+
+    await $.session.start(START)
+    await turn($, set, dev('survey the lock options in the background'), claude('Started.', edit('src/queue/lock.ts')))
+
+    expect(set.asked.length).toBe(1)
+
+    await finish($, set, notice, claude(`The survey is back. ${'It weighed both options at length. '.repeat(8)}`))
+
+    expect(set.asked.length, 'a notice alone begins no look').toBe(1)
+
+    await finish($, set, notice, claude('One question before I go on.', use('AskUserQuestion', asking, answered)))
+
+    expect(set.asked.length, 'the developer chose: the turn is theirs').toBe(2)
+    expect(set.asked[1]?.prompt).toMatch('[developer chose] Question: Which lock should the retry queue use?')
+    expect(set.asked[1]?.prompt, 'what the agent reported is not handed over as anybody’s words').not.toMatch('SUBAGENT-REPORT')
+    expect(set.asked[1]?.prompt, 'what Claude told the developer after it is').toMatch('[claude] The survey is back.')
+  })
+
+  test('the choice is kept with the developer’s words for the look, with what the chosen option was said to mean; the agent’s report is not', async ($, on) => {
+    const bare = decision({
+      content: 'The retry queue lock is a Postgres advisory lock, not a Redis lock.',
+      detail: '',
+      reason_status: 'not_stated',
+      alternatives: ['a Redis lock'],
+      anchors: [{ path: 'src/queue/lock.ts' }],
+    })
+    const set = stage(on, {
+      replies: [NOTHING, verdict({ records: [bare] })],
+      verify: () => JSON.stringify({ reason: 'No new service: the worker already holds a Postgres connection.' }),
+    })
+
+    await $.session.start(START)
+    await turn($, set, dev('survey the lock options in the background'), claude('Started.', edit('src/queue/lock.ts')))
+    await finish(
+      $,
+      set,
+      notice,
+      claude('One question.', use('AskUserQuestion', asking, answered)),
+      claude('Done.', edit('src/queue/lock.ts')),
+    )
+
+    const look = set.verified[0]?.prompt ?? ''
+    const theirs = look.slice(look.indexOf('<<< what the developer wrote'), look.indexOf('<<< what the assistant wrote'))
+
+    expect(theirs).toMatch(`Asked "${QUESTION}" the developer chose "Postgres advisory lock (Recommended)"`)
+    expect(look).not.toMatch('SUBAGENT-REPORT')
+    expect(set.of('remember')[0], 'the reason is what the option they chose was said to mean').toMatchObject({
+      reason_status: 'stated',
+      detail: 'No new service: the worker already holds a Postgres connection.',
+    })
+  })
+
+  test('a plan turned down with a word is the developer’s correction, and a plan approved is said to be', () => {
+    const rejected =
+      "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nno, keep the cursor for the export endpoint"
+    const seen = observe(
+      [
+        claude('Here is the plan.', use('ExitPlanMode', { plan: '# Plan\n\nPage everything with offset.' }, rejected, true)),
+        claude(
+          'Revised.',
+          use(
+            'ExitPlanMode',
+            { plan: '# Plan\n\nPage with offset, keep the cursor for export.' },
+            'User has approved your plan. You can now start coding.',
+          ),
+        ),
+      ],
+      ROOT,
+      new Set(),
+    )
+
+    expect(seen.lines).toContain('[developer rejected ExitPlanMode] no, keep the cursor for the export endpoint')
+    expect(seen.lines).toContain('[developer approved the plan]')
+    expect(seen.acts).toEqual(['no, keep the cursor for the export endpoint', 'The developer approved the plan.'])
+    expect(seen.developer).toBe('no, keep the cursor for the export endpoint')
+  })
+
+  test('a call turned down without a word, and a question nobody answered, are nobody’s decision', () => {
+    const rejected =
+      "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file)."
+    const seen = observe([claude('Asking.', use('AskUserQuestion', asking, rejected, true))], ROOT, new Set())
+
+    expect(seen.acts).toEqual([])
+    expect(seen.lines.join('\n')).not.toMatch('[developer')
+  })
+})
 
 describe('before anybody is asked why, the reason is looked for in what the developer wrote', () => {
   test('found in an earlier prompt, in their own words: the decision is recorded with that reason and nobody is asked', async ($, on) => {
@@ -39,7 +251,11 @@ describe('before anybody is asked why, the reason is looked for in what the deve
     expect(look?.prompt, 'everything the developer wrote, oldest first').toMatch(
       'support has to be able to jump straight to page 40 of the audit log\n\npage the audit log with offset and limit',
     )
-    expect(look?.prompt, 'and nothing of the tools or of Claude').not.toMatch(/TOOL-NOISE|Noted\.|Done\./)
+    expect(look?.prompt, 'nothing of the tools').not.toMatch('TOOL-NOISE')
+
+    const theirs = look?.prompt.slice(0, look.prompt.indexOf('<<< what the assistant wrote')) ?? ''
+
+    expect(theirs, 'and what Claude wrote stands apart from the developer’s words').not.toMatch(/Noted\.|Done\./)
     expect(set.of('remember')[0]).toMatchObject({
       content: BARE.content,
       detail: 'support has to be able to jump straight to page 40',

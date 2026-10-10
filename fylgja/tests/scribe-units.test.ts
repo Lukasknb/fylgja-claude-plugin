@@ -92,7 +92,9 @@ describe('what Scribe is told of a turn', () => {
       '[tool] Write src/b.ts ok',
       '[tool] Edit /elsewhere/c.ts (outside the working tree) ok',
     ])
-    expect(seen.lines[5], 'a command that worked is its own short line: what it printed is not shown').toBe('[tool] Bash `npm test` ok')
+    expect(seen.lines[5], 'a command that worked is its own short line: what it printed is not shown').toBe(
+      '[tool] Bash `npm test` ok',
+    )
     expect(seen.lines.slice(6)).toEqual([
       '[tool] Bash `npm run lint` failed: boom',
       '[tool] Grep retry ok',
@@ -139,14 +141,39 @@ describe('what Scribe is told of a turn', () => {
     expect(seen.developer).toBe('make it retry\nmake it   retry')
   })
 
-  test('a turn too long to hand over loses its oldest lines, and says how many', () => {
+  test('a turn too long to hand over loses Claude’s oldest replies and says how many; what the developer wrote is never what goes', () => {
     const rows = Array.from({ length: 40 }, (_, n) => claude(`REPLY-${n} ${'word '.repeat(200)}`))
     const seen = observe([dev('OLDEST'), ...rows], ROOT, said('OLDEST'))
 
     expect(seen.lines.join('\n').length <= MAX_DELTA_CHARS).toBe(true)
     expect(seen.lines.at(-1)).toMatch('REPLY-39')
-    expect(seen.lines.join('\n')).not.toMatch('OLDEST')
+    expect(seen.lines[0]).toBe('[developer] OLDEST')
+    expect(seen.lines.join('\n')).not.toMatch('REPLY-0 ')
     expect(seen.dropped).toBe(41 - seen.lines.length)
+  })
+
+  test('tool lines go before anything that was said: a turn of many tool calls keeps the developer’s words and Claude’s replies', () => {
+    const noise = Array.from({ length: 400 }, (_, n) => use('Bash', { command: `echo step-${n} ${'x'.repeat(60)}` }))
+    const seen = observe(
+      [
+        dev('FIRST-PROMPT pick the lock'),
+        claude('PLAN-REPLY', ...noise),
+        dev('SECOND-PROMPT use postgres'),
+        claude('FINAL-REPLY'),
+      ],
+      ROOT,
+      new Set(['FIRST-PROMPT pick the lock', 'SECOND-PROMPT use postgres']),
+    )
+    const text = seen.lines.join('\n')
+
+    expect(text.length <= MAX_DELTA_CHARS).toBe(true)
+    expect(text).toMatch('[developer] FIRST-PROMPT pick the lock')
+    expect(text).toMatch('[developer] SECOND-PROMPT use postgres')
+    expect(text).toMatch('[claude] PLAN-REPLY')
+    expect(text).toMatch('[claude] FINAL-REPLY')
+    expect(text, 'the oldest tool lines went').not.toMatch('step-0 ')
+    expect(text, 'the newest stayed').toMatch('step-399 ')
+    expect(seen.dropped).toBeGreaterThan(100)
   })
 
   test('a commit’s sha is read from the line git prints for a commit it made, in this repository alone', () => {
@@ -343,7 +370,10 @@ describe('reading records', () => {
     const facts = factsOf({
       facts: [
         fact(1, {
-          anchors: { paths: [{ path: 'src/a.ts', symbol: 'f', added_by: 'author' }], commits: [{ sha: '1a2b3c4', added_by: 'author' }] },
+          anchors: {
+            paths: [{ path: 'src/a.ts', symbol: 'f', added_by: 'author' }],
+            commits: [{ sha: '1a2b3c4', added_by: 'author' }],
+          },
           link: `https://fylgja.lknblab.dev/open/session/${idOf(900)}`,
           source_id: idOf(900),
         }),
@@ -431,7 +461,9 @@ describe('small rules', () => {
       anchors: [],
       triggers: [],
       reasonStatus: null,
-      supersedes: null, repo: null, updates: null,
+      supersedes: null,
+      repo: null,
+      updates: null,
     } as const
     const question = (n: number): Band.Question => ({
       kind: 'question',

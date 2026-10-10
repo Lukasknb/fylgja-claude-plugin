@@ -102,11 +102,11 @@ function inputOf(tool: string, input: unknown, limits: Limits): Record<string, u
     }
 
     if (Array.isArray(value)) {
-      return depth > 3 ? [] : value.slice(0, 50).map(one => clipped(one, depth + 1))
+      return depth > 6 ? [] : value.slice(0, 50).map(one => clipped(one, depth + 1))
     }
 
     if (isRecord(value)) {
-      return depth > 3 ? {} : Object.fromEntries(Object.entries(value).map(([key, one]) => [key, clipped(one, depth + 1)]))
+      return depth > 6 ? {} : Object.fromEntries(Object.entries(value).map(([key, one]) => [key, clipped(one, depth + 1)]))
     }
 
     return value
