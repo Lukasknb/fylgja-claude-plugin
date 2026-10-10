@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { choicesOf, observe, rejectionOf } from '../hooks/scribe/delta'
 import { PLACE_WAIT_MS } from '../hooks/scribe/scribe'
-import { statesNoReason, verdictOf } from '../hooks/scribe/verdict'
+import { OFFERED_SHARE, statesNoReason, verdictOf } from '../hooks/scribe/verdict'
 import { OFFERED_MARK } from '../hooks/scribe/words'
 import { answer, idOf } from './fixtures'
 import {
@@ -194,6 +194,39 @@ describe('what an option was said to mean is the assistant’s, and what the dev
     })
     expect(fromThem.records[0]?.detail).toBe('The last migration took the site down for an hour.')
   })
+
+  test(`a paraphrase is marked too, and so is a record the model did not call a choice: ${OFFERED_SHARE} of the reason’s words in what was offered is enough`, () => {
+    const seen = {
+      plans: [],
+      saidNoReason: false,
+      paths: new Set<string>(),
+      facts: new Map(),
+      choices: 1,
+      offered:
+        'Run the migration now?\nYes: Runs it against staging first because production has no rollback.\nNo: Leaves the schema as it is.',
+      typed: 'sort out the migration',
+    }
+    const record = (detail: string, more: Record<string, unknown> = {}) =>
+      decision({ content: 'The migration runs against staging before production.', detail, anchors: [], ...more })
+    const paraphrased = 'Production cannot be rolled back, so the migration goes to staging first.'
+    const marked = verdictOf({ outcome: 'act', records: [record(paraphrased, { from_choice: true })] }, seen)
+    const unflagged = verdictOf({ outcome: 'act', records: [record('Production has no rollback, so staging runs first.')] }, seen)
+    const elsewhere = verdictOf(
+      { outcome: 'act', records: [record('The auditors require a dry run on a copy of the data every quarter.')] },
+      seen,
+    )
+    const noQuestion = verdictOf(
+      { outcome: 'act', records: [record('Production has no rollback, so staging runs first.')] },
+      { ...seen, choices: 0, offered: '' },
+    )
+
+    expect(marked.records[0]?.detail).toBe(`${paraphrased}${OFFERED_MARK}`)
+    expect(unflagged.records[0]?.detail, 'the flag is the model’s; the mark does not hang on it').toBe(
+      `Production has no rollback, so staging runs first.${OFFERED_MARK}`,
+    )
+    expect(elsewhere.records[0]?.detail, 'a reason from somewhere else is left as it is').not.toMatch('offered by the assistant')
+    expect(noQuestion.records[0]?.detail, 'and so is any reason in a turn where nothing was offered').not.toMatch('offered by')
+  })
 })
 
 describe('a reason the assistant proposed is accepted only by something the developer did after it', () => {
@@ -307,6 +340,46 @@ describe('a record the developer has taken in hand is theirs', () => {
     await turn($, set, ...one('and one more routine change to the same file, described at length'))
 
     expect(set.of('amend_memory').length, 'what they put back is not taken back again').toBe(removals)
+  })
+
+  test('put back, a decision comes back whole: its reason, what was ruled out and its places, or the server would not take it', async ($, on) => {
+    const whole = decision({
+      content: 'Use a Redis lock for the retry queue.',
+      detail: 'Redis is already there.',
+      reason_status: 'stated',
+      alternatives: ['a Postgres advisory lock'],
+      anchors: [{ path: FILE }],
+    })
+    let written = 0
+    const set = stage(on, {
+      tools: {
+        // As the server's gate has it: a reason said to be stated has to be there.
+        remember: (args: Record<string, unknown>) =>
+          args.reason_status === 'stated' && (typeof args.detail !== 'string' || args.detail === '')
+            ? {
+                content: [{ type: 'text', text: 'refused:reason_contradiction — detail and reason_status disagree' }],
+                isError: true,
+              }
+            : answer({ atom_id: own, outcome: (written += 1) === 1 ? 'created' : 'restored', supersede: 'not_requested' }),
+      },
+      replies: [verdict({ records: [whole] }), dropping],
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...one('lock the retry queue with redis'))
+    await turn($, set, ...one('forget the lock altogether, the queue is single-consumer now'))
+    await press($, 'putback:0')
+    await press($, 'putback:0')
+
+    expect(set.of('remember')[1]).toMatchObject({
+      kind: 'decision',
+      content: 'Use a Redis lock for the retry queue.',
+      detail: 'Redis is already there.',
+      reason_status: 'stated',
+      alternatives: ['a Postgres advisory lock'],
+      anchors: [{ path: FILE }],
+    })
+    expect(await shown($)).toMatch('✓ Restored · Use a Redis lock for the retry queue.')
   })
 
   test('a record that came back from having been removed was not written by Scribe as new: it is never its own', async ($, on) => {

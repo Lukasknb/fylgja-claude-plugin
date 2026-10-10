@@ -67,6 +67,12 @@ export type Seen = {
    * chose: never their own words.
    */
   offers: Offer[]
+  /**
+   * Everything the assistant wrote in the questions they answered: each
+   * question and every option's label and what it was said to mean, picked
+   * or not. A reason that mostly says this over is the assistant's.
+   */
+  offeredText: string
   /** Whether a file was written or changed, or a commit made. */
   hasChange: boolean
   /** How many characters the developer and Claude wrote between them. */
@@ -446,6 +452,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
   const acts: { key: string; words: string }[] = []
   const optionWords: string[] = []
   const offers: Offer[] = []
+  const offeredText: string[] = []
   let answered = 0
   let hasChange = false
   let words = 0
@@ -500,6 +507,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
             offers.push({ question: choice.question, picked: choice.picked.filter(option => option.description !== '') })
           }
 
+          offeredText.push(choice.question, ...choice.offered.map(option => `${option.label}: ${option.description}`))
           answered += 1
           optionWords.push(choice.question, ...choice.offered.map(option => option.label))
           words += choice.question.length + choice.chosen.length
@@ -587,6 +595,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
     choices: answered,
     offered: optionWords,
     offers,
+    offeredText: offeredText.join('\n'),
     commits,
     plans,
     developer: developer.join('\n'),

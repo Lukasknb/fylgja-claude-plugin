@@ -139,7 +139,11 @@ at a time.
   one; an answer counts as an option only when it is that option's exact
   label. What Claude said an option means is Claude's text: a reason
   taken from it is recorded with the mark "offered by the assistant,
-  chosen by the developer", and never as your own words.
+  chosen by the developer", and never as your own words. That holds
+  for a reason Scribe's model words itself, too: in a turn where you
+  answered a question of Claude's, a reason of which a third or more of
+  the words stand in what Claude wrote there, and fewer in what you
+  typed, carries that mark.
   A tool call you turned down counts as yours only when its result is
   the engine's own for a rejection: it opens with the engine's sentence,
   and what the transcript stored beside it is the engine's text for one.
@@ -150,7 +154,8 @@ at a time.
   recorded, Scribe rewrites its own record (`✓ Updated · …`) or takes it
   back (`✓ Withdrawn · …`) without asking: it is its own record, minutes
   old. `Withdrawn` has a key, `1 Put back` (press it twice), which sends
-  the record again so that Fylgja restores it. Its own means written by
+  the record again, whole, with its reason, what was ruled out and its
+  places, so that Fylgja restores it. Its own means written by
   Scribe as new in this session: a record that came back from having
   been removed is not. And once you have touched a record with a key
   (Fix, an answer to why, an answer about replacing, Put back, Remove),
@@ -198,7 +203,8 @@ at a time.
   the session and in the plan documents, and may answer only with your
   own words, quoted, or "absent". A quote is taken only if it stands in
   what you wrote, or in a plan, word for word; then the decision is
-  recorded with that reason and you are not asked. Only on "absent" is
+  recorded with that reason and you are not asked; a reason quoted from
+  a plan says so, "(per <the plan's title>)". Only on "absent" is
   the question put. The request is held to about 40,000 characters:
   everything you wrote comes first and whole, then what Claude said the
   options mean that you picked, then what Claude said about

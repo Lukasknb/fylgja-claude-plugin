@@ -99,7 +99,7 @@ export type Seen = {
   statedNoReason?: boolean
   /** How many questions Claude put to the developer they answered in this turn. */
   choices?: number
-  /** What the assistant said the options mean that the developer picked in this turn: the assistant's words. */
+  /** What the assistant wrote in the questions the developer answered in this turn, options and all: the assistant's words. */
   offered?: string
   /** What the developer typed in this turn: their own words. */
   typed?: string
@@ -190,8 +190,13 @@ function reasonOf(asked: ReasonStatus | null, detail: string, saidNoReason: bool
   return { status: 'stated', detail }
 }
 
-/** A choice's reason is the assistant's when this share of its words stand in what the picked option was said to mean. */
-const OFFERED_SHARE = 0.5
+/**
+ * A reason is the assistant's when this share of its words stand in what the
+ * assistant wrote in a question the developer answered. Low on purpose: a
+ * paraphrase keeps few of the words, and a mark too many says only that the
+ * developer chose it, which they did.
+ */
+export const OFFERED_SHARE = 0.35
 
 /** No sentence longer than this is sent at all; up to it, the server says what is wrong and it may be put right. */
 const MAX_SENT_CONTENT = 1000
@@ -232,14 +237,16 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
     detail = reason.detail
     reasonStatus = reason.status
 
-    // The reason of a choice they made by picking an option: where it says
-    // what the assistant said the option means, and not what they typed, it
-    // is marked as the assistant's, which they chose.
-    const fromOffer = shareIn(detail, seen.offered ?? '')
+    // In a turn where the developer answered a question of the assistant's:
+    // a reason that mostly says over what the assistant wrote there (the
+    // question, the options and what each was said to mean), and not what
+    // the developer typed, is marked as the assistant's, which they chose.
+    // Whether the model called the record a choice does not matter for it.
+    const fromOffer = (seen.offered ?? '') === '' ? 0 : shareIn(detail, seen.offered ?? '')
 
     if (
-      value.from_choice === true &&
       reasonStatus === 'stated' &&
+      !detail.includes(OFFERED_MARK.trim()) &&
       fromOffer >= OFFERED_SHARE &&
       fromOffer > shareIn(detail, seen.typed ?? '')
     ) {

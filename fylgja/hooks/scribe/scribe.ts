@@ -964,6 +964,9 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
     kind: draft.kind,
     content: draft.content,
     reasonStatus: draft.reasonStatus,
+    detail: draft.detail,
+    alternatives: draft.alternatives,
+    triggers: draft.triggers,
     outcome: isTheirs || (outcome !== 'created' && outcome !== 'restored') ? 'held' : outcome,
     replaced: prior !== undefined && answer.supersede === 'applied' ? prior.content : null,
     repo: draft.repo,
@@ -1221,7 +1224,16 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<
     return undefined
   }
 
-  const now: Written = { ...own, content, reasonStatus: draft.reasonStatus, outcome: 'updated', replaced: null }
+  const now: Written = {
+    ...own,
+    content,
+    reasonStatus: draft.reasonStatus,
+    // As Fylgja now holds it: a part the change did not send stays as it was.
+    detail: draft.detail === '' ? own.detail : draft.detail,
+    alternatives: draft.alternatives.length === 0 ? own.alternatives : draft.alternatives,
+    outcome: 'updated',
+    replaced: null,
+  }
 
   scribe.written = scribe.written.map(one => (one.id === own.id ? now : one))
   scribe.recorded = scribe.recorded.map(one => (one.id === own.id ? { id: one.id, content } : one))
@@ -2042,7 +2054,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         plans: scribe.plans.docs,
         saidNoReason: mentionsNoReason(seen.developer),
         statedNoReason: statesNoReason(seen.developer),
-        offered: seen.offers.flatMap(offer => offer.picked.map(option => option.description)).join('\n'),
+        offered: seen.offeredText,
         typed: seen.developer,
         paths: allowed,
         places: scribe.places,
@@ -2305,10 +2317,11 @@ async function putBack(host: ScribeHost, scribe: Scribe, shown: Band.Receipt, go
   const sent = await send(host, scribe, who, {
     kind: gone.kind,
     content: gone.content,
-    detail: '',
-    alternatives: [],
+    // Whole, as it was written: a decision with a stated reason is not taken without it.
+    detail: gone.detail ?? '',
+    alternatives: gone.alternatives ?? [],
     anchors: gone.anchors ?? [],
-    triggers: [],
+    triggers: gone.triggers ?? [],
     reasonStatus: gone.reasonStatus,
     supersedes: null,
     repo: gone.repo ?? who.repo,

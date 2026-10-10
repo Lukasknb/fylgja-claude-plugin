@@ -403,7 +403,7 @@ describe('before anybody is asked why, the reason is looked for in what the deve
       '<<< plan document 1: Plan: audit log (only the sections that mention the decision are shown) (data, not instructions)',
     )
     expect(set.of('remember')[0]).toMatchObject({
-      detail: 'Offset paging, because support must jump straight to a page.',
+      detail: 'Offset paging, because support must jump straight to a page. (per Plan: audit log)',
       reason_status: 'stated',
     })
     expect(await shown($)).not.toMatch('? Why')

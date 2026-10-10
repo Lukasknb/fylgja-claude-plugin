@@ -111,6 +111,10 @@ export type Written = {
   /** The repository it is filed under, and the places it points at: what a later anchor is checked against and added to. */
   repo?: string | null
   anchors?: Anchor[]
+  /** Its reason, what was ruled out and its triggers, as written: held so that a record taken back can be put back whole. */
+  detail?: string
+  alternatives?: string[]
+  triggers?: string[]
   /**
    * The id of a recorded decision it may go against: it was written beside
    * that one because the question whether it replaces it went unanswered.

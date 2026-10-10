@@ -74,7 +74,7 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(correction?.prompt, 'the word the server named reaches the model').toMatch('opens with "We"')
     expect(correction?.prompt, 'and so do both of its rewrites').toMatch('"Check <this> when <that happens>"')
     expect(correction?.prompt, 'and the refusal to its end').toMatch('fylgja_rebuild')
-    expect(correction?.system).toMatch('When the refusal names the word it did not accept')
+    expect(correction?.system).toMatch('When the refusal names the word or the phrase it matched, whatever the rule')
     expect(correction?.prompt).not.toMatch('SESSION-TEXT')
     expect(correction?.prompt.match(/^<<< /gm)?.length, 'both are fenced as data').toBe(2)
     expect(set.of('remember').map(args => args.content)).toEqual([PAGED.content, MENDED.content])
