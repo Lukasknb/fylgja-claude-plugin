@@ -31,6 +31,9 @@ export const CONDITIONAL_OPENERS: readonly string[] = ${list(gate.conditionals)}
 /** Verbs that may open a sentence as an instruction. */
 export const VERB_OPENERS: readonly string[] = ${list(gate.verbs)}
 
+/** Words a sentence opens with when it tells what happened or what is the case, and gives no instruction. */
+export const NARRATIVE_OPENERS: readonly string[] = ${list(gate.subjects)}
+
 /** A decision or a correction may be a statement instead, when it holds one of these words. */
 export const STATEMENT_WORDS: readonly string[] = ${list(words(gate.statement_verbs))}
 

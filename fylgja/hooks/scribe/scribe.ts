@@ -20,7 +20,7 @@ import { filesOf, isPrompt, observe, plain } from './delta'
 import type { Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
-import { codeOf, PASSING, teaches } from './gate'
+import { codeOf, PASSING, shaped, teaches } from './gate'
 import { correct, MAX_STEPS, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
 import type { LoopHost } from './loop'
 import * as Plans from './plans'
@@ -937,6 +937,9 @@ async function written(
     return undefined
   }
 
+  // The sentence is opened the way the server takes it where that needs no judgement.
+  draft = { ...draft, content: shaped(draft.content, draft.kind) }
+
   const first = await send(host, scribe, who, draft, prior)
   const part = first.written === undefined ? teaches(first.code) : undefined
 
@@ -1006,10 +1009,11 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<
     return undefined
   }
 
+  const content = shaped(draft.content, draft.kind)
   const args: Record<string, unknown> = {
     atom_id: own.id,
     op: 'fix',
-    content: draft.content,
+    content,
     ...(draft.detail === '' ? {} : { detail: draft.detail }),
     ...(draft.alternatives.length === 0 ? {} : { alternatives: draft.alternatives }),
     ...(draft.reasonStatus === null ? {} : { reason_status: draft.reasonStatus }),
@@ -1028,10 +1032,10 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<
     return undefined
   }
 
-  const now: Written = { ...own, content: draft.content, reasonStatus: draft.reasonStatus, outcome: 'updated', replaced: null }
+  const now: Written = { ...own, content, reasonStatus: draft.reasonStatus, outcome: 'updated', replaced: null }
 
   scribe.written = scribe.written.map(one => (one.id === own.id ? now : one))
-  scribe.recorded = scribe.recorded.map(one => (one.id === own.id ? { id: one.id, content: draft.content } : one))
+  scribe.recorded = scribe.recorded.map(one => (one.id === own.id ? { id: one.id, content } : one))
 
   if (draft.reasonStatus !== 'not_stated') {
     Band.withdrawQuestion(scribe.band, own.id)

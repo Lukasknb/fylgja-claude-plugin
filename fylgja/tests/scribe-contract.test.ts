@@ -27,7 +27,7 @@ const TALK = [dev('Use Postgres for the queue lock.'), claude('Done.', edit('src
 const refused = (text: string) => ({ content: [{ type: 'text', text }], isError: true })
 const created = (n: number) => answer({ atom_id: idOf(n), outcome: 'created', supersede: 'not_requested', note: null })
 // The words of the server's gate for this record.
-const NOT_IMPERATIVE = `refused:not_imperative — content opens with "Paginate", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a decision or correction may instead read "X is/must/stays Y". Keep your sentence and open it with one it knows, for example "Always paginate <…>" or "Use <…> to paginate <…>". Acceptable instead: content="Never run terraform apply without -target on the GPU stack" (runbook/gotcha), or content="The live database is fylgja_rebuild" (decision/correction)`
+const NOT_IMPERATIVE = `refused:not_imperative — content opens with "We", which tells what happened or what is the case. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a decision or correction may instead read "X is/must/stays Y". State the rule that came out of it, for example "Always <do this> before <that>" or "Check <this> when <that happens>". Acceptable instead: content="Never run terraform apply without -target on the GPU stack" (runbook/gotcha), or content="The live database is fylgja_rebuild" (decision/correction)`
 
 /** A server that refuses a sentence opening with `opener` and takes every other. */
 function refusing(opener: string, refusal = NOT_IMPERATIVE) {
@@ -48,7 +48,7 @@ function refusing(opener: string, refusal = NOT_IMPERATIVE) {
 
 describe('a refusal that says what is wrong is used once', () => {
   const PAGED = decision({
-    content: 'Paginate /audit-log with offset and limit, not a cursor.',
+    content: 'We paginate /audit-log with offset and limit, not a cursor.',
     detail: '',
     reason_status: 'not_stated',
     alternatives: ['a cursor'],
@@ -59,7 +59,7 @@ describe('a refusal that says what is wrong is used once', () => {
   test('the model is handed the refused record and the refusal, and nothing of the session; what it puts right is sent once', async ($, on) => {
     const set = stage(on, {
       replies: [verdict({ records: [PAGED] }), JSON.stringify({ record: MENDED })],
-      tools: refusing('Paginate'),
+      tools: refusing('We paginate'),
     })
 
     await $.session.start(START)
@@ -69,10 +69,10 @@ describe('a refusal that says what is wrong is used once', () => {
 
     expect(set.asked.length).toBe(2)
     expect(correction?.system).toMatch('A knowledge base refused one record.')
-    expect(correction?.prompt).toMatch('"content":"Paginate /audit-log with offset and limit, not a cursor."')
+    expect(correction?.prompt).toMatch('"content":"We paginate /audit-log with offset and limit, not a cursor."')
     expect(correction?.prompt).toMatch('refused:not_imperative')
-    expect(correction?.prompt, 'the word the server named reaches the model').toMatch('opens with "Paginate"')
-    expect(correction?.prompt, 'and so do both of its rewrites').toMatch('"Use <…> to paginate <…>"')
+    expect(correction?.prompt, 'the word the server named reaches the model').toMatch('opens with "We"')
+    expect(correction?.prompt, 'and so do both of its rewrites').toMatch('"Check <this> when <that happens>"')
     expect(correction?.prompt, 'and the refusal to its end').toMatch('fylgja_rebuild')
     expect(correction?.system).toMatch('When the refusal names the word it did not accept')
     expect(correction?.prompt).not.toMatch('SESSION-TEXT')
@@ -84,7 +84,7 @@ describe('a refusal that says what is wrong is used once', () => {
   test('the question about a record that had to be put right is asked about the record as written', async ($, on) => {
     const set = stage(on, {
       replies: [verdict({ records: [PAGED], question: WHY }), JSON.stringify({ record: MENDED })],
-      tools: refusing('Paginate'),
+      tools: refusing('We paginate'),
     })
 
     await $.session.start(START)
@@ -109,7 +109,7 @@ describe('a refusal that says what is wrong is used once', () => {
     }
     const set = stage(on, {
       replies: [verdict({ records: [PAGED], question: WHY }), JSON.stringify({ record: smuggling })],
-      tools: refusing('Paginate'),
+      tools: refusing('We paginate'),
     })
 
     await $.session.start(START)
@@ -126,7 +126,7 @@ describe('a refusal that says what is wrong is used once', () => {
 
   test('a model that thinks again and answers twice is taken at its last whole answer', async ($, on) => {
     const twice = `${JSON.stringify({ record: PAGED })}\n\nWait, that leaves the content unchanged. Corrected answer:\n\n${JSON.stringify({ record: MENDED })}`
-    const set = stage(on, { replies: [verdict({ records: [PAGED] }), twice], tools: refusing('Paginate') })
+    const set = stage(on, { replies: [verdict({ records: [PAGED] }), twice], tools: refusing('We paginate') })
 
     await $.session.start(START)
     await turn($, set, ...TALK)
@@ -135,10 +135,10 @@ describe('a refusal that says what is wrong is used once', () => {
   })
 
   test('refused a second time, the record is let go quietly: no third try, nothing shown', async ($, on) => {
-    const again = { ...PAGED, content: 'Paginate GET /audit-log with offset and limit.' }
+    const again = { ...PAGED, content: 'We paginate GET /audit-log with offset and limit.' }
     const set = stage(on, {
       replies: [verdict({ records: [PAGED], question: WHY }), JSON.stringify({ record: again }), NOTHING],
-      tools: refusing('Paginate'),
+      tools: refusing('We paginate'),
     })
 
     await $.session.start(START)
@@ -160,7 +160,7 @@ describe('a refusal that says what is wrong is used once', () => {
     ],
   ] as const) {
     test(`a model that ${what} costs no second write`, async ($, on) => {
-      const set = stage(on, { replies: [verdict({ records: [PAGED] }), reply], tools: refusing('Paginate') })
+      const set = stage(on, { replies: [verdict({ records: [PAGED] }), reply], tools: refusing('We paginate') })
 
       await $.session.start(START)
       await turn($, set, ...TALK)
@@ -176,7 +176,7 @@ describe('a refusal that says what is wrong is used once', () => {
     )
     const set = stage(on, {
       replies: [...looking, verdict({ records: [PAGED] }), JSON.stringify({ record: MENDED })],
-      tools: refusing('Paginate'),
+      tools: refusing('We paginate'),
     })
 
     await $.session.start(START)
@@ -190,7 +190,7 @@ describe('a refusal that says what is wrong is used once', () => {
     const prior = fact(5, { content: 'Use a cursor to page the audit log.', anchors: { paths: [{ path: 'src/queue/lock.ts' }] } })
     const set = stage(on, {
       replies: [verdict({ records: [{ ...PAGED, supersedes: idOf(5) }] }), JSON.stringify({ record: MENDED })],
-      tools: { ...refusing('Paginate'), recall: () => answer({ facts: [prior] }) },
+      tools: { ...refusing('We paginate'), recall: () => answer({ facts: [prior] }) },
       kept: { 'scribe.known': [idOf(5)] },
     })
 
@@ -208,7 +208,7 @@ describe('a refusal that says what is wrong is used once', () => {
     const quiet = Array.from({ length: MAX_WAKES_PER_HOUR - 1 }, () => NOTHING)
     const set = stage(on, {
       replies: [...quiet, verdict({ records: [{ ...PAGED, supersedes: idOf(5) }] }), JSON.stringify({ record: MENDED })],
-      tools: { ...refusing('Paginate'), recall: () => answer({ facts: [prior] }) },
+      tools: { ...refusing('We paginate'), recall: () => answer({ facts: [prior] }) },
       kept: { 'scribe.known': [idOf(5)] },
     })
 
@@ -275,7 +275,7 @@ describe('a refusal that says what is wrong is used once', () => {
     test(`${code} is taught back once, and mends the ${part}`, async ($, on) => {
       const set = stage(on, {
         replies: [verdict({ records: [PAGED] }), JSON.stringify({ record: MENDED })],
-        tools: refusing('Paginate', `refused:${code} — what to do about it`),
+        tools: refusing('We paginate', `refused:${code} — what to do about it`),
       })
 
       await $.session.start(START)

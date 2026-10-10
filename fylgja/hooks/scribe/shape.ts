@@ -207,6 +207,25 @@ export const VERB_OPENERS: readonly string[] = [
   'write',
 ]
 
+/** Words a sentence opens with when it tells what happened or what is the case, and gives no instruction. */
+export const NARRATIVE_OPENERS: readonly string[] = [
+  'a',
+  'an',
+  'he',
+  'i',
+  'it',
+  'our',
+  'she',
+  'that',
+  'the',
+  'there',
+  'these',
+  'they',
+  'this',
+  'those',
+  'we',
+]
+
 /** A decision or a correction may be a statement instead, when it holds one of these words. */
 export const STATEMENT_WORDS: readonly string[] = ['is', 'are', 'must', 'stays', 'becomes']
 
