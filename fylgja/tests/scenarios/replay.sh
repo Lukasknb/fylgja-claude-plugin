@@ -72,7 +72,7 @@ echo '{ "name": "fylgja", "version": "0.0.0", "description": "Scribe replay." }'
 cp "$here/stub-server.mjs" "$here/server-gate.json" "$copy/"
 cat > "$copy/.mcp.json" <<JSON
 { "mcpServers": { "fylgja": { "command": "node", "args": ["$copy/stub-server.mjs"],
-  "env": { "SCRIBE_SCENARIOS": "$out/scenarios.json", "SCRIBE_STUB_LOG": "$out/stub.log" } } } }
+  "env": { "SCRIBE_SCENARIOS": "$out/scenarios.json", "SCRIBE_STUB_LOG": "$out/stub.log", "SCRIBE_STUB_CLOCK": "$out/clock" } } } }
 JSON
 
 cd "$out/cwd" || exit 2

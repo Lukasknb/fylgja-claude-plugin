@@ -63,6 +63,14 @@ function summaryOf(pass) {
     charsSentMax: Math.max(0, ...woken.map(step => step.sent)),
     deltaCharsMedian: median(woken.map(step => step.delta)),
     deltaCharsMax: Math.max(0, ...woken.map(step => step.delta)),
+    // What a wake's first call weighs on average, part by part, in characters.
+    weights: Object.fromEntries(
+      ['instruction', 'plans', 'history', 'turn'].map(part => [
+        part,
+        woken.length === 0 ? 0 : Math.round(sum(woken, step => step.weights?.[part] ?? 0) / woken.length),
+      ]),
+    ),
+    cappedTurns: pass.steps.filter(step => step.isCapped).length,
     wakeSecondsMedian: median(woken.map(step => step.ms)) / 1000,
     wakeSecondsMax: Math.max(0, ...woken.map(step => step.ms)) / 1000,
     records: pass.steps.flatMap(step => step.records.map(record => ({ turn: step.n, ...record }))),
@@ -136,6 +144,8 @@ for (const [at, pass] of passes.entries()) {
     `|Characters sent per wake: median / most|${summary.charsSentMedian} / ${summary.charsSentMax}|`,
     `|Of those, not the standing instruction: median / most|${summary.deltaCharsMedian} / ${summary.deltaCharsMax}|`,
     `|Seconds per wake: median / longest|${summary.wakeSecondsMedian.toFixed(1)} / ${summary.wakeSecondsMax.toFixed(1)}|`,
+    `|A wake's first call, in characters: instruction / plans / earlier wakes / this turn|${summary.weights.instruction} / ${summary.weights.plans} / ${summary.weights.history} / ${summary.weights.turn}|`,
+    `|Turns worth a look that got none because the hour's share was used up|${summary.cappedTurns}|`,
     `|Records written|${summary.records.length}|`,
     `|Questions put in line (of at most ${pass.counters.maxQuestions} a session)|${summary.questions.length}, ${pass.counters.questions} shown, ${pass.counters.unanswered} left unanswered|`,
     `|Tells offered|${summary.tells.length}|`,
@@ -201,6 +211,6 @@ writeFileSync(
 // Numbers only, for whoever started the run.
 for (const summary of summaries) {
   console.log(
-    `${summary.isDry ? 'dry ' : ''}${summary.policy}: ${summary.turnsReplayed} turns replayed, ${summary.turnsSkipped} skipped, ${summary.wakes} wakes, ${summary.modelCalls} model calls${summary.isDry ? ' (not made)' : ''}, characters sent per wake median ${summary.charsSentMedian} most ${summary.charsSentMax} (without the instruction: median ${summary.deltaCharsMedian} most ${summary.deltaCharsMax})${summary.off === null ? '' : `, off: ${summary.off}`}${summary.stopped === null ? '' : `, stopped at ${summary.stopped}`}`,
+    `${summary.isDry ? 'dry ' : ''}${summary.policy}: ${summary.turnsReplayed} turns replayed, ${summary.turnsSkipped} skipped, ${summary.wakes} wakes, ${summary.modelCalls} model calls${summary.isDry ? ' (not made)' : ''}, characters sent per wake median ${summary.charsSentMedian} most ${summary.charsSentMax} (without the instruction: median ${summary.deltaCharsMedian} most ${summary.deltaCharsMax})${summary.off === null ? '' : `, off: ${summary.off}`}${summary.stopped === null ? '' : `, stopped at ${summary.stopped}`}; weights ${JSON.stringify(summary.weights)}; capped ${summary.cappedTurns}`,
   )
 }

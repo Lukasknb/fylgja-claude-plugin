@@ -1,5 +1,5 @@
 {
-  "commit": "df67963f",
+  "commit": "b6114a1c",
   "conditionals": [
     "after",
     "always",
@@ -217,8 +217,18 @@
   "max_echoed_word": 30,
   "burst": {
     "assistant": 5,
-    "scribe": 12
+    "scribe": 12,
+    "window_minutes": 10
   },
+  "limits": {
+    "content": 220,
+    "detail": 1200,
+    "alternatives": 6,
+    "alternative": 220
+  },
+  "statement_verbs": "\\b(is|are|must|stays|becomes)\\b",
+  "status_phrases": "\\b(open PR|draft PR|in review|awaiting review|blocked on|waiting for|as of 20\\d\\d|is now live)\\b",
+  "status_words": "\\b(merged|pending|landed|WIP|awaiting|deployed on)\\b",
   "hints": {
     "kind_retired": "kind must be correction, runbook, gotcha or decision. An incident's reusable clause is a gotcha; a fact with a command trigger is a gotcha; a state-of-the-world statement is not memory at all",
     "too_long": "content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail",

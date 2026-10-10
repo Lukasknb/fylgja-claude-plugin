@@ -63,6 +63,10 @@ type Step = {
   sent: number
   /** Of those, the characters that are not the standing instruction: the turn, what came before in brief, plans and records. */
   delta: number
+  /** What the first call of the turn's wake weighed, part by part, in characters. */
+  weights: { instruction: number; plans: number; history: number; turn: number } | null
+  /** Whether the turn was worth a look and got none because the hour's share of wakes was used up. */
+  isCapped: boolean
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number }
   records: Record<string, unknown>[]
   refused: number
@@ -93,6 +97,10 @@ type Outcome = {
 }
 
 const SILENT = '{"outcome":"nothing"}'
+
+// How the parts of a request open, as `prompt.ts` writes them: the plan documents, and what stands for earlier wakes.
+const PLANS = /^The plan documents\b/
+const HISTORY = /^(?:Earlier wake \d|Before the wakes below|What you settled earlier)/
 
 /** The recording's own time: it jumps from turn to turn and runs on between. */
 type Clock = { at: number; since: number; timers: { due: number; fire: () => void; stop: () => void; isDone: boolean }[] }
@@ -125,6 +133,7 @@ type World = {
   outcome: Outcome
   step: Step | undefined
   maxCalls: number
+  clockFile: string
 }
 
 function hostOf($: EngineInterface, world: World): ScribeHost {
@@ -171,6 +180,12 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
       if (world.step !== undefined) {
         world.step.sent += sent
         world.step.delta += request.prompt.reduce((sum, part) => sum + part.text.length, 0)
+        world.step.weights ??= {
+          instruction: request.system.reduce((sum, part) => sum + part.text.length, 0),
+          plans: request.prompt.filter(part => PLANS.test(part.text)).reduce((sum, part) => sum + part.text.length, 0),
+          history: request.prompt.filter(part => HISTORY.test(part.text)).reduce((sum, part) => sum + part.text.length, 0),
+          turn: request.prompt.at(-1)?.text.length ?? 0,
+        }
         world.step.modelCalls += 1
       }
 
@@ -304,6 +319,7 @@ async function play(
   maxWakes: number,
   maxCalls: number,
   isDry: boolean,
+  clockFile: string,
 ): Promise<Outcome> {
   const outcome: Outcome = {
     policy,
@@ -331,6 +347,7 @@ async function play(
     outcome,
     step: undefined,
     maxCalls,
+    clockFile,
   }
   const host = hostOf($, world)
   const scribe = Scribe.create({ isOn: true })
@@ -350,6 +367,8 @@ async function play(
 
       jump(clock, turn.at)
       world.cwd = turn.cwd ?? world.cwd
+      // The stand-in server counts its burst rule by the session's time, not by this machine's.
+      await $.fs.write(world.clockFile, String(Math.round(nowOf(clock))))
 
       const step: Step = {
         n: at + 1,
@@ -363,6 +382,8 @@ async function play(
         ms: 0,
         sent: 0,
         delta: 0,
+        weights: null,
+        isCapped: false,
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         records: [],
         refused: 0,
@@ -450,6 +471,10 @@ async function play(
       }
 
       step.isWoken = scribe.wakes > before.wakes || step.modelCalls > 0
+      step.isCapped =
+        !step.isWoken &&
+        scribe.hasPrompt &&
+        scribe.wakeTimes.filter(began => nowOf(clock) - began < 3_600_000).length >= Scribe.MAX_WAKES_PER_HOUR
       step.corrected = scribe.corrections - before.corrections
       step.lost = scribe.dropped - before.dropped
       step.shown = lineOf(scribe)
@@ -529,6 +554,7 @@ export function register(on: On): void {
       Number(maxWakes),
       Number(maxCalls),
       mode === 'dry',
+      to.replace(/[^/]*$/, 'clock'),
     )
 
     await $.fs.write(to, JSON.stringify(outcome))

@@ -23,7 +23,11 @@ out = {
     "verbs": list(gate.VERB_OPENERS),
     "subjects": sorted(gate._SUBJECTS),
     "max_echoed_word": gate.MAX_ECHOED_WORD,
-    "burst": {"assistant": gate.BURST_LIMIT, "scribe": gate.SCRIBE_BURST_LIMIT},
+    "burst": {"assistant": gate.BURST_LIMIT, "scribe": gate.SCRIBE_BURST_LIMIT, "window_minutes": gate.BURST_WINDOW_MINUTES},
+    "limits": {"content": gate.MAX_CONTENT_CHARS, "detail": gate.MAX_DETAIL_CHARS, "alternatives": gate.MAX_ALTERNATIVES, "alternative": gate.MAX_ALTERNATIVE_CHARS},
+    "statement_verbs": gate._STATEMENT_VERBS.pattern,
+    "status_phrases": gate._UNAMBIGUOUS_STATUS.pattern,
+    "status_words": gate._AMBIGUOUS_STATUS.pattern,
     "hints": gate.HINT_BY_REASON,
     "examples": gate.EXAMPLE_BY_REASON,
 }

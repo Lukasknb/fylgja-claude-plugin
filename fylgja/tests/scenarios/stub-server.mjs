@@ -228,7 +228,23 @@ function asFact(record, asked) {
   }
 }
 
+// When each session's records were written, per author, for the burst rule.
 const bursts = new Map()
+
+/**
+ * The time, for the burst rule. A replay of a recorded session runs days of
+ * session in minutes, so it writes the session's own time into the file
+ * SCRIBE_STUB_CLOCK names; without one the time is this machine's.
+ */
+function now() {
+  try {
+    const told = Number(readFileSync(process.env.SCRIBE_STUB_CLOCK, 'utf8'))
+
+    return Number.isFinite(told) && told > 0 ? told : Date.now()
+  } catch {
+    return Date.now()
+  }
+}
 
 function call(name, args) {
   const records = held.get(args.repo) ?? []
@@ -306,10 +322,13 @@ function call(name, args) {
       return refusal(rule, args.content)
     }
 
-    // Scribe may write twelve records a session in ten minutes; the thirteenth is refused.
-    const written = bursts.get(args.session_id) ?? 0
+    // No more than the server's own number of records from one session and one author inside its window; the next is refused.
+    const author = args.author === 'scribe' ? 'scribe' : 'assistant'
+    const key = `${args.session_id} ${author}`
+    const at = now()
+    const recent = (bursts.get(key) ?? []).filter(when => at - when < GATE.burst.window_minutes * 60_000)
 
-    if (args.author === 'scribe' && written >= 12) {
+    if (recent.length >= GATE.burst[author]) {
       return refusal('burst')
     }
 
@@ -357,7 +376,7 @@ function call(name, args) {
     })
     const prior = args.supersedes === undefined ? undefined : everything().find(one => one.id === args.supersedes)
 
-    bursts.set(args.session_id, written + 1)
+    bursts.set(key, [...recent, at])
     held.set(args.repo, [...records, record])
 
     return json({
