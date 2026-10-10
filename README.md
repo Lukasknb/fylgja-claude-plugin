@@ -477,6 +477,19 @@ they are a regression check now and no longer a held-out measurement.
 against the stand-in, to read from the debug log that every call to
 Fylgja was let through.
 
+`replay.sh <transcript.jsonl> --out <dir>` puts one of your own recorded
+sessions (the files Claude Code keeps under `~/.claude/projects/`)
+through Scribe turn by turn and writes what Scribe would have done: a
+timeline, the records, questions and tells, and what it cost. The
+recording is only read, the knowledge base is the stand-in, and
+everything written goes into `<dir>`, which must lie outside the
+repository. Claude Code cannot be handed rows it did not produce, so the
+replay drives Scribe's own modules in the order the plugin's hooks do;
+the hook wiring, the account check and the chips are not part of it.
+`--dry` asks no model and shows how the session is cut into wakes;
+without it the run spends your plan, at most `--max-calls` (120) model
+calls and `--max-wakes` (40) wakes.
+
 ### Still to confirm in a live session
 
 The tests drive Scribe against a stand-in for Claude Code, and the scenario
