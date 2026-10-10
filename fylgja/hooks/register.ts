@@ -5,7 +5,9 @@ import { withGlyphs } from './citations'
 import * as Draft from './draft'
 import { restored } from './known'
 import type { Host } from './host'
-import { want } from './lookups'
+import { briefly, called, close, open, SHORT_WAIT_MS } from './live'
+import type { Live } from './live'
+import { flush, want } from './lookups'
 import { isOwnPrompt } from './origin'
 import { decorationsOf } from './paint'
 import { receiptOf } from './receipts'
@@ -24,11 +26,16 @@ const MAX_LINE = 200
  * The engine calls this plugin makes, each spelled out here once and handed
  * to the plugin's other files as plain functions. Every line shown passes
  * the same sanitiser the chips do.
+ *
+ * @param live the hook this host is made in, when that hook is one Claude
+ *   Code waits on and the host is used while it does. Without it the host
+ *   starts no call to Fylgja.
  */
-function hostOf($: EngineInterface, session: Session.Session): Host {
+function hostOf($: EngineInterface, session: Session.Session, live?: Live): Host {
   return {
     connect: () => $.mcp.connect('fylgja'),
-    call: (server, tool, args) => $.mcp.call(server, tool, args),
+    call: (server, tool, args) => called(live, () => $.mcp.call(server, tool, args)),
+    isLive: () => live?.isOpen === true,
     // The line under the prompt has one owner. Sign-in comes first; when it
     // has nothing to say, the line shows what the plugin left there, if anything.
     status: text => {
@@ -58,23 +65,23 @@ function hostOf($: EngineInterface, session: Session.Session): Host {
  * to Fylgja goes to the session's own connection, under the name the
  * sign-in check last gave for it.
  */
-function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost {
+function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live): ScribeHost {
   return {
-    server: () => Session.serverOf(hostOf($, session), session),
+    server: () => Session.serverOf(hostOf($, session, live), session),
     // Why a call failed is kept as one word: whether it was not let
     // through, or anything else. The engine's own words are not handed on.
     call: (server, tool, args) =>
-      $.mcp.call(server, tool, args).catch((error: unknown) => {
+      called(live, () => $.mcp.call(server, tool, args)).catch((error: unknown) => {
         throw new Error(error instanceof Error && REFUSAL.test(error.message) ? REFUSED : 'failed')
       }),
     lookup: async (tool, args) => {
-      const server = await Session.serverOf(hostOf($, session), session)
+      const server = await Session.serverOf(hostOf($, session, live), session)
 
       if (server === undefined) {
         throw new Error('Fylgja is not connected')
       }
 
-      return $.mcp.call(server, tool, args)
+      return called(live, () => $.mcp.call(server, tool, args))
     },
     complete: async request => {
       const reply = await $.model.complete({
@@ -101,7 +108,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session): ScribeHost 
     redraw: () => $.ui.invalidate('ui.render'),
     toast: text => $.ui.toast(drawn(text, MAX_LINE)),
     // Scribe's line goes where every line of the plugin's goes, behind the sign-in line.
-    status: text => Session.say(hostOf($, session), session, text),
+    status: text => Session.say(hostOf($, session, live), session, text),
     debug: text => $.ui.log(drawn(text, MAX_LINE), { to: 'debug' }),
     box: async () => (await $.prompt.read()).text,
     fill: async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled,
@@ -152,9 +159,11 @@ function toneOf(part: Part): { color?: 'success' | 'inactive'; dimColor?: boolea
  * Fylgja's tools when it chooses to.
  *
  * The one lookup, a reference's title for its chip in the message row, is
- * started by the row that shows it, rides the session's own Fylgja
- * connection, and is never waited for; a failure leaves the row as it is
- * drawn without an answer.
+ * noted by the row that shows it and asked by the next hook Claude Code
+ * waits on (the start of the session, a step of a turn, a turn's end): no
+ * call to Fylgja is ever started from a row being drawn, from a timer or
+ * from work a hook left behind. It rides the session's own Fylgja
+ * connection, and a failure leaves the row as it is drawn without an answer.
  *
  * Scribe is the one part that does more than draw: at the end of a turn it
  * reads what happened, asks its own model, and writes to Fylgja. It runs
@@ -170,30 +179,53 @@ export function register(on: On, options: PluginOptions = {}): void {
   const presses: string[] = []
   const entries: { key: string; value: string }[] = []
 
-  on('session.start', ($, e, next) => {
+  on('session.start', async ($, e, next) => {
     Session.startOver(session)
     Session.located(session, e.cwd)
     Session.revet(session)
     Scribe.started(scribe, e.isInteractive, e.surface)
-    // Not waited on: the session starts whether or not Fylgja answers. The
-    // line's state is written whatever the answer, because a plugin that was
-    // just loaded cannot know whether an earlier load left the line up.
-    void Session.serverOf(hostOf($, session), session, true).catch(() => undefined)
 
-    return next(e)
+    const started = await next(e)
+    const live = open()
+
+    // Who is signed in is asked here, and what is already on screen looked
+    // up, but the session is not held for it: after a moment it starts
+    // whether or not Fylgja has answered. The sign-in line's state is
+    // written whatever the answer, because a plugin that was just loaded
+    // cannot know whether an earlier load left the line up.
+    try {
+      const host = hostOf($, session, live)
+
+      await briefly(host.after, flush(host, session, true), SHORT_WAIT_MS)
+    } finally {
+      close(live)
+    }
+
+    return started
   }).catch(($, e, next) => next(e))
 
   // A cleared, resumed or branched conversation starts over without a fresh
   // session start: what was known is dropped, and the rows that are still
-  // on screen, or come back, look their references up again.
-  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, ($, e, next) => {
+  // on screen, or come back, have their references asked about again.
+  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     Session.startOver(session)
     Session.revet(session)
     Draft.startOver(draft)
     Scribe.startOver(scribe)
     $.ui.invalidate('ui.render')
 
-    return next(e)
+    const started = await next(e)
+    const live = open()
+
+    try {
+      const host = hostOf($, session, live)
+
+      await briefly(host.after, flush(host, session), SHORT_WAIT_MS)
+    } finally {
+      close(live)
+    }
+
+    return started
   }).catch(($, e, next) => next(e))
 
   on('prompt.edit', async ($, e, next) => {
@@ -202,6 +234,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     // Whether the developer is typing; what waits above the prompt comes up
     // once the box is empty. Nothing is asked of anyone for it.
     try {
+      Session.typed(hostOf($, session), session, box.text)
       Scribe.typed(scribeHostOf($, session), scribe, box.text)
     } catch {
       // The box is drawn all the same.
@@ -270,11 +303,12 @@ export function register(on: On, options: PluginOptions = {}): void {
       return next(e)
     }
 
-    // Started, never waited for: the row is drawn now with what is known.
+    // The row is drawn now with what is known, and its references are noted
+    // for the next hook that may ask Fylgja; nothing is asked from here.
     // A row handed the text as it was typed is drawn from what was sent for it.
     const sent = e.props.origin.kind === 'composer' ? restored(draft.known, e.props.text) : e.props.text
 
-    want(hostOf($, session), session, referencesIn(sent))
+    want(session, referencesIn(sent))
 
     const text = rowTextOf(sent, session.memory)
 
@@ -325,21 +359,33 @@ export function register(on: On, options: PluginOptions = {}): void {
     async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server),
   )
 
-  // The files a step of the main conversation names are noted for a lookup
-  // of what is recorded about them. The step's stream is passed on as it
-  // comes; the lookup starts after it, and a slow one is not waited for.
+  // A step of a turn is the first hook Claude Code waits on after a prompt.
+  // Who is signed in, and the references of the rows on screen, are asked
+  // about as the step begins and waited for a moment after it, so the step
+  // itself is never held. The files the step names are then noted for a
+  // lookup of what is recorded about them; a slow one is not waited for.
   on('turn.step', async function* ($, e, next) {
-    const stepped = yield* next(e)
+    const live = open()
 
-    if (e.agentId === undefined) {
-      try {
-        await Scribe.stepped(scribeHostOf($, session), scribe, e.index, stepped.toolUses)
-      } catch {
-        // The turn goes on.
+    try {
+      const host = hostOf($, session, live)
+      const looked = flush(host, session)
+      const stepped = yield* next(e)
+
+      await briefly(host.after, looked, SHORT_WAIT_MS)
+
+      if (e.agentId === undefined) {
+        try {
+          await Scribe.stepped(scribeHostOf($, session, live), scribe, e.index, stepped.toolUses)
+        } catch {
+          // The turn goes on.
+        }
       }
-    }
 
-    return stepped
+      return stepped
+    } finally {
+      close(live)
+    }
   })
 
   // The end of a turn of the main conversation is where Scribe does its
@@ -347,15 +393,25 @@ export function register(on: On, options: PluginOptions = {}): void {
   // business.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
+    const live = open()
 
-    if (e.agentId === undefined) {
-      try {
+    try {
+      const host = hostOf($, session, live)
+
+      if (e.agentId === undefined) {
         // A session that has moved is in another project; what that one holds is looked at before anything else.
         Session.located(session, await $.session.cwd())
-        await Scribe.completed(scribeHostOf($, session), scribe)
-      } catch {
-        // The turn ended as it would have without Scribe.
       }
+
+      await briefly(host.after, flush(host, session), SHORT_WAIT_MS)
+
+      if (e.agentId === undefined) {
+        await Scribe.completed(scribeHostOf($, session, live), scribe)
+      }
+    } catch {
+      // The turn ended as it would have without the plugin.
+    } finally {
+      close(live)
     }
 
     return done
@@ -433,14 +489,18 @@ export function register(on: On, options: PluginOptions = {}): void {
     const key = presses.shift()
 
     if (key !== undefined) {
+      const live = open()
+
       try {
         if (key.startsWith('account-')) {
-          await Session.pressed(hostOf($, session), session, key)
+          await Session.pressed(hostOf($, session, live), session, key)
         } else {
-          await Scribe.pressed(scribeHostOf($, session), scribe, key)
+          await Scribe.pressed(scribeHostOf($, session, live), scribe, key)
         }
       } catch {
         // The press is done with.
+      } finally {
+        close(live)
       }
     }
 
@@ -452,10 +512,14 @@ export function register(on: On, options: PluginOptions = {}): void {
     const entry = entries.shift()
 
     if (entry !== undefined) {
+      const live = open()
+
       try {
-        await Scribe.entered(scribeHostOf($, session), scribe, entry.key, entry.value)
+        await Scribe.entered(scribeHostOf($, session, live), scribe, entry.key, entry.value)
       } catch {
         // The line is done with.
+      } finally {
+        close(live)
       }
     }
 

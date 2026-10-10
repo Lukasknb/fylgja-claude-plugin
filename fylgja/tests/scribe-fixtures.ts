@@ -112,6 +112,18 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     return { text: box.text, cursor: e.start + e.inputText.length }
   })
   on('turn.complete', ($, e) => ({ text: e.answer }))
+  // The model's step: it asks for the tool calls a test named with `stepping`, or for none.
+  // eslint-disable-next-line require-yield
+  on('turn.step', async function* ($, e) {
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [...(STEPS.get(on)?.() ?? [])],
+      stopReason: 'tool_use' as const,
+      usage: null,
+    }
+  })
   on('ui.render', ($, e) => {
     const props = e.props as { text?: string }
 
@@ -358,11 +370,10 @@ export async function step(
 
 /** Stands for the model's step: it asks for the tool calls the test names. */
 export function stepping(on: On, uses: () => readonly { name: string; input: unknown }[]): void {
-  // eslint-disable-next-line require-yield
-  on('turn.step', async function* ($, e) {
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: uses(), stopReason: 'tool_use' as const, usage: null }
-  })
+  STEPS.set(on, uses)
 }
+
+const STEPS = new WeakMap<On, () => readonly { name: string; input: unknown }[]>()
 
 const BAND = {
   plugin: 'fylgja',

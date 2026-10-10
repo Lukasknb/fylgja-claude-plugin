@@ -43,7 +43,11 @@ Very little, on purpose.
   When you press Enter, the reference goes to Claude exactly as you pasted
   it.
   - The chip shows the title bare, as pasted. Only your sent message shows
-    a title in quotes, and that one Fylgja has confirmed.
+    a title in quotes, and that one Fylgja has confirmed. The message is
+    drawn at once with what is known; Fylgja is asked as Claude begins to
+    answer, so the confirmed title shows a moment after you send. A
+    message that comes back on screen after `/clear`, a resume or a fork
+    is asked about when the next turn begins.
   - A chip is its whole text, from `‹` to `›`. Text you type before or
     after it is ordinary text.
   - Two different records with the same title get the start of their id
@@ -248,9 +252,10 @@ signed in (`whoami`) and keeps the ids of that user, team and profile: the
 pin. Names are not kept; they are asked for again and held in memory, to
 show.
 
-From then on, when a session starts and after `/clear`, a resume or a
-fork, the plugin asks who is signed in before it asks Fylgja anything
-else. While the answer is the pinned account, nothing changes, and
+From then on, when a session starts and after `/clear`, a resume, a fork
+or a new sign-in, the plugin asks who is signed in before it asks Fylgja
+anything else. The start of a session waits a moment for the answer (a
+second and a half at most) and then goes on without it. While the answer is the pinned account, nothing changes, and
 Scribe's first line (`What is this`) and the opened list of what it
 recorded say where records go: `Recorded to Acme as Ada Lovelace, profile
 Work`.
@@ -261,18 +266,28 @@ altogether for the session: no lookup, no record, no model call. One line
 under the prompt names who is signed in, and a line above the prompt
 offers to accept it:
 
-`? Fylgja is signed in as another account than this machine is set up for. Now: Eve (Rival)   1 Use this account from now on   0 Not now`
+`? Fylgja is signed in as another account than this machine is set up for. Now: Eve (Rival) #0a4f2c · before: Ada Lovelace (Acme) #7b4f19   1 Use this account from now on   0 Not now`
 
-Accepting takes two presses of `1`. It replaces the pin, and the plugin
-works for that account from then on. `Not now` puts the question away
-until the next session; signing in as the pinned account with `/mcp` ends
-it too.
+The six characters after `#` are the ends of the account's user, team and
+profile ids, so two accounts under the same name can be told apart; a
+name Fylgja sends is shown as plain text, cut short, and cannot carry a
+`#` or brackets of its own. Accepting takes two presses of `1`. It
+replaces the pin, and the plugin works for that account from then on.
+`Not now` puts the question away until the next session; signing in as
+the pinned account with `/mcp` ends it too.
+
+This line is a notice about where your records would go, so it shows
+even while you are typing. It takes no key then: while the prompt box
+holds text the line has no keys at all and says `empty the prompt box to
+answer`, and a digit you type is your text.
 
 If Fylgja does not say who is signed in (the call fails, takes more than
 eight seconds, or the server has no `whoami` yet), the plugin stays out
-for that conversation as well, with
+with
 `Fylgja did not say which account is signed in, so the plugin stays out for now`.
-It asks again when the next conversation starts.
+That is not kept as an answer: the plugin asks again as the next turn
+begins and at its end, calls nothing else until it knows, and takes the
+line down and works as ever once the pinned account answers.
 
 ### What Scribe costs
 
@@ -283,9 +298,12 @@ cost line for these requests, so here is what they are.
   with a prompt. Not for a turn a background task or a hook started, not
   for a turn that changed no file and holds under 200 characters of talk
   (its lines are read with the next turn's), and no more than 30 times in
-  any hour; past that Scribe is quiet until the hour has rolled on. The
-  count is kept by each running Claude Code, so two sessions open at once
-  have 30 each.
+  any hour; past that Scribe is quiet until the hour has rolled on. A
+  request that puts a refused record right outside such a look (after a
+  key of yours wrote the record, or for a record that waited a turn)
+  counts as one of the 30 by itself, and is not made once they are used
+  up. The count is kept by each running Claude Code, so two sessions open
+  at once have 30 each.
 - **Usually:** one request per turn of about 2,500 input tokens, of
   which about 2,200 are read from the prompt cache, and
   15 to 320 output tokens, in one to four seconds (measured over the
@@ -295,9 +313,15 @@ cost line for these requests, so here is what they are.
   plan text, 8 earlier turns in brief, 14,000 characters of this turn, 10
   records, 3 lookups of 4,000 characters each) and 1,500 output tokens
   each: about 123,000 input and 6,000 output tokens. All but the first
-  request of a turn read most of that from the prompt cache.
-- **At most, per hour:** 30 turns, so 120 requests, about 3.7 million
-  input tokens and 180,000 output tokens. That is the computed ceiling of
+  request of a turn read most of that from the prompt cache. A refused
+  record that is put right inside the look uses one of those 4. On top of
+  the 4, the end of a turn may put right up to 10 records that waited
+  from earlier turns, and each key of yours that writes a record may do
+  it once: one small request each (the record and the refusal, under
+  1,000 input tokens, at most 700 output tokens).
+- **At most, per hour:** 30 looks, a small request of the kind above
+  counting as a look, so 120 requests, about 3.7 million input tokens and
+  180,000 output tokens. That is the computed ceiling of
   a session that hits every limit at once on every turn for an hour.
 - **Time:** each request has a limit of 25 seconds and a turn's whole look
   45; no call to Fylgja is waited for longer than 8 seconds. A server that
@@ -372,7 +396,14 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   handed over by a program (`claude -p`, the SDK) causes no lookup at all. It
   rides the Fylgja connection you signed in to with `/mcp`. While the sign-in
   line is up, Claude Code is asked every few seconds whether Fylgja is
-  connected yet.
+  connected yet; that asks Claude Code and sends nothing to Fylgja.
+- **When Fylgja is called.** Only from a moment Claude Code itself waits
+  on the plugin: the start of a session, each step of a turn, a turn's
+  end, and a key or a line of yours in the band. Never from a message
+  being drawn, from typing, from sending a prompt, or from a timer. What
+  a drawn message wants looked up waits for the next such moment, and
+  none of them holds your prompt: the start of a session and a step wait
+  a second and a half at most.
 - **Sent to the model, by Scribe:** at the end of a turn, what happened in
   it: the prompts you sent, Claude's replies, and one line per tool call
   (the tool, the file or the command, whether it worked, and the first 160
@@ -384,9 +415,10 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   the Fylgja records Scribe looked up for that turn. This goes to your
   model provider through Claude Code, on your own Claude plan; how much,
   and how often, is under "What Scribe costs".
-- **Asked of Fylgja first:** who is signed in (`whoami`), once when a
-  session starts and once after each `/clear`, resume or fork. Nothing is
-  sent with the question.
+- **Asked of Fylgja first:** who is signed in (`whoami`), when a session
+  starts and after each `/clear`, resume, fork or new sign-in, and again
+  at each step and end of a turn for as long as no answer has come.
+  Nothing is sent with the question.
 - **Sent to Fylgja, by Scribe:** the repository as `owner/name` and the
   paths of the files Claude touched, to look up what is recorded about
   them; at most three lookups a turn that the model asks for, one of them a
@@ -437,7 +469,13 @@ npx -p typescript tsc -p fylgja
 over seventeen scripted sessions with a real model and a stand-in server,
 to see how often it is right and how often it speaks when it should not.
 `run.sh` spends your Claude plan (about 25 model calls per run);
-`RESULTS.md` there is the last run.
+`RESULTS.md` there is the last run. Ten further sessions
+(`SCRIBE_SET=heldout`) were written after the prompt was first final and
+held out from shaping it. The prompt has gained a sentence since, so
+they are a regression check now and no longer a held-out measurement.
+`live-run.sh` puts one real headless turn through the plugin's own hooks
+against the stand-in, to read from the debug log that every call to
+Fylgja was let through.
 
 ### Still to confirm in a live session
 
@@ -448,7 +486,12 @@ run is headless. What only a signed-in interactive session can show:
    to Fylgja with the plugin installed, and check that chips resolve and
    Scribe runs (which means `whoami` answered and was let through with no
    dialog, also when it is asked at session start and not at a turn's
-   end). Then sign in as another account with `/mcp`, start a new
+   end). Send a prompt with a pasted reference and check that its chip
+   shows the confirmed title while Claude is still answering, with no
+   permission dialog. In the debug log (`claude --debug`) there must be
+   no `tool.check skipped: re-entry` and no `denied` for a
+   `mcp__plugin_fylgja_fylgja__` tool. Type some text and check that the
+   account line, if it is up, offers no key until the box is empty. Then sign in as another account with `/mcp`, start a new
    session, and check the line under the prompt, the line above it, that
    nothing is looked up or recorded, and that two presses of `1` accept
    the new account. On a server that has no `whoami` yet the whole plugin

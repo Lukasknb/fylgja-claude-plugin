@@ -1,4 +1,4 @@
-import { accountOf, isPinned, keptPin, nameOf, PIN_KEY, pinOf } from './account'
+import { accountOf, isPinned, keptPin, nameOf, PIN_KEY, pinOf, tailOf } from './account'
 import type { Account } from './account'
 import type { Host } from './host'
 import { isLeftToPlugin } from './project'
@@ -36,8 +36,6 @@ export type Session = {
   pending: Set<string>
   /** How many lookups have failed for an id since everything was last dropped. */
   failures: Map<string, number>
-  /** Whether queued references are being worked through. */
-  isLooking: boolean
   signIn: SignIn.SignIn
   /**
    * The name the engine last answered for the server this plugin declares:
@@ -56,10 +54,17 @@ export type Session = {
   /** The pinned account as last seen in this process: its name is known only from here. */
   known: Account | undefined
   /**
-   * Whether the account is the pinned one: asked once, when the session
-   * starts or starts over, before any other call to Fylgja.
+   * Whether the account is the pinned one, as far as Fylgja has said: asked
+   * before any other call to Fylgja. Only an answer is kept. An ask that
+   * failed or came too late leaves it unknown, and it is asked again.
    */
-  pinned: Promise<'match' | 'mismatch' | 'unavailable'> | undefined
+  pin: 'unknown' | 'match' | 'mismatch'
+  /** The asking who is signed in that is under way, if one is. */
+  pinning: Promise<'match' | 'mismatch' | 'unavailable'> | undefined
+  /** The end of the pinned account's ids, to tell it from another of the same name. */
+  pinTail: string | undefined
+  /** Whether the prompt box holds text: the account line then shows, and takes no key. */
+  isTyping: boolean
   /** Until when a second press accepts the account; 0 with no first press. */
   acceptUntil: number
   /** Whether the person put the question of the account off for this session. */
@@ -86,7 +91,6 @@ export function create(): Session {
     queue: [],
     pending: new Set(),
     failures: new Map(),
-    isLooking: false,
     signIn: SignIn.create(),
     server: undefined,
     notice: undefined,
@@ -94,7 +98,10 @@ export function create(): Session {
     offLine: undefined,
     account: { state: 'unknown', who: undefined },
     known: undefined,
-    pinned: undefined,
+    pin: 'unknown',
+    pinning: undefined,
+    pinTail: undefined,
+    isTyping: false,
     acceptUntil: 0,
     isPutOff: false,
     cwd: undefined,
@@ -155,7 +162,7 @@ export function located(session: Session, cwd: string): void {
  */
 export function revet(session: Session): void {
   session.vetted = undefined
-  session.pinned = undefined
+  session.pin = 'unknown'
   session.acceptUntil = 0
   session.isPutOff = false
 }
@@ -171,8 +178,6 @@ export async function accountPin(host: Host, session: Session, server: string): 
   const who = accountOf(payloadOf(await limited(host.after, host.call(server, 'whoami', {}), CALL_TIMEOUT_MS)))
 
   if (who === undefined) {
-    session.account = { state: 'unsaid', who: undefined }
-
     return 'unavailable'
   }
 
@@ -184,19 +189,23 @@ export async function accountPin(host: Host, session: Session, server: string): 
     await host.store(PIN_KEY, pinOf(who))
   } else if (pin === undefined || !isPinned(pin, who)) {
     session.account = { state: 'other', who }
+    session.pinTail = pin === undefined ? undefined : tailOf(pin)
+    session.pin = 'mismatch'
 
     return 'mismatch'
   }
 
   session.account = { state: 'pinned', who }
   session.known = who
+  session.pin = 'match'
 
   return 'match'
 }
 
 /** What the line under the prompt says when another account is signed in than the one this machine is set up for. */
-export function otherStatus(now: Account, known: Account | undefined): string {
-  const pinned = known === undefined ? 'the account this machine is set up for' : nameOf(known)
+export function otherStatus(now: Account, known: Account | undefined, pinTail?: string): string {
+  const pinned =
+    known !== undefined ? nameOf(known) : `the account this machine is set up for${pinTail === undefined ? '' : ` #${pinTail}`}`
 
   return `Fylgja is signed in as ${nameOf(now)}, not as ${pinned}: the plugin stays out until you accept that above the prompt`
 }
@@ -228,6 +237,13 @@ export function accountView(session: Session): View | undefined {
     return undefined
   }
 
+  const before =
+    session.known === undefined
+      ? session.pinTail === undefined
+        ? undefined
+        : `account #${session.pinTail}`
+      : nameOf(session.known)
+
   return {
     rows: [
       {
@@ -235,18 +251,36 @@ export function accountView(session: Session): View | undefined {
           { text: '? ', tone: 'mark' },
           { text: 'Fylgja is signed in as another account than this machine is set up for. ', tone: 'strong' },
           { text: `Now: ${nameOf(who)}` },
-          ...(session.known === undefined ? [] : [{ text: ` · before: ${nameOf(session.known)}`, tone: 'dim' } as const]),
+          ...(before === undefined ? [] : [{ text: ` · before: ${before}`, tone: 'dim' } as const]),
+          ...(session.isTyping ? [{ text: ' · empty the prompt box to answer', tone: 'dim' } as const] : []),
         ],
       },
     ],
-    keys: [
-      {
-        key: 'account-accept',
-        hotkey: '1',
-        label: session.acceptUntil === 0 ? 'Use this account from now on' : 'Press again to use this account',
-      },
-      { key: 'account-later', hotkey: '0', label: 'Not now' },
-    ],
+    // While the prompt box holds text the line is only read: a digit typed there is the person's text.
+    keys: session.isTyping
+      ? []
+      : [
+          {
+            key: 'account-accept',
+            hotkey: '1',
+            label: session.acceptUntil === 0 ? 'Use this account from now on' : 'Press again to use this account',
+          },
+          { key: 'account-later', hotkey: '0', label: 'Not now' },
+        ],
+  }
+}
+
+/** The prompt box changed. Whether it holds text decides whether the account line takes keys. */
+export function typed(host: Host, session: Session, text: string): void {
+  const isTyping = text.trim() !== ''
+
+  if (isTyping !== session.isTyping) {
+    session.isTyping = isTyping
+    session.acceptUntil = 0
+
+    if (session.account.state === 'other' && !session.isPutOff) {
+      host.redraw()
+    }
   }
 }
 
@@ -257,7 +291,7 @@ export function accountView(session: Session): View | undefined {
 export async function pressed(host: Host, session: Session, key: string): Promise<void> {
   const { who } = session.account
 
-  if (session.account.state !== 'other' || who === undefined) {
+  if (session.account.state !== 'other' || who === undefined || session.isTyping) {
     return
   }
 
@@ -281,7 +315,7 @@ export async function pressed(host: Host, session: Session, key: string): Promis
       await host.store(PIN_KEY, pinOf(who))
       session.account = { state: 'pinned', who }
       session.known = who
-      session.pinned = Promise.resolve('match')
+      session.pin = 'match'
       session.acceptUntil = 0
       session.isOutside = false
       session.offLine = undefined
@@ -292,6 +326,33 @@ export async function pressed(host: Host, session: Session, key: string): Promis
   }
 
   host.redraw()
+}
+
+/** The sign-in line went up or came down: what was known may be another account's, and so may the account. */
+function followed(host: Host, session: Session, change: 'shown' | 'cleared' | undefined): void {
+  if (!session.signIn.isShown && session.recheck !== undefined) {
+    session.recheck.cancel()
+    session.recheck = undefined
+  }
+
+  if (change !== undefined) {
+    startOver(session)
+    session.pin = 'unknown'
+    host.redraw()
+  }
+}
+
+/**
+ * While the sign-in line is up, Claude Code is asked every few seconds
+ * whether Fylgja is connected yet, so the line goes soon after the person
+ * has signed in. This runs from a timer, so it asks Claude Code only and
+ * never calls Fylgja: who is signed in, and the references that wait, are
+ * asked about by the next hook that is being waited on.
+ */
+async function recheck(host: Host, session: Session): Promise<void> {
+  const { change } = await SignIn.check(host, session.signIn, false)
+
+  followed(host, session, change)
 }
 
 /**
@@ -317,7 +378,11 @@ export async function pressed(host: Host, session: Session, key: string): Promis
  * shows what another account was allowed to see. While the line is up the
  * server is asked again every few seconds, so the line goes soon after the
  * person has signed in, whatever they do next; when it goes, the rows are
- * drawn again and look their references up.
+ * drawn again and their references are asked about at the next chance.
+ *
+ * Call this from a hook that is being waited on. From anywhere else it
+ * calls nothing on Fylgja, and answers undefined while who is signed in is
+ * not yet known.
  */
 export async function serverOf(host: Host, session: Session, isFirst = false): Promise<string | undefined> {
   if (session.vetted === undefined) {
@@ -335,19 +400,11 @@ export async function serverOf(host: Host, session: Session, isFirst = false): P
 
   if (session.signIn.isShown && session.recheck === undefined) {
     session.recheck = host.every(RECHECK_MS, () => {
-      void serverOf(host, session).catch(() => undefined)
+      void recheck(host, session).catch(() => undefined)
     })
   }
 
-  if (!session.signIn.isShown && session.recheck !== undefined) {
-    session.recheck.cancel()
-    session.recheck = undefined
-  }
-
-  if (change !== undefined) {
-    startOver(session)
-    host.redraw()
-  }
+  followed(host, session, change)
 
   if (answered !== undefined && answered !== OWN_SERVER) {
     return stayOut(host, session, TWIN_STATUS)
@@ -355,20 +412,43 @@ export async function serverOf(host: Host, session: Session, isFirst = false): P
 
   // Before anything else is asked of Fylgja: is this the account the machine is set up for?
   if (answered !== undefined) {
-    // The plugin's own connection: its own calls may go there, the question of who is signed in first.
-    session.server = answered
-    session.pinned ??= accountPin(host, session, answered).catch(() => {
-      session.account = { state: 'unsaid', who: undefined }
+    if (session.pin === 'unknown') {
+      // Asked only from a hook that is being waited on. From anywhere else
+      // it stays unknown, nothing is called, and the next such hook asks.
+      if (session.pinning === undefined && !host.isLive()) {
+        return undefined
+      }
 
-      return 'unavailable' as const
-    })
+      // The plugin's own connection: its own calls may go there, the question of who is signed in first.
+      session.server = answered
+      session.pinning ??= accountPin(host, session, answered)
+        .catch(() => 'unavailable' as const)
+        .finally(() => {
+          session.pinning = undefined
+        })
 
-    const pin = await session.pinned
+      // No answer, or none in time, is not kept: it is asked again at the next chance.
+      if ((await session.pinning) === 'unavailable') {
+        session.account = { state: 'unsaid', who: undefined }
 
-    if (pin !== 'match') {
-      const who = pin === 'mismatch' ? session.account.who : undefined
+        return stayOut(host, session, UNSAID_STATUS)
+      }
+    }
 
-      return stayOut(host, session, who === undefined ? UNSAID_STATUS : otherStatus(who, session.known))
+    if (session.pin !== 'match') {
+      const { who } = session.account
+
+      return stayOut(host, session, who === undefined ? UNSAID_STATUS : otherStatus(who, session.known, session.pinTail))
+    }
+
+    // The account is the one this machine is set up for: a line that said otherwise has had its day.
+    if (session.offLine !== undefined) {
+      if (session.notice === session.offLine) {
+        say(host, session, undefined)
+      }
+
+      session.offLine = undefined
+      host.redraw()
     }
 
     session.isOutside = false

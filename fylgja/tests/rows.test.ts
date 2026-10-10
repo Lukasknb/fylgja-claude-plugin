@@ -8,7 +8,9 @@ import {
   meetingRecord,
   NEEDS_SIGN_IN,
   NOTE_ID,
+  asked,
   rowOf,
+  step,
   scene,
   token,
   UNSEEN,
@@ -41,7 +43,7 @@ describe('a reference in the person’s message', () => {
 
       if (surface === 'terminal') {
         expect(await ui.drawn()).toEqual({ type: 'Text', props: {}, children: [`engine: what about ${UNCONFIRMED}?`] })
-        await started.clock.advance(300)
+        await asked($, started, 300)
       }
 
       expect(await ui.drawn(), surface).toEqual({ type: 'Text', props: {}, children: [`engine: what about ${VERIFIED}?`] })
@@ -109,7 +111,7 @@ describe('a reference in the person’s message', () => {
 
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...userMessage(`see ${NOTE}`), surface })
-      await started.clock.settle()
+      await asked($, started)
 
       expect(await ui.find({ text: 'engine: see [✎ note · not found]' }), surface).toBeDefined()
       await ui.unmount()
@@ -121,7 +123,7 @@ describe('a reference in the person’s message', () => {
   test('a message the person sent from their phone or browser is theirs too', async ($, on) => {
     const started = scene(on, { resolve: FOUND })
     const ui = await $.ui.mount({ ...userMessage(MEETING, false, 'bridge'), surface: 'terminal' })
-    await started.clock.settle()
+    await asked($, started)
 
     expect(await ui.find({ text: `engine: ${VERIFIED}` })).toBeDefined()
   })
@@ -182,11 +184,11 @@ describe('how often Fylgja is asked', () => {
   test('a row drawn again and again asks once', async ($, on) => {
     const started = scene(on, { resolve: FOUND })
     const ui = await $.ui.mount({ ...userMessage(`${MEETING} and again ${MEETING}`), surface: 'terminal' })
-    await started.clock.settle()
+    await asked($, started)
 
     for (let n = 0; n < 5; n += 1) {
       await ui.redraw()
-      await started.clock.settle()
+      await asked($, started)
     }
 
     expect(await rowOf($, started, MEETING)).toBe(VERIFIED)
@@ -198,7 +200,7 @@ describe('how often Fylgja is asked', () => {
     const first = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
     const second = await $.ui.mount({ ...userMessage(`again ${MEETING}`), surface: 'terminal' })
     await first.redraw()
-    await started.clock.advance(300)
+    await asked($, started, 300)
 
     expect(await second.find({ text: `engine: again ${VERIFIED}` })).toBeDefined()
     expect(started.calls.length).toBe(1)
@@ -207,11 +209,11 @@ describe('how often Fylgja is asked', () => {
   test('a failed lookup is tried once more and then left alone', async ($, on) => {
     const started = scene(on, { resolve: () => ({ content: [{ type: 'text', text: 'down' }], isError: true }) })
     const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
-    await started.clock.settle()
+    await asked($, started)
 
     for (let n = 0; n < 5; n += 1) {
       await ui.redraw()
-      await started.clock.settle()
+      await asked($, started)
     }
 
     expect(await ui.find({ text: `engine: ${UNCONFIRMED}` })).toBeDefined()
@@ -229,21 +231,39 @@ describe('how often Fylgja is asked', () => {
       },
     })
 
-    expect(await rowOf($, started, MEETING)).toBe(VERIFIED)
+    const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+    await asked($, started)
+
+    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'after the try that failed').toBeDefined()
+
+    await asked($, started)
+
+    expect(await ui.find({ text: `engine: ${VERIFIED}` }), 'the next step asks once more').toBeDefined()
     expect(tries).toBe(2)
   })
 
-  test('a server that is switched off is asked about a reference twice at most', async ($, on) => {
-    const started = scene(on, { connect: () => ({ isConnected: false, reason: 'disabled', message: 'off' }) })
+  test('a server that is switched off is never called: the reference waits, and nothing is said', async ($, on) => {
+    let isOff = true
+    const started = scene(on, {
+      connect: () => (isOff ? { isConnected: false, reason: 'disabled', message: 'off' } : CONNECTED),
+      resolve: FOUND,
+    })
     const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
 
     for (let n = 0; n < 5; n += 1) {
       await ui.redraw()
-      await started.clock.settle()
+      await asked($, started)
     }
 
-    expect(started.connects()).toBe(2)
     expect([started.calls, started.statuses]).toEqual([[], []])
+
+    isOff = false
+    await asked($, started)
+
+    expect(
+      await ui.find({ text: `engine: ${VERIFIED}` }),
+      'waiting was not failing: it is asked once the server is on',
+    ).toBeDefined()
   })
 
   test('many references go out twenty at a time, one call after the other', async ($, on) => {
@@ -344,7 +364,7 @@ describe('what is known, and for how long', () => {
       let title = 'Engineering Retrospective'
       const started = scene(on, { resolve: after(100, () => answer({ records: [meetingRecord({ title })] })) })
       const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
-      await started.clock.advance(100)
+      await asked($, started, 100)
 
       expect(await ui.find({ text: `engine: ${VERIFIED}` })).toBeDefined()
 
@@ -353,7 +373,7 @@ describe('what is known, and for how long', () => {
 
       expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'nothing carries over').toBeDefined()
 
-      await started.clock.advance(100)
+      await asked($, started, 100)
 
       expect(await ui.find({ text: 'engine: [◉ "Renamed since" · 2026-09-30]' })).toBeDefined()
       expect(started.calls.length).toBe(2)
@@ -372,15 +392,20 @@ describe('what is known, and for how long', () => {
       },
     })
     const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+    const before = step($)
     await started.clock.settle()
     delay = 2000
     title = 'Asked after the clear'
-    await $.classic.SessionStart({ source: 'clear' })
+    const cleared = $.classic.SessionStart({ source: 'clear' })
     await started.clock.advance(500)
 
     expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'the old answer has landed and is ignored').toBeDefined()
 
-    await started.clock.advance(2000)
+    // The hooks hand back after their short wait; what they asked is still on its way.
+    await started.clock.advance(1500)
+    await before
+    await cleared
+    await started.clock.advance(1000)
 
     expect(await ui.find({ text: 'engine: [◉ "Asked after the clear" · 2026-09-30]' })).toBeDefined()
   })
@@ -400,9 +425,13 @@ describe('what is known, and for how long', () => {
       resolve: FOUND,
     })
     const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+    const before = step($)
     await started.clock.settle()
-    await $.classic.SessionStart({ source: 'clear' })
+    const cleared = $.classic.SessionStart({ source: 'clear' })
     await started.clock.advance(500)
+    await before
+    await cleared
+    await asked($, started)
 
     expect(await ui.find({ text: `engine: ${VERIFIED}` }), 'the row still on screen is looked up afresh').toBeDefined()
     expect(started.calls.length, 'once, for the new conversation').toBe(1)
@@ -436,13 +465,13 @@ describe('what is known, and for how long', () => {
       },
     })
     const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
-    await started.clock.settle()
+    await asked($, started)
 
     expect(await ui.find({ text: `engine: ${VERIFIED}` })).toBeDefined()
 
     isLapsed = true
     const other = await $.ui.mount({ ...userMessage(NOTE), surface: 'terminal' })
-    await started.clock.settle()
+    await asked($, started)
 
     expect(started.statuses).toEqual(['sign in with /mcp'])
     expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'the earlier row too').toBeDefined()
@@ -453,6 +482,10 @@ describe('what is known, and for how long', () => {
     await started.clock.advance(5000)
 
     expect(started.statuses).toEqual(['sign in with /mcp', undefined])
+    expect(started.calls.length, 'the timer that takes the line down calls nothing on Fylgja').toBe(2)
+
+    await asked($, started)
+
     expect(await ui.find({ text: `engine: ${VERIFIED}` })).toBeDefined()
     expect(await other.find({ text: `engine: ${VERIFIED}` })).toBeDefined()
   })
@@ -475,11 +508,12 @@ describe('what the plugin never does', () => {
 
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work/repo' })
     const ui = await $.ui.mount({ ...userMessage(`${MEETING} ${NOTE}`), surface: 'terminal' })
-    await started.clock.settle()
+    await asked($, started)
     isSignedIn = true
     await started.clock.advance(5000)
     await $.classic.SessionStart({ source: 'clear' })
-    await started.clock.settle()
+    await asked($, started)
+    await asked($, started)
     await $.ui.mount({
       plugin: 'fylgja',
       component: 'ToolResult',

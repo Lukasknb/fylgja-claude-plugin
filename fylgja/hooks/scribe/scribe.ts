@@ -693,14 +693,18 @@ type Budget = { steps: number; until: number; seen: Seen; isLastTry?: true }
 /**
  * What a write outside a wake may spend on putting a refused record right:
  * one model call, with its own time limit. Such a write is the developer's
- * own key, or a record that was waiting for it.
+ * own key, or a record that was waiting for it. The call is one of the
+ * hour's share, as a wake is: with the share used up there is none.
  */
 async function lone(host: ScribeHost, scribe: Scribe): Promise<Budget> {
   const inTree = scribe.plans.docs.flatMap(doc => (doc.path === null ? [] : [doc.path]))
+  const now = await host.now()
+
+  scribe.wakeTimes = scribe.wakeTimes.filter(at => now - at < HOUR_MS)
 
   return {
-    steps: 1,
-    until: (await host.now()) + STEP_TIMEOUT_MS,
+    steps: scribe.wakeTimes.length < MAX_WAKES_PER_HOUR ? 1 : 0,
+    until: now + STEP_TIMEOUT_MS,
     seen: { plans: scribe.plans.docs, saidNoReason: false, paths: new Set([...scribe.lookedUp, ...inTree]), facts: new Map() },
     isLastTry: true,
   }
@@ -749,6 +753,11 @@ async function written(
 
   budget.steps -= 1
   scribe.corrections += 1
+
+  // Outside a wake the call is counted against the hour by itself.
+  if (budget.isLastTry === true) {
+    scribe.wakeTimes.push(await host.now())
+  }
 
   const answer = await correct(host, {
     model: scribe.model,

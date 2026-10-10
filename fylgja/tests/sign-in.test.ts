@@ -1,6 +1,18 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { answer, CONNECTED, MEETING_ID, meetingRecord, NEEDS_SIGN_IN, rowOf, scene, SESSION, token, userMessage } from './fixtures'
+import {
+  answer,
+  asked,
+  CONNECTED,
+  MEETING_ID,
+  meetingRecord,
+  NEEDS_SIGN_IN,
+  rowOf,
+  scene,
+  SESSION,
+  token,
+  userMessage,
+} from './fixtures'
 
 const MEETING = token('meeting', 'Standup', MEETING_ID)
 
@@ -16,7 +28,7 @@ describe('sign-in', () => {
     expect(started.calls).toEqual([])
   })
 
-  test('the check at session start is not waited for', async ($, on) => {
+  test('the check at session start is waited for a moment and no longer', async ($, on) => {
     const started = scene(on, {
       connect: async clock => {
         await clock.sleep(60_000)
@@ -25,7 +37,10 @@ describe('sign-in', () => {
       },
     })
 
-    expect(await $.session.start(SESSION)).toEqual({ cwd: '/work/repo' })
+    const starting = $.session.start(SESSION)
+    await started.clock.advance(1500)
+
+    expect(await starting).toEqual({ cwd: '/work/repo' })
     expect(started.statuses).toEqual([])
 
     await started.clock.advance(60_000)
@@ -129,21 +144,26 @@ describe('sign-in', () => {
       resolve: () => answer({ records: [meetingRecord()] }),
     })
 
-    await $.session.start(SESSION)
+    const starting = $.session.start(SESSION)
     const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
-    await started.clock.settle()
+    await asked($, started)
 
     expect(await ui.find({ text: 'engine: [◉ "Engineering Retrospective" · 2026-09-30]' })).toBeDefined()
 
     await started.clock.advance(1000)
 
-    expect(started.statuses.filter(status => status !== undefined), 'the late answer raises no line').toEqual([])
+    expect(
+      started.statuses.filter(status => status !== undefined),
+      'the late answer raises no line',
+    ).toEqual([])
     expect(await ui.find({ text: 'engine: [◉ "Engineering Retrospective" · 2026-09-30]' }), 'and wipes no chip').toBeDefined()
 
-    const asked = started.connects()
+    await starting
+
+    const before = started.connects()
     await started.clock.advance(60_000)
 
-    expect(started.connects()).toBe(asked)
+    expect(started.connects()).toBe(before)
   })
 
   test('a server that cannot be asked at all changes nothing', async ($, on) => {

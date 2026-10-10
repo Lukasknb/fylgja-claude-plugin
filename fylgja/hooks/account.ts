@@ -10,6 +10,7 @@
  */
 
 import { isRecord } from './payload'
+import { drawn } from './plain'
 
 /** Who Fylgja says a connection is signed in as. Names are for showing, and are held in memory only. */
 export type Account = {
@@ -71,11 +72,27 @@ export function isPinned(pin: Pin, account: Account): boolean {
   return pin.user === now.user && pin.team === now.team && pin.profile === now.profile
 }
 
-const short = (text: string): string => (text.length <= 30 ? text : `${text.slice(0, 29)}…`)
+/**
+ * A name Fylgja sent, as it is drawn: made safe as every text of the
+ * server's is, short, and without the marks an account's line is built
+ * from, so a name cannot pass for another account's whole line.
+ */
+const short = (text: string): string => drawn(text.replace(/[\p{Ps}\p{Pe}#]/gu, ' '), 30) || 'no name'
 
-/** An account in a few words: the person, and the team or the profile they write to. */
+/**
+ * The ends of an account's ids, six characters: two of the user's, two of
+ * the team's (`--` without one) and two of the profile's, shown after a `#`.
+ * Two accounts under the same name show different ones.
+ */
+export function tailOf(pin: Pin): string {
+  return `${pin.user.slice(-2)}${pin.team?.slice(-2) ?? '--'}${pin.profile.slice(-2)}`
+}
+
+/** An account in a few words: the person, the team or the profile they write to, and the end of its ids. */
 export function nameOf(account: Account): string {
-  return `${short(account.user.name ?? 'an account without a name')} (${short(account.team?.name ?? account.profile.name)})`
+  const who = account.user.name === null ? 'an account without a name' : short(account.user.name)
+
+  return `${who} (${short(account.team?.name ?? account.profile.name)}) #${tailOf(pinOf(account))}`
 }
 
 /** Where records go, for the lines that say so. */

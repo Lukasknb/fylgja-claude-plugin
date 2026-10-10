@@ -132,7 +132,7 @@ function reasonOf(asked: ReasonStatus | null, detail: string, saidNoReason: bool
 const MAX_SENT_CONTENT = 1000
 
 /** A record as the plugin will write it, or undefined when it is no record. */
-function draftOf(value: unknown, seen: Seen): Draft | undefined {
+export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   if (!isRecord(value) || typeof value.kind !== 'string' || !KINDS.has(value.kind)) {
     return undefined
   }
@@ -272,8 +272,10 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
  * A record Fylgja refused, put right by the model: the same record with the
  * one part the refusal was about taken from the model's answer, and every
  * other part as it was. A reworded sentence can so never bring a reason
- * with it that nobody gave, or a place nobody opened. Undefined when the
- * answer is no record, or changes nothing.
+ * with it that nobody gave, or a place nobody opened. Nor can a mended
+ * reason: a record that had none gets none, and one that had one gets it
+ * back no longer than it was. Undefined when the answer is no record, or
+ * changes nothing.
  */
 export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen): Draft | undefined {
   const answered = draftOf(isRecord(value) ? { ...value, kind: draft.kind } : value, seen)
@@ -282,13 +284,18 @@ export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen
     return undefined
   }
 
+  const had = draft.detail.trim()
+  const detail =
+    had !== '' && answered.detail.trim() !== '' && answered.detail.length <= draft.detail.length ? answered.detail : draft.detail
+  // A record with no reason cannot be said to state one.
+  const reasonStatus = detail.trim() === '' && answered.reasonStatus === 'stated' ? draft.reasonStatus : answered.reasonStatus
   const better: Draft =
     part === 'content'
       ? { ...draft, content: answered.content }
       : part === 'triggers'
         ? { ...draft, triggers: answered.triggers }
         : part === 'reason'
-          ? { ...draft, detail: answered.detail, reasonStatus: answered.reasonStatus, alternatives: answered.alternatives }
+          ? { ...draft, detail, reasonStatus, alternatives: answered.alternatives }
           : part === 'alternatives'
             ? { ...draft, alternatives: answered.alternatives }
             : { ...draft, anchors: answered.anchors }

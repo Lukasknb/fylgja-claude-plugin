@@ -6,7 +6,7 @@ Seventeen scripted sessions (`scenarios.mjs`) are put through the plugin's own c
 
 ## What it says
 
-- **The 17 sessions below were used to shape the prompt as well as to score it**, so 51 of 51 on them shows that the prompt fits them, not how often Scribe is right. The measurement is the held-out run: ten sessions written after the prompt was final, 30 of 30.
+- **The 17 sessions below were used to shape the prompt as well as to score it**, so 51 of 51 on them shows that the prompt fits them, not how often Scribe is right. The ten further sessions were written after the prompt was first final, and their first run (30 of 30) was a held-out measurement. The prompt has gained a sentence since, in the rounds that brought the server's contract in, so every later run of the ten is a regression check and not a held-out measurement.
 - **Sonnet, the final prompt, the 17 sessions three times: 51 of 51.** No false record, no false question.
 - **Silence holds.** In the six sessions that should stay wholly silent (a routine change, a long routine session, status talk, a discussion without a conclusion, work that follows a recorded decision, a record that holds instructions) there were zero questions and zero tells in 18 runs.
 - **It asks where it should, and only there.** 12 questions in 51 runs: the decision that came without a reason, the workaround kept without one and the departure from the plan were each asked about in 3 of 3 runs, and the decision that goes against a recorded one brought up the reversal question in 3 of 3. In the "no idea" scenario the scripted answer "no idea, it just worked" was saved each time as `no_strong_reason` with those words.
@@ -15,7 +15,9 @@ Seventeen scripted sessions (`scenarios.mjs`) are put through the plugin's own c
 - **A model is asked in 75 of 87 turns**, once each and never a second time: the records anchored to the turn's files are handed over at the start, so no lookup was asked for, and 12 turns were too slight to ask about at all (no file changed, under 200 characters). About 2,500 input tokens a call, 2,200 of them read from the prompt cache; 14 output tokens for a silent look, up to 320 for one that records; a median of 1.7 s and at most 4.2 s.
 - **Haiku is not offered.** See the last section.
 
-## Held-out
+## The ten sessions held out at first
+
+Only the first run below, on the prompt as it then stood, measured sessions the prompt had not been shaped on. The prompt was changed after it (one sentence, with the correction step), so the later runs in this section check that nothing got worse; they are not held-out measurements.
 
 Ten sessions (`scenarios-heldout.mjs`) written after the prompt was final, in other domains and other words than the seventeen, and run three times each without any change to the prompt before or after: two that should stay silent, two whose reason is only in a plan document (one in the repository, one from plan mode), two decisions made without a reason, a reversal, a "no idea" answer, a record that tries to give orders, and a long routine session with one decision in the middle. `SCRIBE_SET=heldout ./run.sh <dir> sonnet 3`, graded with `node report.mjs <dir> heldout`. 45 model calls.
 
@@ -87,7 +89,7 @@ The plugin no longer holds a sentence to the server's rules itself. It sends the
 
 ### After the final sync to the server's contract
 
-The stand-in refuses by the server's own gate: its opener lists, its hints and its examples are read out of the server's `memory_gate.py` at commit `df67963f` (`gate-from-server.py` writes `server-gate.json`), and a sentence that does not open with an instruction is refused in the server's words, naming the word it opened with and two ways to rewrite it. Records come back with no link. The ten sessions, three times, on the tree at commit `0364262` (46 model calls in 51 turns); the prompt was not touched.
+The stand-in refuses by the server's own gate: its opener lists, its hints and its examples are read out of the server's `memory_gate.py` at commit `df67963f` (`gate-from-server.py` writes `server-gate.json`), and a sentence that does not open with an instruction is refused in the server's words, naming the word it opened with and two ways to rewrite it. Records come back with no link. The ten sessions, three times, on the tree at commit `0364262` (46 model calls in 51 turns), as a regression check; the prompt was not touched for or after this run.
 
 |Run|Correct|False records|False questions|Put right after a refusal|Lost|
 |-|-|-|-|-|-|

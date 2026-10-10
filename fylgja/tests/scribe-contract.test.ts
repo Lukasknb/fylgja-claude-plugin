@@ -2,7 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { codeOf, isRepoPath, teaches } from '../hooks/scribe/gate'
 import { anchorsOf } from '../hooks/scribe/repo'
-import { refusalLine } from '../hooks/scribe/scribe'
+import { MAX_WAKES_PER_HOUR, refusalLine } from '../hooks/scribe/scribe'
+import { correctedOf, draftOf } from '../hooks/scribe/verdict'
 import { answer, idOf } from './fixtures'
 import {
   band,
@@ -200,6 +201,67 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(set.asked.length).toBe(2)
     expect(set.of('remember').map(args => args.content)).toEqual([PAGED.content, MENDED.content])
     expect(await shown($)).toMatch('✓ Recorded · Use offset and limit to page /audit-log, not a cursor.')
+  })
+
+  test('a call that puts a record right outside a wake is one of the hour’s share: with the share used up there is none', async ($, on) => {
+    const prior = fact(5, { content: 'Use a cursor to page the audit log.', anchors: { paths: [{ path: 'src/queue/lock.ts' }] } })
+    const quiet = Array.from({ length: MAX_WAKES_PER_HOUR - 1 }, () => NOTHING)
+    const set = stage(on, {
+      replies: [...quiet, verdict({ records: [{ ...PAGED, supersedes: idOf(5) }] }), JSON.stringify({ record: MENDED })],
+      tools: { ...refusing('Paginate'), recall: () => answer({ facts: [prior] }) },
+      kept: { 'scribe.known': [idOf(5)] },
+    })
+
+    await $.session.start(START)
+
+    for (let n = 1; n < MAX_WAKES_PER_HOUR; n += 1) {
+      await turn($, set, dev(`routine step number ${n}`), claude('Done.', edit(`src/routine/${n}.ts`)))
+      await set.clock.advance(60_000)
+    }
+
+    await turn($, set, ...TALK)
+
+    expect(set.asked.length, 'the hour’s share of looks').toBe(MAX_WAKES_PER_HOUR)
+
+    await press($, 'different')
+
+    expect(
+      set.of('remember').map(args => args.content),
+      'sent once, and refused',
+    ).toEqual([PAGED.content])
+    expect(set.asked.length, 'and no model is asked to put it right').toBe(MAX_WAKES_PER_HOUR)
+  })
+
+  test('a mended reason never brings a reason the refused record did not have', () => {
+    const seen = { plans: [], saidNoReason: false, paths: new Set<string>(), facts: new Map() }
+    const bare = draftOf({ ...PAGED }, seen)
+    const reasoned = draftOf({ ...PAGED, detail: 'Clients jump straight to a page.', reason_status: 'stated' }, seen)
+    const invented = { ...PAGED, detail: 'because it was the simplest', reason_status: 'stated' }
+
+    expect(bare === undefined || reasoned === undefined).toBe(false)
+
+    if (bare === undefined || reasoned === undefined) {
+      return
+    }
+
+    expect(
+      correctedOf(bare, invented, 'reason', seen),
+      'a reason from nowhere changes nothing, so nothing is sent',
+    ).toBeUndefined()
+    expect(
+      correctedOf(bare, { ...PAGED, reason_status: 'no_strong_reason' }, 'reason', { ...seen, saidNoReason: true }),
+    ).toMatchObject({
+      detail: '',
+      reasonStatus: 'no_strong_reason',
+    })
+    expect(
+      correctedOf(reasoned, { ...invented, detail: `${'A much longer story. '.repeat(4)}` }, 'reason', seen)?.detail ??
+        reasoned.detail,
+      'a reason that was there comes back no longer than it was',
+    ).toBe(reasoned.detail)
+    expect(correctedOf(reasoned, { ...invented, detail: 'Clients jump to a page.' }, 'reason', seen)?.detail).toBe(
+      'Clients jump to a page.',
+    )
   })
 
   for (const [code, part] of [

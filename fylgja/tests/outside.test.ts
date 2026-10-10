@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { TWIN_STATUS } from '../hooks/session'
-import { answer, CONNECTED, MEETING_ID, meetingRecord, NEEDS_SIGN_IN, rowOf, scene, SESSION, token } from './fixtures'
+import { answer, asked, CONNECTED, MEETING_ID, meetingRecord, NEEDS_SIGN_IN, rowOf, scene, SESSION, token } from './fixtures'
 
 const MEETING = token('meeting', 'Standup', MEETING_ID)
 const RESOLVING = { resolve: () => answer({ records: [meetingRecord()] }) }
@@ -52,6 +52,10 @@ describe('Fylgja set up outside the plugin as well', () => {
     // Signed in, and what answers is an entry outside the plugin.
     connection = { isConnected: true, server: 'kb' }
     await started.clock.advance(5000)
+
+    expect(started.statuses.at(-1), 'the timer takes the sign-in line down and judges nothing').toBeUndefined()
+
+    await asked($, started)
 
     expect(started.statuses.at(-1)).toBe(TWIN_STATUS)
     expect(started.statuses.filter(line => line === TWIN_STATUS).length).toBe(1)

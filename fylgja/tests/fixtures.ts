@@ -70,6 +70,8 @@ export type Scene = {
   forbidden: string[]
   /** How many times the server's state was asked. */
   connects: () => number
+  /** How many times Fylgja was asked who is signed in. */
+  whoamis: () => number
   clock: MockClock
 }
 
@@ -94,10 +96,16 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
   const pinned = new Map<string, unknown>()
   const clock = mock.clock(on)
   let connects = 0
+  let whoamis = 0
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('classic.SessionStart', () => ({}))
   on('prompt.submit', ($, e) => ({ text: e.text, context: e.context }))
+  // A step of a turn in which the model says nothing and asks for no tool.
+  // eslint-disable-next-line require-yield
+  on('turn.step', async function* ($, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+  })
 
   on('ui.render', ($, e) => {
     const props = e.props as { text?: string; tool?: string }
@@ -145,6 +153,8 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
   on('mcp.call', async ($, e) => {
     // Who is signed in is asked before anything else, and is not one of the lookups a test counts.
     if (e.tool === 'whoami') {
+      whoamis += 1
+
       return { value: answer(ACCOUNT) as never }
     }
 
@@ -163,7 +173,7 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
     return { value: undefined }
   })
 
-  return { calls, statuses, forbidden, connects: () => connects, clock }
+  return { calls, statuses, forbidden, connects: () => connects, whoamis: () => whoamis, clock }
 }
 
 /** The person's own message as its row is handed to the plugin. */
@@ -171,13 +181,52 @@ export function userMessage(text: string, isExpanded = false, kind: 'composer' |
   return { plugin: 'fylgja', component: 'UserMessage', props: { text, origin: { kind }, isExpanded } } as const
 }
 
+/** How long a step of a turn waits for Fylgja before it hands back; the plugin's own figure. */
+const STEP_WAIT_MS = 1500
+
 /**
- * Draws the person's message on the terminal, lets the plugin's lookups run
- * for `ms` of the test's clock, and gives back what the row shows then.
+ * A step of a turn passes: the next hook Claude Code waits on, and so the
+ * plugin's chance to ask Fylgja what the rows on screen noted. The test's
+ * clock moves `ms` while it runs. A step still waiting after that is let run
+ * out its own short wait, so what it asked may stay unanswered.
+ */
+export async function asked($: Engine, started: Scene, ms = 0): Promise<void> {
+  let isDone = false
+  const done = step($).finally(() => {
+    isDone = true
+  })
+
+  await started.clock.advance(ms)
+  await started.clock.settle()
+
+  if (!isDone) {
+    await started.clock.advance(STEP_WAIT_MS)
+  }
+
+  await done
+}
+
+/** A step of a turn, begun and not waited for: the test moves the clock while it runs, and waits for it when it likes. */
+export function step($: Engine): Promise<void> {
+  const stream = $.turn.step({ turnId: 'turn-ask', index: 0, model: 'claude-opus', messageCount: 1 })
+
+  return (async () => {
+    for await (const chunk of stream) {
+      void chunk
+    }
+
+    await stream.result
+  })()
+}
+
+/**
+ * Draws the person's message on the terminal, lets a step of a turn pass
+ * with `ms` of the test's clock so the plugin asks Fylgja, and gives back
+ * what the row shows then.
  */
 export async function rowOf($: Engine, started: Scene, text: string, ms = 0): Promise<string> {
   const ui = await $.ui.mount({ ...userMessage(text), surface: 'terminal' })
-  await started.clock.advance(ms)
+  await asked($, started, ms)
   const row = await ui.find({ type: 'Text' })
   await ui.unmount()
 

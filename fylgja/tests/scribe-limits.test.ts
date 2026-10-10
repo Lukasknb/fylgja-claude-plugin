@@ -25,6 +25,7 @@ import {
   shown,
   stage,
   START,
+  step,
   turn,
   use,
   verdict,
@@ -422,7 +423,7 @@ describe('Scribe works only through the plugin’s own connection', () => {
       surface: 'terminal',
     })
 
-    await set.clock.settle()
+    await step($, 0, [])
     await row.unmount()
 
     expect(set.statuses.at(-1)).toBe('sign in with /mcp')

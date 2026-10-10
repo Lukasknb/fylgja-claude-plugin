@@ -147,6 +147,8 @@ function probeHostOf($: EngineInterface, said: string[], kept: Map<string, unkno
       return connection
     },
     call: (server, tool, args) => $.mcp.call(server, tool, args),
+    // The probe runs inside the command's own hook, which Claude Code waits on.
+    isLive: () => true,
     status: text => {
       if (text !== undefined) {
         said.push(text)

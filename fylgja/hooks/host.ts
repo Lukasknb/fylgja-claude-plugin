@@ -5,8 +5,14 @@
 export type Host = {
   /** `$.mcp.connect('fylgja')`. */
   connect: () => Promise<Connection>
-  /** `$.mcp.call`: one tool call on the session's own Fylgja connection. */
+  /**
+   * `$.mcp.call`: one tool call on the session's own Fylgja connection.
+   * Rejects, and starts nothing, unless the hook this host was made in is
+   * still being waited on (see `live.ts`).
+   */
   call: (server: string, tool: string, args: Record<string, unknown>) => Promise<unknown>
+  /** Whether a call to Fylgja may be started now: the hook this host was made in is being waited on. */
+  isLive: () => boolean
   /** `$.ui.status`: the plugin's one line under the prompt; undefined removes it. */
   status: (text: string | undefined) => void
   /** `$.ui.invalidate('ui.render')`: the rows this plugin draws are drawn again. */

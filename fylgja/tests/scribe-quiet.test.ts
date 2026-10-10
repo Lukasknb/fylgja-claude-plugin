@@ -588,7 +588,7 @@ describe('Scribe fails quietly', () => {
       surface: 'terminal',
     })
 
-    await set.clock.settle()
+    await step($, 0, [])
     await row.redraw()
 
     expect(JSON.stringify(await row.drawn())).toMatch('Engineering Retrospective')

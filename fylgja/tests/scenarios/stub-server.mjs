@@ -265,7 +265,28 @@ function call(name, args) {
     })
   }
 
-  if (name === 'open' || name === 'resolve') {
+  // What a chip shows of a pasted reference: one entry per id asked for, found or not.
+  if (name === 'resolve') {
+    return json({
+      records: (args.refs ?? []).map(ref => {
+        const record = everything().find(one => one.id === String(ref).toLowerCase())
+
+        return record === undefined
+          ? { ref, found: false }
+          : {
+              ref,
+              found: true,
+              id: record.id,
+              kind: 'memory',
+              title: record.content,
+              date: null,
+              visibility: 'shared with your team',
+            }
+      }),
+    })
+  }
+
+  if (name === 'open') {
     const record = everything().find(one => one.id === args.id)
 
     return record === undefined ? failed('refused:not_found — record not found') : json(asFact(record))

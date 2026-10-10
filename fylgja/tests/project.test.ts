@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 import { standsIn } from '../hooks/project'
 import { TWIN_STATUS } from '../hooks/session'
 import { answer, MEETING_ID, meetingRecord, token } from './fixtures'
-import { claude, decision, dev, edit, ROOT, stage, START, turn, verdict } from './scribe-fixtures'
+import { claude, decision, dev, edit, ROOT, stage, START, step, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 
 const WORK = [dev('make the mailer retry'), claude('Retrying three times now.', edit('src/mail/send.ts'))]
@@ -24,7 +24,7 @@ async function chip($: Engine, set: Stage): Promise<string> {
     surface: 'terminal',
   })
 
-  await set.clock.advance(1000)
+  await step($, 0, [])
   await row.redraw()
 
   const drawn = JSON.stringify(await row.drawn())
@@ -166,12 +166,15 @@ describe('a project that leaves Fylgja to the plugin', () => {
     const calls = set.calls.length
 
     await $.classic.SessionStart({ source: 'clear' })
+
+    expect(set.statuses.at(-1), 'said as the conversation starts over, until the next prompt').toBe(TWIN_STATUS)
+
     set.rows.length = 0
     await turn($, set, ...WORK)
 
     expect(project()).toBe(2)
     expect(set.calls.length, 'and from then on nothing goes out').toBe(calls)
-    expect(set.statuses.at(-1)).toBe(TWIN_STATUS)
+    expect(set.statuses.filter(line => line === TWIN_STATUS).length, 'said once').toBe(1)
   })
 
   test('a session that moves into a project with such an entry stays out from the next turn on', async ($, on) => {
