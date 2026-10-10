@@ -26,6 +26,8 @@ const WHO = {
 }
 
 const held = new Map(scenarios.map(scenario => [scenario.repo, (scenario.records ?? []).map(asStored)]))
+// Records that were removed, each with the repository it was held under: one sent again as it was comes back.
+const removed = []
 
 const loose = { type: 'object', additionalProperties: true }
 const TOOLS = ['whoami', 'recall', 'search', 'open', 'resolve', 'remember', 'amend_memory', 'attach_commit'].map(name => ({
@@ -265,6 +267,30 @@ function call(name, args) {
       return failed(refusalText('burst'))
     }
 
+    // A record that was removed and is sent again as it was comes back, as on the server.
+    const back = removed.findIndex(record => record.content === args.content && record.repo === args.repo)
+
+    if (back !== -1) {
+      const [record] = removed.splice(back, 1)
+
+      held.set(args.repo, [...(held.get(args.repo) ?? []), record])
+
+      return json({
+        atom_id: record.id,
+        outcome: 'restored',
+        supersede: 'not_requested',
+        superseded_prior_id: null,
+        supersede_rejected_reason: null,
+        grounding_flagged: false,
+        anchors: anchorsOut(record),
+        anchors_added: 0,
+        reason_status: record.reason_status,
+        known_repos: [],
+        repo_hint: null,
+        note: null,
+      })
+    }
+
     const existing = records.find(record => record.content === args.content)
 
     if (existing !== undefined) {
@@ -337,6 +363,10 @@ function call(name, args) {
 
     if (args.op === 'remove') {
       for (const [repo, list] of held) {
+        if (list.includes(record)) {
+          removed.push(Object.assign(record, { repo }))
+        }
+
         held.set(
           repo,
           list.filter(one => one !== record),

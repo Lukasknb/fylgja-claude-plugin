@@ -243,11 +243,14 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
           parts: [mark('✓'), { text: HEADS[only.outcome], tone: 'good' }, ...written(only)],
         },
       ],
-      // A record another member holds is theirs to change, and one that was taken back is gone: there is nothing to fix or remove from here.
+      // A record another member holds is theirs to change: there is nothing to fix or remove from here.
+      // One that Scribe took back can be put back, and is then the developer's to keep.
       keys: withAbout(band, [
-        ...(only.outcome === 'held' || only.outcome === 'withdrawn'
+        ...(only.outcome === 'held'
           ? []
-          : [{ key: 'fix:0', hotkey: '1', label: 'Fix' }, twice(band, 'remove:0', '2', 'Remove', 'Press again to remove')]),
+          : only.outcome === 'withdrawn'
+            ? [twice(band, 'putback:0', '1', 'Put back', 'Press again to put back')]
+            : [{ key: 'fix:0', hotkey: '1', label: 'Fix' }, twice(band, 'remove:0', '2', 'Remove', 'Press again to remove')]),
         { key: 'ok', hotkey: '0', label: 'OK' },
       ]),
     }
@@ -288,12 +291,14 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
               ]),
         ],
         keys:
-          record.outcome === 'held' || record.outcome === 'withdrawn'
+          record.outcome === 'held'
             ? []
-            : [
-                { key: `fix:${index}`, hotkey: String(index * 2 + 1), label: 'Fix' },
-                twice(band, `remove:${index}`, String(index * 2 + 2), 'Remove', 'Press again to remove'),
-              ],
+            : record.outcome === 'withdrawn'
+              ? [twice(band, `putback:${index}`, String(index * 2 + 1), 'Put back', 'Press again to put back')]
+              : [
+                  { key: `fix:${index}`, hotkey: String(index * 2 + 1), label: 'Fix' },
+                  twice(band, `remove:${index}`, String(index * 2 + 2), 'Remove', 'Press again to remove'),
+                ],
       })),
       ...(destination === undefined
         ? []

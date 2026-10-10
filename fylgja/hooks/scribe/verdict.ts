@@ -12,6 +12,7 @@ import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
 import type { Anchor, Ask, Draft, Fact, Place, ReasonStatus, RecordKind, Verdict } from './types'
+import { OFFERED_MARK, shareIn } from './words'
 
 /** No record's sentence is longer than this; a longer one is not written at all. */
 export const MAX_CONTENT = MAX_CONTENT_CHARS
@@ -94,8 +95,14 @@ export type Seen = {
   own?: ReadonlySet<string>
   /** The repository each of those is filed under: a later anchor must lie in it. */
   ownRepos?: ReadonlyMap<string, string>
+  /** Whether their words in this turn say it outright ("no particular reason", "just because"), with nobody having asked. */
+  statedNoReason?: boolean
   /** How many questions Claude put to the developer they answered in this turn. */
   choices?: number
+  /** What the assistant said the options mean that the developer picked in this turn: the assistant's words. */
+  offered?: string
+  /** What the developer typed in this turn: their own words. */
+  typed?: string
 }
 
 /**
@@ -183,6 +190,9 @@ function reasonOf(asked: ReasonStatus | null, detail: string, saidNoReason: bool
   return { status: 'stated', detail }
 }
 
+/** A choice's reason is the assistant's when this share of its words stand in what the picked option was said to mean. */
+const OFFERED_SHARE = 0.5
+
 /** No sentence longer than this is sent at all; up to it, the server says what is wrong and it may be put right. */
 const MAX_SENT_CONTENT = 1000
 
@@ -221,6 +231,20 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
 
     detail = reason.detail
     reasonStatus = reason.status
+
+    // The reason of a choice they made by picking an option: where it says
+    // what the assistant said the option means, and not what they typed, it
+    // is marked as the assistant's, which they chose.
+    const fromOffer = shareIn(detail, seen.offered ?? '')
+
+    if (
+      value.from_choice === true &&
+      reasonStatus === 'stated' &&
+      fromOffer >= OFFERED_SHARE &&
+      fromOffer > shareIn(detail, seen.typed ?? '')
+    ) {
+      detail = `${detail.slice(0, MAX_DETAIL_CHARS - suffix.length - OFFERED_MARK.length).trim()}${OFFERED_MARK}`
+    }
   }
 
   if (plan !== undefined) {
@@ -339,6 +363,14 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     return undefined
   })
   const records = given.filter((draft): draft is Draft => draft !== undefined)
+  const decisions = records.filter(draft => draft.kind === 'decision')
+
+  // The developer said, in so many words and unasked, that there was no
+  // particular reason. With one decision in the turn it is that one's: it
+  // is recorded as having none, and nobody is asked.
+  if (seen.statedNoReason === true && decisions.length === 1 && decisions[0]?.reasonStatus === 'not_stated') {
+    decisions[0].reasonStatus = 'no_strong_reason'
+  }
   const tells: string[] = []
 
   for (const entry of Array.isArray(value.tells) ? value.tells : []) {
@@ -501,6 +533,18 @@ export function saysNoReason(text: string): boolean {
     .trim()
 
   return flat === '?' || (flat.length <= 160 && WHOLE.test(flat))
+}
+
+const OUTRIGHT =
+  /\bno (?:particular|real|special|specific|strong|good|actual) reason\b|\b(?:for|there (?:is|was)) no reason\b|\bno reason(?: at all| really|,| for (?:it|that|this))|\bjust because\b|\barbitrar(?:y|ily)\b/i
+
+/**
+ * Whether the developer's words in a turn say outright, unasked, that there
+ * was no particular reason. Narrower than `mentionsNoReason`: "not sure" or
+ * "nothing" somewhere in a prompt says nothing about a reason.
+ */
+export function statesNoReason(text: string): boolean {
+  return OUTRIGHT.test(text.replace(/[‘’]/g, "'"))
 }
 
 /** Whether the developer's words in a turn, however long, say somewhere that there was no particular reason. */

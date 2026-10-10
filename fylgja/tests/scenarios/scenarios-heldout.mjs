@@ -1,5 +1,5 @@
 // Ten sessions written after the prompt was final and never used to adjust
-// it: other domains and other ways of saying things than `scenarios.mjs`.
+// it, and an eleventh (`h-no-reason-asked`) added later for one path: other domains and other ways of saying things than `scenarios.mjs`.
 // What Scribe does with them is a measurement, not a fit.
 //
 // Same shapes as `scenarios.mjs`; same made-up working tree.
@@ -247,7 +247,13 @@ export const SCENARIOS = [
       // As right: Claude said what the trials showed (the flag fixed every failing case where two other attempts
       // did not) and the developer kept the flag on that. That is a reason the assistant gave and the developer
       // accepted, so the decision may be recorded with it and nobody asked.
-      or: { status: 'stated', question: 'none', answer: undefined },
+      // As right too: nothing was chosen between designs here. A fix was found by trying things, and what a later
+      // reader needs is the instruction ("when the export hangs on fonts, start Chrome with this flag"): a gotcha,
+      // which has no reason to ask for. The "no idea" answer is measured by `h-no-reason-asked`.
+      or: [
+        { status: 'stated', question: 'none', answer: undefined },
+        { kind: 'gotcha', status: undefined, question: 'none', answer: undefined },
+      ],
     },
     turns: [
       {
@@ -268,6 +274,42 @@ export const SCENARIOS = [
         then: [
           { whenQuestion: 'reason', press: 'other' },
           { whenEditing: true, enter: ['reason-text', 'no idea, it just worked'] },
+        ],
+      },
+    ],
+  },
+  {
+    // Added after the ten above, for one path they do not reach for certain: a plain choice between two
+    // alternatives with no reason anywhere, where the developer, asked, has none.
+    id: 'h-no-reason-asked',
+    title: 'A choice between two ways, no reason given; asked why, the developer says "no idea"',
+    repo: 'heldout/h11',
+    expect: {
+      records: [1, 1],
+      kind: 'decision',
+      status: 'not_stated',
+      question: 'reason',
+      tells: [0, 0],
+      answer: 'no_strong_reason',
+      answerWords: 'no idea',
+    },
+    turns: [
+      {
+        rows: [
+          dev('The nightly report export has to land somewhere the finance tools can pick it up.'),
+          claude(
+            'There are two ways to do that: upload the file to the `reports` S3 bucket, or write it to the shared NFS mount at `/mnt/reports`. Either is a few lines in src/export/nightly.ts. Which one do you want?',
+            read('src/export/nightly.ts'),
+          ),
+          dev('The bucket.'),
+          claude(
+            'The nightly export now uploads to the `reports` S3 bucket in src/export/nightly.ts; nothing is written to the NFS mount.',
+            edit('src/export/nightly.ts'),
+          ),
+        ],
+        then: [
+          { whenQuestion: 'reason', press: 'other' },
+          { whenEditing: true, enter: ['reason-text', 'no idea'] },
         ],
       },
     ],

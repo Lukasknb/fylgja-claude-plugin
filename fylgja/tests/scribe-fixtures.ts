@@ -42,6 +42,8 @@ export type StageOptions = {
   cwdNow?: () => string
   /** Files of the machine by path: their text, or `null` for one that is there and cannot be read. Read on every look. */
   files?: Record<string, string | null>
+  /** Paths the machine never answers about: a mount that has gone away. */
+  stalled?: (path: string) => boolean
   /** The session's id, when it is not the usual one. */
   sessionId?: () => string
   /** The session cannot say what its id is. */
@@ -243,6 +245,10 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   on('session.cwd', () => ({ value: options.cwdNow?.() ?? options.cwd ?? ROOT }))
   on('session.surfaces', () => ({ value: (options.surfaces ?? ['terminal']) as never }))
   on('fs.stat', ($, e) => {
+    if (options.stalled?.(e.path) === true) {
+      return new Promise<never>(() => undefined)
+    }
+
     const isThere = e.path === `${options.cwd ?? ROOT}/.git` || e.path === `${ROOT}/.git` || options.files?.[e.path] !== undefined
 
     return isThere ? { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } as never } : { deny: 'no such file' }

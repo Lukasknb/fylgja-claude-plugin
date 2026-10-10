@@ -17,19 +17,22 @@ const isSilent = expect => expect.records[1] === 0 && expect.question === 'none'
 
 /**
  * What one run of one scenario came to, against what the scenario expects.
- * A scenario may name a second outcome that is as right as the first
- * (`expect.or`): the run is graded against both and the better one counts.
+ * A scenario may name other outcomes that are as right as the first
+ * (`expect.or`, one or a list): the run is graded against each and the
+ * first it meets counts.
  */
 function grade(scenario, outcome) {
   const first = gradeBy(scenario, outcome, scenario.expect)
 
-  if (scenario.expect.or === undefined || first.wrong.length === 0) {
-    return first
+  for (const other of first.wrong.length === 0 ? [] : [scenario.expect.or ?? []].flat()) {
+    const graded = gradeBy(scenario, outcome, { ...scenario.expect, ...other, or: undefined })
+
+    if (graded.wrong.length === 0) {
+      return graded
+    }
   }
 
-  const second = gradeBy(scenario, outcome, { ...scenario.expect, ...scenario.expect.or, or: undefined })
-
-  return second.wrong.length === 0 ? second : first
+  return first
 }
 
 function gradeBy(scenario, outcome, expect) {
@@ -90,6 +93,14 @@ function gradeBy(scenario, outcome, expect) {
     !amended.some(args => args.reason_status === expect.answer)
   ) {
     wrong.push('answer not saved')
+  }
+
+  // What the developer typed as their answer is kept with it, in their words.
+  if (
+    expect.answerWords !== undefined &&
+    !amended.some(args => args.reason_status === expect.answer && String(args.detail ?? '').includes(expect.answerWords))
+  ) {
+    wrong.push('the answer’s words were not kept')
   }
 
   return {

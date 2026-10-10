@@ -12,7 +12,7 @@
 
 import type { Row } from '../../hooks/scribe/delta'
 
-type Use = { tool: string; input: Record<string, unknown>; text?: string; isError?: true }
+type Use = { tool: string; input: Record<string, unknown>; text?: string; result?: unknown; isError?: true }
 
 /** One turn of the recorded session, or a point where the conversation was rewritten. */
 export type Turn = {
@@ -176,6 +176,11 @@ export function reader(limits: Limits = LIMITS): { push: (line: string) => void;
 
         if (result.is_error === true) {
           use.isError = true
+
+          // What the transcript stored beside an errored call: the engine's own error text.
+          if (typeof entry.toolUseResult === 'string') {
+            use.result = cut(entry.toolUseResult, limits.result)
+          }
         }
       }
     }

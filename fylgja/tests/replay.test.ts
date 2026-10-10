@@ -243,7 +243,10 @@ describe('a recorded session is read into the turns of its main conversation', (
 
     expect(seen.lines).toContain('[developer rejected ExitPlanMode] no Redis, we have Postgres')
     expect(seen.lines).toContain('[developer approved the plan]')
-    expect(seen.acts).toEqual(['no Redis, we have Postgres', 'The developer approved the plan.'])
+    expect(
+      seen.acts.map(act => act.words),
+      'their own words; an approval has none',
+    ).toEqual(['no Redis, we have Postgres', ''])
   })
 
   test('of an agent’s own transcript only the paths it wrote or changed and its commit commands are taken', () => {

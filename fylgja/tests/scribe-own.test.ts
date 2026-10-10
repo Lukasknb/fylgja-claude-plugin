@@ -47,8 +47,8 @@ describe('Scribe keeps its own records of the session true', () => {
     await turn($, set, ...one('forget the lock altogether, the queue is single-consumer now'))
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'remove' }])
-    expect(await shown($), 'what is gone can be neither fixed nor removed').toMatch(
-      /^✓ Withdrawn · Use a Redis lock for the retry queue\.(?: \[9 What is this\])? \[0 OK\]$/,
+    expect(await shown($), 'what is gone can be neither fixed nor removed; it can be put back').toMatch(
+      /^✓ Withdrawn · Use a Redis lock for the retry queue\. \[1 Put back\](?: \[9 What is this\])? \[0 OK\]$/,
     )
 
     await turn($, set, ...one('and one more routine change to the same file here'))

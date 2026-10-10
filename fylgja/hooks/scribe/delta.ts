@@ -20,6 +20,8 @@ export type Row = {
     tool: string
     input: Record<string, unknown>
     text?: string
+    /** What the transcript stored for the call; on a call that was refused or failed, the engine's own error text. */
+    result?: unknown
     isError?: true
   }[]
 }
@@ -48,14 +50,23 @@ export type Seen = {
   developer: string
   /**
    * What the developer decided without typing a prompt: each answer to a
-   * question Claude put to them, and each word of theirs on a plan or a tool
-   * call they turned down. Their own words, to be kept with their prompts.
+   * question Claude put to them, each plan they approved, and each word of
+   * theirs on a plan or a tool call they turned down. `words` is what of it
+   * is their own, to be kept with their prompts: the label of the option
+   * they picked or what they typed, never the question and never what an
+   * option was said to mean. `key` tells one act from another.
    */
-  acts: string[]
+  acts: { key: string; words: string }[]
   /** How many questions Claude put to them they answered in these rows. */
   choices: number
-  /** The words of those questions and of the options offered: not theirs, and no reason for anything. */
+  /** The words of those questions and of the option labels: not theirs, and no reason for anything. */
   offered: string[]
+  /**
+   * Each question they answered by picking an option, with what the picked
+   * options were said to mean. The assistant's text, which the developer
+   * chose: never their own words.
+   */
+  offers: Offer[]
   /** Whether a file was written or changed, or a commit made. */
   hasChange: boolean
   /** How many characters the developer and Claude wrote between them. */
@@ -224,8 +235,46 @@ const MAX_QUESTION = 300
 const MAX_OPTION_TEXT = 200
 const MAX_CHOSEN = 600
 
-/** One choice the developer made between options Claude offered: the question, what was offered, and what they chose. */
-export type Choice = { question: string; offered: { label: string; description: string }[]; chosen: string }
+/**
+ * One choice the developer made between options Claude offered: the question,
+ * what was offered, and what they answered. `picked` holds the options they
+ * picked, each by its exact label; `typed` what they wrote instead of picking
+ * one ("Other"), which is their own words.
+ */
+export type Choice = {
+  question: string
+  offered: { label: string; description: string }[]
+  chosen: string
+  picked: { label: string; description: string }[]
+  typed: string
+}
+
+/** A question the developer answered by picking, and what the assistant said each picked option means. */
+export type Offer = { question: string; picked: { label: string; description: string }[] }
+
+/**
+ * The options an answer names, each by its exact label: the whole answer is
+ * one label, or (several picked at once) every part of it between commas is
+ * one. An answer that only contains a label ("No, use the queue" beside an
+ * option "No") names none: it is what the developer typed.
+ */
+function pickedOf(
+  chosen: string,
+  offered: readonly { label: string; description: string }[],
+): { label: string; description: string }[] {
+  const whole = offered.find(option => option.label.trim() === chosen)
+
+  if (whole !== undefined) {
+    return [whole]
+  }
+
+  const parts = chosen.split(/,\s*/).map(part => part.trim())
+  const named = parts.map(part => offered.find(option => option.label.trim() === part))
+
+  return parts.length > 1 && named.every(option => option !== undefined)
+    ? (named as { label: string; description: string }[])
+    : []
+}
 
 /**
  * The developer's answers to the questions of one `AskUserQuestion` call,
@@ -256,32 +305,58 @@ export function choicesOf(input: Record<string, unknown>, printed: string | unde
     const chosen = text.slice(from, until > from ? until : text.length).trim()
 
     if (chosen !== '') {
-      choices.push({
-        question,
-        offered: (Array.isArray(one.options) ? one.options : []).flatMap(option =>
-          isRecord(option) && typeof option.label === 'string'
-            ? [{ label: option.label, description: typeof option.description === 'string' ? option.description : '' }]
-            : [],
-        ),
-        chosen,
-      })
+      const offered = (Array.isArray(one.options) ? one.options : []).flatMap(option =>
+        isRecord(option) && typeof option.label === 'string'
+          ? [{ label: option.label, description: typeof option.description === 'string' ? option.description : '' }]
+          : [],
+      )
+      const picked = pickedOf(chosen, offered)
+
+      choices.push({ question, offered, chosen, picked, typed: picked.length === 0 ? chosen : '' })
     }
   }
 
   return choices
 }
 
-// How the engine words a tool call the developer turned down, before what they said about it.
-const REJECTED = /The user doesn't want to proceed with this tool use/
-const FEEDBACK = /the user said:\s*([\s\S]+)$/i
+// The engine's own result for a tool call the developer turned down: these
+// words open it, and with something said, the second sentence and then what
+// was said follow. Beside it the transcript stores one of two fixed texts.
+const REJECTION =
+  "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file)."
+const SAID = ' To tell you how to proceed, the user said:'
+const STORED_REJECTION = 'User rejected tool use'
 
-/** What the developer said when they turned a tool call down; empty when they said nothing. */
-function feedbackOf(printed: string | undefined): string | undefined {
-  if (printed === undefined || !REJECTED.test(printed)) {
+/**
+ * Whether a tool call's result is the engine's own for a call the developer
+ * turned down, and what they said about it ('' when nothing).
+ *
+ * It is one only when the call ended in an error, its result BEGINS with the
+ * engine's sentence, and what the transcript stored for it, where that is
+ * held, is the engine's text for a rejection too. A tool that failed and
+ * printed that sentence is not one: what a command prints never opens its
+ * result (the engine puts "Exit code N" before it), and what the transcript
+ * stores for it is its own error. A tool of an MCP server writes its own
+ * error text from the first character on, so nothing it returned is taken
+ * for the developer's words.
+ */
+export function rejectionOf(use: Row['toolUses'][number]): { feedback: string } | undefined {
+  const { text, result } = use
+
+  if (use.isError !== true || text === undefined || !text.startsWith(REJECTION)) {
     return undefined
   }
 
-  return FEEDBACK.exec(printed)?.[1]?.trim() ?? ''
+  if (
+    result !== undefined &&
+    !(typeof result === 'string' && (result === STORED_REJECTION || result.startsWith(`Error: ${REJECTION}`)))
+  ) {
+    return undefined
+  }
+
+  const rest = text.slice(REJECTION.length)
+
+  return { feedback: rest.startsWith(SAID) && !use.tool.startsWith('mcp__') ? rest.slice(SAID.length).trim() : '' }
 }
 
 // Calls that keep Claude's own books or wait on its own tasks: they say
@@ -368,8 +443,9 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
   const commits: string[] = []
   const plans: PlanSighting[] = []
   const developer: string[] = []
-  const acts: string[] = []
+  const acts: { key: string; words: string }[] = []
   const optionWords: string[] = []
+  const offers: Offer[] = []
   let answered = 0
   let hasChange = false
   let words = 0
@@ -396,7 +472,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
       const line = lineOf(use.tool, input, use.text, isError, root)
       const last = lines.at(-1)
       const choices = use.tool === 'AskUserQuestion' && !isError ? choicesOf(input, use.text) : []
-      const feedback = isError ? feedbackOf(use.text) : undefined
+      const rejection = rejectionOf(use)
 
       if (choices.length > 0) {
         // The developer's own choice between named options: theirs as a prompt is.
@@ -407,30 +483,39 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
                 `${clip(option.label, MAX_OPTION_TEXT)}${option.description === '' ? '' : ` (${clip(option.description, MAX_OPTION_TEXT)})`}`,
             )
             .join('; ')
-          const told = `Question: ${clip(choice.question, MAX_QUESTION)} | Offered: ${offered} | Chosen: ${clip(choice.chosen, MAX_CHOSEN)}`
+          const answer = `${choice.typed === '' ? 'Chosen' : 'Typed by the developer, who picked none of them'}: ${clip(choice.chosen, MAX_CHOSEN)}`
 
-          lines.push(`[developer chose] ${told}`)
-          developer.push(choice.chosen)
-          // Kept with their prompts: the question, their answer, and what the chosen option was said to mean.
-          acts.push(
-            `The developer was asked: ${choice.question} They chose: ${choice.chosen}.${choice.offered
-              .filter(option => choice.chosen.includes(option.label) && option.description !== '')
-              .map(option => ` The option they chose was described as: ${option.description}`)
-              .join('')}`,
-          )
+          lines.push(`[developer chose] Question: ${clip(choice.question, MAX_QUESTION)} | Offered: ${offered} | ${answer}`)
+
+          // Their own words are what they typed. A label they picked is kept
+          // as what they chose; what the option was said to mean is the
+          // assistant's, and is kept apart as offered text.
+          if (choice.typed !== '') {
+            developer.push(choice.typed)
+          }
+
+          acts.push({ key: `chose\u0000${choice.question}\u0000${choice.chosen}`, words: choice.chosen })
+
+          if (choice.picked.some(option => option.description !== '')) {
+            offers.push({ question: choice.question, picked: choice.picked.filter(option => option.description !== '') })
+          }
+
           answered += 1
           optionWords.push(choice.question, ...choice.offered.map(option => option.label))
           words += choice.question.length + choice.chosen.length
         }
-      } else if (feedback !== undefined && feedback !== '') {
+      } else if (rejection !== undefined && rejection.feedback !== '') {
         // A plan or a call the developer turned down, with what they said: a correction in their own words.
-        lines.push(`[developer rejected ${clip(use.tool, 40)}] ${clip(feedback, MAX_PROMPT)}`)
-        developer.push(feedback)
-        acts.push(feedback)
-        words += feedback.length
+        lines.push(`[developer rejected ${clip(use.tool, 40)}] ${clip(rejection.feedback, MAX_PROMPT)}`)
+        developer.push(rejection.feedback)
+        acts.push({ key: `rejected\u0000${rejection.feedback}`, words: rejection.feedback })
+        words += rejection.feedback.length
+      } else if (rejection !== undefined) {
+        // Turned down without a word: said to have happened, and nobody's words.
+        lines.push(`[tool rejected] ${clip(use.tool, 40)}`)
       } else if (use.tool === 'ExitPlanMode' && !isError && use.text !== undefined) {
         lines.push('[developer approved the plan]')
-        acts.push('The developer approved the plan.')
+        acts.push({ key: `approved\u0000${typeof input.plan === 'string' ? input.plan.length : 0}`, words: '' })
       } else if (BOOKKEEPING.has(use.tool)) {
         // Left out.
       } else if (use.tool === 'Read' && !isError && last !== undefined && READS.test(last) && last.length < MAX_READS) {
@@ -501,6 +586,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
     acts,
     choices: answered,
     offered: optionWords,
+    offers,
     commits,
     plans,
     developer: developer.join('\n'),

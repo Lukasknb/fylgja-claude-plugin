@@ -423,13 +423,16 @@ describe('what the developer chose through a question', () => {
     const bare = chosen(1, { detail: '', reason_status: 'not_stated' })
     const set = stage(on, {
       replies: [verdict({ records: [bare] })],
-      verify: () => JSON.stringify({ reason: 'needs no new service' }),
+      verify: () => JSON.stringify({ offered: 'needs no new service' }),
     })
 
     await $.session.start(START)
     await turn($, set, ...choosing(1))
 
-    expect(set.of('remember')[0]).toMatchObject({ reason_status: 'stated', detail: 'A1 needs no new service.' })
+    expect(set.of('remember')[0], 'and it is marked as the assistant’s words, which they chose').toMatchObject({
+      reason_status: 'stated',
+      detail: 'A1 needs no new service. (offered by the assistant, chosen by the developer)',
+    })
   })
 })
 

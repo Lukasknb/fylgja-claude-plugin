@@ -17,19 +17,19 @@ import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
 import * as Band from './band'
 import { changesOf, filesOf, isPrompt, observe, plain } from './delta'
-import type { Row } from './delta'
+import type { Offer, Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
 import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
 import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
-import type { LoopHost } from './loop'
+import type { LoopHost, Proposal } from './loop'
 import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
 import type { Block } from './prompt'
 import { relativeTo, repoNameOf } from './repo'
 import { CALL_TIMEOUT_MS, limited } from './time'
 import type { Draft, Fact, Place, Verdict, Written } from './types'
-import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason } from './verdict'
+import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReason } from './verdict'
 import type { Seen } from './verdict'
 import { NO_STRONG_REASON, NOT_STATED, provenanceOf, viewOf } from './view'
 import type { View } from './view'
@@ -141,6 +141,14 @@ export type Scribe = {
   folded: { wakes: number; block: Block | undefined }
   wakes: number
   written: Written[]
+  /**
+   * The ids of the records that are Scribe's own to rewrite, take back or
+   * add places to: written by it as new in this session, and not touched by
+   * the developer since. One that came back from having been removed, one
+   * that was already held, and one the developer fixed, answered about, put
+   * back or removed with a key is never among them.
+   */
+  mine: Set<string>
   /** What was recorded, for the model not to repeat; one with an id is Scribe's own to rewrite or take back. */
   recorded: { id: string | null; content: string }[]
   /** The sentences asked about. */
@@ -180,11 +188,19 @@ export type Scribe = {
    * one purpose: a reason it gave for something it proposed, which the
    * developer then accepted, is looked for here.
    */
-  proposals: string[]
+  proposals: Proposal[]
   /** What it wrote in the turn before, kept until the next wake. */
-  earlier: string[]
-  /** The words of the questions the developer was asked and of the options offered: never a reason for anything. */
+  earlier: Proposal[]
+  /** The words of the questions the developer was asked and of the option labels: never a reason for anything. */
   offered: string[]
+  /**
+   * The questions the developer answered by picking an option, with what
+   * the assistant said the picked options mean: the assistant's text, kept
+   * apart from the developer's words.
+   */
+  offers: Offer[]
+  /** The repositories in which the session wrote or changed a file: only these, and its own, are asked what they hold. */
+  editedRepos: Set<string>
   /**
    * The files written or changed in each repository since its last commit,
    * by the main conversation or by an agent of the session, each as a tool
@@ -273,6 +289,17 @@ const MAX_COMMIT_FILES = 60
 /** No more questions and option names are kept for telling a reason from an echo of the question. */
 const MAX_OFFERED = 80
 
+/** No more answered questions are kept with what their picked options were said to mean. */
+const MAX_OFFERS = 12
+
+/**
+ * Finding out which repository a step's files lie in holds the turn no
+ * longer than this. It reads the disk (folders upward, git's settings, a
+ * `.mcp.json`), and a mount that has gone away answers nothing: past the
+ * bound the step's files count as lying in no repository.
+ */
+export const PLACE_WAIT_MS = 400
+
 /** No more records on a decision's subject are compared with it than this. */
 const MAX_COMPARED = 5
 
@@ -313,6 +340,7 @@ export function create(options: Options): Scribe {
     folded: { wakes: 0, block: undefined },
     wakes: 0,
     written: [],
+    mine: new Set(),
     recorded: [],
     asked: [],
     paths: [],
@@ -329,6 +357,8 @@ export function create(options: Options): Scribe {
     proposals: [],
     earlier: [],
     offered: [],
+    offers: [],
+    editedRepos: new Set(),
     edited: new Map(),
     commitsToPair: [],
     agentRepo: null,
@@ -377,6 +407,7 @@ export function startOver(scribe: Scribe): void {
   scribe.past = []
   scribe.folded = { wakes: 0, block: undefined }
   scribe.written = []
+  scribe.mine.clear()
   scribe.recorded = []
   scribe.asked = []
   scribe.paths = []
@@ -389,6 +420,8 @@ export function startOver(scribe: Scribe): void {
   scribe.acted.clear()
   scribe.hasActed = false
   scribe.offered = []
+  scribe.offers = []
+  scribe.editedRepos.clear()
   scribe.edited.clear()
   scribe.commitsToPair = []
   scribe.agentRepo = null
@@ -484,15 +517,56 @@ async function remoteOf(host: ScribeHost, root: string): Promise<string | null> 
   try {
     const named = /^gitdir:\s*(.+)$/m.exec(await host.read(`${root}/.git`))?.[1]?.trim() ?? ''
     const own = tidy(named.startsWith('/') ? named : `${root}/${named}`)
+
+    if (!(await isOwnGitDir(host, root, own))) {
+      return null
+    }
+
+    // A worktree's folder names the repository's own; anything else it names is not followed.
     const common = await host.read(`${own}/commondir`).then(
       text => tidy(text.trim().startsWith('/') ? text.trim() : `${own}/${text.trim()}`),
       () => own,
     )
 
-    return origin(await host.read(`${common}/config`))
+    return origin(await host.read(`${common === own || own.startsWith(`${common}/`) ? common : own}/config`))
   } catch {
     return null
   }
+}
+
+/**
+ * Whether the folder a `.git` file names is really this working tree's own.
+ * The file is the checkout's to write, and a hostile one could name any
+ * folder on the machine to have its `config` read. It is followed in three
+ * cases only:
+ * - it lies inside the working tree itself;
+ * - it is a submodule's: `<above>/.git/modules/…`, where `<above>` is a
+ *   folder the working tree lies in;
+ * - it is a worktree's: `<repository>/.git/worktrees/<name>`, and that
+ *   folder's own `gitdir` file, which git writes there and the checkout
+ *   cannot, names this working tree's `.git` back.
+ */
+async function isOwnGitDir(host: ScribeHost, root: string, own: string): Promise<boolean> {
+  if (own.startsWith(`${root}/`)) {
+    return true
+  }
+
+  const above = /^(.*)\/\.git\/modules\//.exec(own)?.[1]
+
+  if (above !== undefined && root.startsWith(`${above}/`)) {
+    return true
+  }
+
+  if (!/\/\.git\/worktrees\/[^/]+$/.test(own)) {
+    return false
+  }
+
+  const back = await host.read(`${own}/gitdir`).then(
+    text => tidy(text.trim()),
+    () => undefined,
+  )
+
+  return back === `${root}/.git`
 }
 
 /**
@@ -863,7 +937,8 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
     return none(codeOf(refusal))
   }
 
-  const isOwn = (outcome === 'created' || outcome === 'restored') && typeof answer?.atom_id === 'string'
+  // Its own is what it wrote as new. A record that came back from having been removed was somebody's before.
+  const isOwn = outcome === 'created' && typeof answer?.atom_id === 'string'
 
   scribe.recorded = [...scribe.recorded, { id: isOwn ? String(answer?.atom_id) : null, content: draft.content }].slice(
     -MAX_LISTED,
@@ -901,7 +976,21 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
 
   scribe.written = [...scribe.written, written].slice(-MAX_LISTED)
 
+  if (outcome === 'created') {
+    scribe.mine.add(written.id)
+  }
+
   return { written, code: undefined, refusal: undefined }
+}
+
+/**
+ * The developer changed, answered about, put back or removed this record
+ * with a key: from here on it is theirs, and Scribe neither rewrites it,
+ * takes it back nor adds places to it for the rest of the session.
+ */
+function touched(scribe: Scribe, id: string): void {
+  scribe.mine.delete(id)
+  scribe.recorded = scribe.recorded.map(one => (one.id === id ? { id: null, content: one.content } : one))
 }
 
 /**
@@ -1105,7 +1194,7 @@ async function written(
 async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<Written | undefined> {
   const own = scribe.written.find(one => one.id === draft.updates)
 
-  if (own === undefined) {
+  if (own === undefined || !scribe.mine.has(own.id)) {
     return undefined
   }
 
@@ -1152,7 +1241,7 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<
 async function takeBack(host: ScribeHost, scribe: Scribe, id: string): Promise<Written | undefined> {
   const own = scribe.written.find(one => one.id === id)
 
-  if (own === undefined) {
+  if (own === undefined || !scribe.mine.has(id)) {
     return undefined
   }
 
@@ -1171,6 +1260,7 @@ async function takeBack(host: ScribeHost, scribe: Scribe, id: string): Promise<W
   }
 
   scribe.written = scribe.written.filter(one => one.id !== id)
+  scribe.mine.delete(id)
   scribe.recorded = scribe.recorded.filter(one => one.id !== id)
   Band.withdrawQuestion(scribe.band, id)
 
@@ -1190,13 +1280,18 @@ async function withReason(
   scribe: Scribe,
   draft: Draft,
   budget: Budget,
-): Promise<{ draft: Draft; isAbsent: boolean }> {
+): Promise<{ draft: Draft; isAbsent: boolean; suggestion?: string }> {
   if (draft.kind !== 'decision' || draft.reasonStatus !== 'not_stated') {
     return { draft, isAbsent: false }
   }
 
   // With nothing to look in, there is nothing to find.
-  if (scribe.spoken.length === 0 && scribe.plans.docs.length === 0 && scribe.proposals.length === 0) {
+  if (
+    scribe.spoken.length === 0 &&
+    scribe.plans.docs.length === 0 &&
+    scribe.proposals.length === 0 &&
+    scribe.offers.length === 0
+  ) {
     return { draft, isAbsent: true }
   }
 
@@ -1210,24 +1305,31 @@ async function withReason(
   budget.steps -= 1
   scribe.checked += 1
 
-  const reason = await reasonIn(host, {
+  const found = await reasonIn(host, {
     model: scribe.model,
     decision: draft.content,
     spoken: scribe.spoken,
     unspoken: scribe.unspoken,
     plans: scribe.plans.docs,
     proposals: scribe.proposals,
+    offers: scribe.offers,
     asked: scribe.offered,
     timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
   })
 
-  if (reason === undefined) {
+  if (found === undefined) {
     return { draft, isAbsent: true }
+  }
+
+  // The assistant gave a reason and the developer has said nothing since:
+  // nobody accepted it, so it is no reason on record. It is what they are asked about first.
+  if ('suggestion' in found) {
+    return { draft, isAbsent: true, suggestion: found.suggestion }
   }
 
   scribe.found += 1
 
-  return { draft: { ...draft, detail: reason, reasonStatus: 'stated' }, isAbsent: false }
+  return { draft: { ...draft, detail: found.reason, reasonStatus: 'stated' }, isAbsent: false }
 }
 
 /**
@@ -1297,7 +1399,7 @@ async function anchorMore(
 ): Promise<void> {
   const own = scribe.written.find(one => one.id === id)
 
-  if (own === undefined || own.outcome === 'held') {
+  if (own === undefined || !scribe.mine.has(id)) {
     return
   }
 
@@ -1448,7 +1550,8 @@ async function apply(
           form: 'reason',
           id: one.id,
           content: one.content,
-          options: question.options,
+          // What the assistant gave as the reason, which nobody has accepted yet, is put first.
+          options: checked.suggestion === undefined ? question.options : [checked.suggestion, ...question.options].slice(0, 3),
           isTouched: false,
         },
         one.content,
@@ -1527,10 +1630,27 @@ function within(host: ScribeHost, work: Promise<unknown>, ms: number): Promise<v
   )
 }
 
+/**
+ * `placesOf`, waited for no longer than `PLACE_WAIT_MS`; undefined when it
+ * took longer. What it finds out later is still kept, per folder, for the
+ * session, so the next step that names the folder has it at once.
+ */
+function placed(host: ScribeHost, scribe: Scribe, who: Identity, files: readonly string[]): Promise<Place[] | undefined> {
+  return files.length === 0
+    ? Promise.resolve([])
+    : limited(host.after, placesOf(host, scribe, who, files), PLACE_WAIT_MS).catch(() => undefined)
+}
+
 /** Notes files the session touched, each in its repository: to be looked up once. */
-function wanted(scribe: Scribe, places: readonly Place[]): void {
+function wanted(scribe: Scribe, who: Identity, places: readonly Place[]): void {
   for (const place of places) {
     const key = `${place.repo}\u0000${place.path}`
+
+    // A repository the session only reads in (a clone of somebody's plugin,
+    // another checkout it looks something up in) is not asked about.
+    if (place.repo !== who.repo && !scribe.editedRepos.has(place.repo)) {
+      continue
+    }
 
     if (!scribe.lookedUp.has(key)) {
       scribe.lookedUp.add(key)
@@ -1560,7 +1680,19 @@ export async function stepped(
     return
   }
 
-  wanted(scribe, await placesOf(host, scribe, who, filesOf(uses, who.root)))
+  // Bounded: the disk is read here, and the turn is not held by it.
+  const places = (await placed(host, scribe, who, filesOf(uses, who.root))) ?? []
+
+  // A file the step writes or changes makes its repository one the session works in.
+  for (const file of changesOf(uses, who.root).files) {
+    const place = scribe.places.get(file)
+
+    if (place !== undefined && places.includes(place)) {
+      scribe.editedRepos.add(place.repo)
+    }
+  }
+
+  wanted(scribe, who, places)
 
   if ((index + 1) % LOOKUP_EVERY !== 0 || scribe.paths.length === 0 || (await connected(host)) === undefined) {
     return
@@ -1682,6 +1814,7 @@ function noteEdits(scribe: Scribe, who: Identity, files: readonly string[], plac
       const shown = relativeTo(who.root, file) ?? file
 
       scribe.edited.set(place.repo, new Set([...(scribe.edited.get(place.repo) ?? []), shown]))
+      scribe.editedRepos.add(place.repo)
     }
   }
 }
@@ -1727,7 +1860,8 @@ export async function agentStepped(
   }
 
   const { files, hasCommit } = changesOf(uses, who.root)
-  const places = await placesOf(host, scribe, who, files)
+  // Bounded as in the main conversation's step; past the bound the files count as in no repository.
+  const places = (await placed(host, scribe, who, files)) ?? []
 
   noteEdits(scribe, who, files, places)
   scribe.agentRepo = places.at(-1)?.repo ?? scribe.agentRepo
@@ -1789,13 +1923,12 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     who,
     scribe.plans.docs.flatMap(doc => (doc.key.startsWith('/') ? [doc.key] : [])),
   )
-  wanted(scribe, here)
-
   // What was written or changed, per repository, since its last commit; and
   // the commits made since the last look, each with those files. A commit is
   // the moment a decision recorded before its code existed can be given its
   // place: the next look is asked to pair them, once.
   noteEdits(scribe, who, seen.changed, await placesOf(host, scribe, who, seen.changed))
+  wanted(scribe, who, here)
 
   if (who.repo !== null && seen.commits.some(sha => !scribe.commits.has(sha))) {
     committed(scribe, who.repo)
@@ -1839,22 +1972,39 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   // to them, a plan approved, a plan or a call turned down with a word. Kept
   // with their prompts, each once, and enough to make the turn theirs: a
   // turn a background task began is looked at when they decided something in it.
+  // Of each, only their own words are kept with their prompts: the label
+  // they picked or what they typed, never the question and never what an
+  // option was said to mean.
   for (const act of seen.acts) {
-    if (!scribe.acted.has(act)) {
-      scribe.acted.add(act)
-      spoke(scribe, act.replace(/\s+/g, ' ').trim())
+    if (!scribe.acted.has(act.key)) {
+      scribe.acted.add(act.key)
+      spoke(scribe, act.words.replace(/\s+/g, ' ').trim())
       scribe.hasActed = true
     }
   }
 
   scribe.offered = [...new Set([...scribe.offered, ...seen.offered])].slice(-MAX_OFFERED)
+  // What the picked options were said to mean is the assistant's: kept apart, each question once.
+  scribe.offers = [
+    ...scribe.offers,
+    ...seen.offers.filter(offer => !scribe.offers.some(had => had.question === offer.question)),
+  ].slice(-MAX_OFFERS)
 
   const isWorthAsking = seen.lines.length > 0 && (seen.hasChange || seen.words >= QUIET_TURN_CHARS || scribe.hasActed)
 
   // What the assistant said in this turn and the one before it, cut to a length.
-  const replies = seen.lines.filter(line => line.startsWith('[claude] ')).map(line => line.slice(9))
+  // Each with whether the developer wrote or chose anything after it: only then can they have accepted what it proposed.
+  const isTheirs = (line: string): boolean => line.startsWith('[developer')
+  const replies: Proposal[] = seen.lines.flatMap((line, at) =>
+    line.startsWith('[claude] ')
+      ? [{ text: line.slice(9, 9 + MAX_PROPOSAL_CHARS), isFollowed: seen.lines.slice(at + 1).some(isTheirs) }]
+      : [],
+  )
+  const hasSpoken = seen.lines.some(isTheirs)
 
-  scribe.proposals = [...scribe.earlier, ...replies].slice(-MAX_PROPOSALS).map(reply => reply.slice(0, MAX_PROPOSAL_CHARS))
+  scribe.proposals = [...scribe.earlier.map(one => ({ ...one, isFollowed: one.isFollowed || hasSpoken })), ...replies].slice(
+    -MAX_PROPOSALS,
+  )
 
   if ((scribe.hasPrompt || scribe.hasActed) && isWorthAsking && mayWake(host, scribe, now)) {
     scribe.wakingSince = now
@@ -1869,11 +2019,12 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
       // Scribe's own records of the session that point at no file yet, and the first commit that has some to place.
       const unplaced = new Map(
         scribe.written.flatMap(one =>
-          one.outcome !== 'held' && (one.anchors ?? []).length === 0 && typeof one.repo === 'string'
+          scribe.mine.has(one.id) && (one.anchors ?? []).length === 0 && typeof one.repo === 'string'
             ? [[one.id, one] as const]
             : [],
         ),
       )
+      const mine = scribe.written.filter(one => scribe.mine.has(one.id))
       const due = scribe.commitsToPair.find(
         commit => commit.files.length > 0 && [...unplaced.values()].some(one => one.repo === commit.repo),
       )
@@ -1890,6 +2041,9 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
       const judged = {
         plans: scribe.plans.docs,
         saidNoReason: mentionsNoReason(seen.developer),
+        statedNoReason: statesNoReason(seen.developer),
+        offered: seen.offers.flatMap(offer => offer.picked.map(option => option.description)).join('\n'),
+        typed: seen.developer,
         paths: allowed,
         places: scribe.places,
         // A turn that touched no file itself (the developer steering, agents
@@ -1902,12 +2056,8 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
             who.repo,
           ) ??
           who.repo,
-        own: new Set(scribe.written.filter(one => one.outcome !== 'held').map(one => one.id)),
-        ownRepos: new Map(
-          scribe.written.flatMap(one =>
-            one.outcome !== 'held' && typeof one.repo === 'string' ? [[one.id, one.repo] as const] : [],
-          ),
-        ),
+        own: new Set(mine.map(one => one.id)),
+        ownRepos: new Map(mine.flatMap(one => (typeof one.repo === 'string' ? [[one.id, one.repo] as const] : []))),
         choices: seen.choices,
       }
       const woken = await wake(host, {
@@ -2132,9 +2282,50 @@ async function pressedReceipt(host: ScribeHost, scribe: Scribe, key: string): Pr
   } else if (action === 'remove' && written !== undefined) {
     shown.records = shown.records.filter(one => one !== written)
     scribe.written = scribe.written.filter(one => one.id !== written.id)
+    touched(scribe, written.id)
     band.receipt = shown.records.length === 0 ? null : shown
     await amend(host, scribe, { atom_id: written.id, op: 'remove' })
+  } else if (action === 'putback' && written?.outcome === 'withdrawn') {
+    await putBack(host, scribe, shown, written)
   }
+}
+
+/**
+ * Puts back a record Scribe took back: it is sent again as it was, and
+ * Fylgja restores the one it removed. From then on it is the developer's:
+ * Scribe does not take it back a second time.
+ */
+async function putBack(host: ScribeHost, scribe: Scribe, shown: Band.Receipt, gone: Written): Promise<void> {
+  const who = scribe.identity
+
+  if (who === null || who === undefined) {
+    return
+  }
+
+  const sent = await send(host, scribe, who, {
+    kind: gone.kind,
+    content: gone.content,
+    detail: '',
+    alternatives: [],
+    anchors: gone.anchors ?? [],
+    triggers: [],
+    reasonStatus: gone.reasonStatus,
+    supersedes: null,
+    repo: gone.repo ?? who.repo,
+    updates: null,
+  })
+
+  if (sent.written === undefined) {
+    host.toast('The record could not be put back.')
+
+    return
+  }
+
+  touched(scribe, sent.written.id)
+  // Back as it was; where another member holds the same record, theirs is shown as theirs.
+  const back: Written = sent.written.outcome === 'held' ? sent.written : { ...sent.written, outcome: 'restored' }
+
+  shown.records = shown.records.map(one => (one === gone ? back : one))
 }
 
 async function pressedTell(host: ScribeHost, scribe: Scribe, item: Band.Tell, key: string): Promise<void> {
@@ -2161,6 +2352,9 @@ async function reasoned(
   item: Band.ReasonQuestion,
   answer: { detail?: string; reason_status: 'stated' | 'no_strong_reason' },
 ): Promise<void> {
+  // Their answer makes the record theirs, whether or not Fylgja takes it at once.
+  touched(scribe, item.id)
+
   if (await amend(host, scribe, { atom_id: item.id, op: 'fix', ...answer })) {
     Band.receive(scribe.band, [
       {
@@ -2220,6 +2414,11 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
     return
   }
 
+  // Written on their word about what it is to the old one: theirs from here on.
+  if (key !== 'skip') {
+    touched(scribe, one.id)
+  }
+
   Band.receive(band, [one])
 
   // It replaces the old decision, and nobody has said why: that is asked
@@ -2244,7 +2443,7 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
  * or fill the prompt box act at once.
  */
 function needsSecondPress(key: string): boolean {
-  return key === 'knew' || key === 'off' || key === 'replaces' || key === 'no-reason' || /^(?:remove|reason):/.test(key)
+  return key === 'knew' || key === 'off' || key === 'replaces' || key === 'no-reason' || /^(?:remove|reason|putback):/.test(key)
 }
 
 /** A key of the band was pressed. */
@@ -2334,6 +2533,7 @@ export async function entered(host: ScribeHost, scribe: Scribe, key: string, val
     }
 
     band.editing = null
+    touched(scribe, editing.id)
     await amend(host, scribe, { atom_id: editing.id, op: 'fix', content: text })
   } else if (
     key === 'reason-text' &&

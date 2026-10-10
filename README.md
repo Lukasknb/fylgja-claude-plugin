@@ -100,7 +100,12 @@ at a time.
   the folder the session started in: a repository checked out inside
   another, a worktree and a checkout next door are each their own (the
   nearest `.git` above the file decides, and the name is read from that
-  repository's `origin`, or is its folder's name). A record's files all
+  repository's `origin`, or is its folder's name). A `.git` that is a
+  file naming another folder is followed only into the working tree
+  itself, into a submodule's folder under a repository the tree lies in,
+  or into a worktree's folder that names this tree back in git's own
+  note of it; one that names any other folder on the machine is not
+  followed, and the checkout is then named by its folder. A record's files all
   lie in one repository, the one most of them are in; a record without
   files goes to the repository most of the turn's files are in. A turn
   that touched no file itself (you steering, agents doing the work) is
@@ -110,7 +115,10 @@ at a time.
   A decision is often recorded before the code that carries it out
   exists, and then points at no file. When a later turn of the same
   session touches the files that implement it, Scribe adds them to its
-  own record as places, without a receipt (the opened list shows them).
+  own record as places, without a receipt (the opened list shows them,
+  and a record's view says where a place was added by somebody other
+  than its author). A place that is wrong is taken off with Fix on the
+  record, or in Fylgja; Scribe adds places and never removes one.
   A commit is the moment for it: at the look after a commit, in the
   main conversation or by an agent the session started, the model is
   given Scribe's own records of the session that still have no place and
@@ -126,12 +134,30 @@ at a time.
   by the same bar as any other: which of two designs, not which task
   first, whether to go ahead, or how to be told about progress. Such
   records do not count against the three a turn may write, up to four
-  more, and you are never asked why about one.
+  more, and you are never asked why about one. What is yours in such an
+  answer is the label you picked, or what you typed instead of picking
+  one; an answer counts as an option only when it is that option's exact
+  label. What Claude said an option means is Claude's text: a reason
+  taken from it is recorded with the mark "offered by the assistant,
+  chosen by the developer", and never as your own words.
+  A tool call you turned down counts as yours only when its result is
+  the engine's own for a rejection: it opens with the engine's sentence,
+  and what the transcript stored beside it is the engine's text for one.
+  What you said then is your correction. A command that failed and
+  printed that sentence is a failed command, and nothing a tool of an
+  MCP server returns is ever taken for your words.
   When a later turn of the same session changes a decision Scribe already
   recorded, Scribe rewrites its own record (`✓ Updated · …`) or takes it
   back (`✓ Withdrawn · …`) without asking: it is its own record, minutes
-  old. A record from another session or another person is never touched
-  that way; that is what the question below is for. Fylgja takes a record only in a certain form (one
+  old. `Withdrawn` has a key, `1 Put back` (press it twice), which sends
+  the record again so that Fylgja restores it. Its own means written by
+  Scribe as new in this session: a record that came back from having
+  been removed is not. And once you have touched a record with a key
+  (Fix, an answer to why, an answer about replacing, Put back, Remove),
+  it is yours: Scribe does not rewrite it, take it back or add places to
+  it again in that session. A record from another session or another
+  person is never touched that way; that is what the question below is
+  for. Fylgja takes a record only in a certain form (one
   sentence, worded as a rule) and refuses rather than trims, saying why.
   When it refuses one for its form, Scribe hands its model that record and
   the refusal once (the refusal names the word it did not take and shows
@@ -162,7 +188,10 @@ at a time.
   it just worked"): a later reader sees that nothing in particular decided
   it, which is not the same as nobody having asked. A typed answer counts
   as "no reason" only when that is all it says; "none of the others
-  support ESM" is a reason. Skip saves nothing. It asks only for a
+  support ESM" is a reason. When you say it unasked, in so many words
+  ("no particular reason", "just because"), and the turn holds one
+  decision, that decision is recorded the same way and nobody looks for
+  a reason or asks. Skip saves nothing. It asks only for a
   reason you have not given. Before a question is put, and for every
   decision that came without a reason whether or not a question is due,
   one more small request looks for the reason in everything you wrote in
@@ -171,7 +200,8 @@ at a time.
   what you wrote, or in a plan, word for word; then the decision is
   recorded with that reason and you are not asked. Only on "absent" is
   the question put. The request is held to about 40,000 characters:
-  everything you wrote comes first and whole, then what Claude said about
+  everything you wrote comes first and whole, then what Claude said the
+  options mean that you picked, then what Claude said about
   this very decision, then only those sections of the plan documents that
   mention the decision's words, each cut to a length and marked. A quote
   is completed to the whole sentences it touches, so that a reason never begins or ends mid-sentence. A quote
@@ -182,7 +212,11 @@ at a time.
   Claude wrote in the turn and the one before: when Claude gave the
   reason for something it proposed and you accepted it without
   objecting, that is recorded as the reason, marked "proposed by the
-  assistant, accepted by the developer". And a question is only for a
+  assistant, accepted by the developer". Accepted is not the model's
+  word alone: you must have written or chosen something after Claude
+  wrote it. Where you have not, the decision is recorded without a
+  reason, and Claude's reason is the first answer offered if you are
+  asked. And a question is only for a
   decision that concerns code in hand or ruled something out; a decision
   with neither is recorded and nobody is asked. When the reason turns up
   in a later turn, the question goes and the record is given the reason.
@@ -239,6 +273,14 @@ Staying out of the way is the point, and the limits are in the code:
   session or the plan gives, never twice about the same one, at most one
   when a turn ends, at most four in a session, and none at all once two
   went unanswered. It shows only when Claude has finished.
+- What is recorded about a file is asked only of the session's own
+  repository and of repositories in which the session, or an agent of
+  it, wrote or changed a file. One it only reads in (a clone of
+  somebody's plugin, another checkout) is not asked about.
+- Finding out which repository a step's files lie in reads the disk and
+  holds a step for at most 0.4 seconds; past that the files count as in
+  no repository for that step, and what is found out is kept per folder
+  for the session.
 - At most one tell per turn, never the same record twice in a session.
   From the lookup by path alone, only a record anchored to the very file
   in hand. A record anchored to a folder above it is shown only when
@@ -395,10 +437,15 @@ cost line for these requests, so here is what they are.
   counts as one of the 30 by itself, and is not made once they are used
   up. The count is kept by each running Claude Code, so two sessions open
   at once have 30 each.
-- **Usually:** one request per turn of about 2,500 input tokens, of
-  which about 2,200 are read from the prompt cache, and
-  15 to 320 output tokens, in one to four seconds (measured over the
-  scripted sessions in `fylgja/tests/scenarios/RESULTS.md`).
+- **Usually:** one request per look of about 9,000 to 18,000 input
+  tokens, half to two thirds of them read from the prompt cache, and 130
+  to 350 output tokens, in one and a half to two and a half seconds
+  (measured by replaying recorded working sessions; the short scripted
+  sessions in `fylgja/tests/scenarios/RESULTS.md` come to about 2,500,
+  which real sessions do not). The look for a reason is a request of up
+  to about 33,000 characters as measured, 40,000 at most. In an hour of
+  real work the replays made 5 to 7 requests, 55,000 to 125,000 input
+  tokens.
 - **Beside the look itself,** a turn may spend up to three small
   requests out of the same four: one to look for a decision's reason in
   what you wrote, one to say whether a new decision goes against a
@@ -406,20 +453,27 @@ cost line for these requests, so here is what they are.
   one to put right a record the server refused.
 - **At most, per turn:** 4 requests of at most about 31,000 input tokens
   each (123,000 characters: the instruction, up to 24,000 characters of
-  plan text, 8 earlier turns in brief, 14,000 characters of this turn, 10
+  plan text, 4 earlier turns in brief, 14,000 characters of this turn, 10
   records, 3 lookups of 4,000 characters each) and 1,500 output tokens
   each: about 123,000 input and 6,000 output tokens. All but the first
   request of a turn read most of that from the prompt cache. A refused
   record that is put right inside the look uses one of those 4, and so
   does the request that looks for a decision's reason in what you wrote
-  (up to about 8,000 input tokens of your own prompts, plus the plans). On top of
+  (up to about 11,000 input tokens: 40,000 characters of your prompts,
+  the picked options, Claude's proposal and the plan sections that
+  mention the decision, and its instruction), the one that compares a
+  decision with what is recorded (up to five records, about 2,000 input
+  tokens) and the one that puts a refused record right (under 1,000).
+  So the worst turn is four full looks, not a look and three small
+  requests. On top of
   the 4, the end of a turn may put right up to 10 records that waited
   from earlier turns, and each key of yours that writes a record may do
   it once: one small request each (the record and the refusal, under
   1,000 input tokens, at most 700 output tokens).
 - **At most, per hour:** 30 looks, a small request of the kind above
   counting as a look, so 120 requests, about 3.7 million input tokens and
-  180,000 output tokens. That is the computed ceiling of
+  180,000 output tokens, the look for a reason, the comparison and the
+  correction included: each is one of a look's four. That is the computed ceiling of
   a session that hits every limit at once on every turn for an hour.
 - **Time:** each request has a limit of 25 seconds and a turn's whole look
   45; no call to Fylgja is waited for longer than 8 seconds. A server that

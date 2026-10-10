@@ -15,6 +15,8 @@ const SIBLING = { '/work/other/.git': '', '/work/other/.git/config': origin('acm
 const WORKTREE = {
   '/work/wt/.git': 'gitdir: /work/repo/.git/worktrees/wt\n',
   '/work/repo/.git/worktrees/wt/commondir': '../..\n',
+  // Git's own note of where that worktree is: what shows the `.git` file is not just claiming a repository.
+  '/work/repo/.git/worktrees/wt/gitdir': '/work/wt/.git\n',
   '/work/repo/.git/config': origin('acme/web'),
 }
 

@@ -110,17 +110,21 @@ describe('the look for a reason is held to a size', () => {
       decision: about,
       spoken,
       plans: [plan(1, `${beside}\n${paging}`), plan(2, beside)],
-      proposals: ['I suggest offset paging for the audit log: support can jump to a page.', 'Unrelated chatter about lunch.'],
+      proposals: [
+        { text: 'I suggest offset paging for the audit log: support can jump to a page.', isFollowed: true },
+        { text: 'Unrelated chatter about lunch.', isFollowed: true },
+      ],
     })
-    const size = [...parts.spoken, ...parts.proposals, ...parts.plans.map(one => one.text)].reduce(
+    const size = [...parts.spoken, ...parts.proposals.map(one => one.text), ...parts.plans.map(one => one.text)].reduce(
       (sum, one) => sum + one.length,
       0,
     )
 
     expect(parts.spoken, 'the developer’s words are never what is cut').toEqual(spoken)
-    expect(parts.proposals, 'only what the assistant said about this decision').toEqual([
-      'I suggest offset paging for the audit log: support can jump to a page.',
-    ])
+    expect(
+      parts.proposals.map(one => one.text),
+      'only what the assistant said about this decision',
+    ).toEqual(['I suggest offset paging for the audit log: support can jump to a page.'])
     expect(
       parts.plans.map(one => one.n),
       'only the plan that mentions it',
@@ -179,10 +183,22 @@ describe('what the developer decides without typing a prompt', () => {
       '[claude] Two ways to lock.',
       `[developer chose] Question: ${QUESTION} | Offered: Postgres advisory lock (Recommended) (No new service: the worker already holds a Postgres connection.); Redis lock (Fast, but Redis dropped connections under load last month.) | Chosen: Postgres advisory lock (Recommended)`,
     ])
-    expect(seen.acts).toEqual([
-      `The developer was asked: ${QUESTION} They chose: Postgres advisory lock (Recommended). The option they chose was described as: No new service: the worker already holds a Postgres connection.`,
+    expect(
+      seen.acts.map(act => act.words),
+      'their own part of it is the label they picked',
+    ).toEqual(['Postgres advisory lock (Recommended)'])
+    expect(seen.developer, 'they typed nothing').toBe('')
+    expect(seen.offers, 'what the option was said to mean is kept apart, as the assistant’s').toEqual([
+      {
+        question: QUESTION,
+        picked: [
+          {
+            label: 'Postgres advisory lock (Recommended)',
+            description: 'No new service: the worker already holds a Postgres connection.',
+          },
+        ],
+      },
     ])
-    expect(seen.developer).toBe('Postgres advisory lock (Recommended)')
   })
 
   test('several questions in one call, a typed answer with quotes in it, and a question left unanswered', () => {
@@ -231,7 +247,7 @@ describe('what the developer decides without typing a prompt', () => {
     })
     const set = stage(on, {
       replies: [NOTHING, verdict({ records: [bare] })],
-      verify: () => JSON.stringify({ reason: 'No new service: the worker already holds a Postgres connection.' }),
+      verify: () => JSON.stringify({ offered: 'No new service: the worker already holds a Postgres connection.' }),
     })
 
     await $.session.start(START)
@@ -245,13 +261,17 @@ describe('what the developer decides without typing a prompt', () => {
     )
 
     const look = set.verified[0]?.prompt ?? ''
-    const theirs = look.slice(look.indexOf('<<< what the developer wrote'), look.indexOf('<<< what the assistant wrote'))
+    const theirs = look.slice(look.indexOf('<<< what the developer wrote'), look.indexOf('<<< what the assistant said'))
+    const offered = look.slice(look.indexOf('<<< what the assistant said the options mean'))
 
-    expect(theirs).toMatch(`The developer was asked: ${QUESTION} They chose: Postgres advisory lock (Recommended).`)
+    expect(theirs, 'the label they picked is theirs').toMatch('Postgres advisory lock (Recommended)')
+    expect(theirs, 'the question is not').not.toMatch(QUESTION)
+    expect(theirs, 'and what the option was said to mean is not').not.toMatch('the worker already holds')
+    expect(offered).toMatch('No new service: the worker already holds a Postgres connection.')
     expect(look).not.toMatch('SUBAGENT-REPORT')
-    expect(set.of('remember')[0], 'the reason is what the option they chose was said to mean').toMatchObject({
+    expect(set.of('remember')[0], 'the reason is what the option they chose was said to mean, and says whose words it is').toMatchObject({
       reason_status: 'stated',
-      detail: 'the worker already holds a Postgres connection.',
+      detail: 'the worker already holds a Postgres connection. (offered by the assistant, chosen by the developer)',
     })
   })
 
@@ -276,7 +296,7 @@ describe('what the developer decides without typing a prompt', () => {
 
     expect(seen.lines).toContain('[developer rejected ExitPlanMode] no, keep the cursor for the export endpoint')
     expect(seen.lines).toContain('[developer approved the plan]')
-    expect(seen.acts).toEqual(['no, keep the cursor for the export endpoint', 'The developer approved the plan.'])
+    expect(seen.acts.map(act => act.words)).toEqual(['no, keep the cursor for the export endpoint', ''])
     expect(seen.developer).toBe('no, keep the cursor for the export endpoint')
   })
 
@@ -286,7 +306,7 @@ describe('what the developer decides without typing a prompt', () => {
     const seen = observe([claude('Asking.', use('AskUserQuestion', asking, rejected, true))], ROOT, new Set())
 
     expect(seen.acts).toEqual([])
-    expect(seen.lines.join('\n')).not.toMatch('[developer')
+    expect(seen.lines).toEqual(['[claude] Asking.', '[tool rejected] AskUserQuestion'])
   })
 })
 
