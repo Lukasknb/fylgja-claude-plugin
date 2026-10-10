@@ -21,7 +21,7 @@ cp -r "$plugin/hooks/." "$copy/hooks/"
 sed "s#'\.\./\.\./hooks/#'./#g" "$here/harness.ts" > "$copy/hooks/harness.ts"
 echo '{ "modules": ["./harness.ts"] }' > "$copy/hooks/hooks.json"
 echo '{ "name": "fylgja", "version": "0.0.0", "description": "Scribe scenario run." }' > "$copy/.claude-plugin/plugin.json"
-cp "$here/stub-server.mjs" "$copy/stub-server.mjs"
+cp "$here/stub-server.mjs" "$here/server-gate.json" "$copy/"
 # SCRIBE_ONLY="id,id" runs only the scenarios named.
 # SCRIBE_SET=heldout runs the sessions of scenarios-heldout.mjs.
 set="scenarios${SCRIBE_SET:+-$SCRIBE_SET}.mjs"
