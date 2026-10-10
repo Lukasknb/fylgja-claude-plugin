@@ -32,6 +32,8 @@ export type StageOptions = {
   refused?: Readonly<Record<string, string>>
   /** What `whoami` answers, when it is not the usual account. */
   whoami?: (clock: MockClock) => unknown
+  /** What the look for a reason in the developer's own words answers; "absent" without it. */
+  verify?: (asked: Asked, clock: MockClock) => string | undefined | Promise<string | undefined>
   /** The text of the plugin's own `.mcp.json`. */
   declared?: string
   /** Where the session is now, when it moves. */
@@ -56,6 +58,8 @@ export type Stage = {
   fills: string[]
   /** Each time Fylgja was asked who is signed in: how many other calls had been made by then. */
   whoamis: number[]
+  /** Every look for a reason in the developer's own words, in order. */
+  verified: Asked[]
   /** Every file the plugin read, in order. */
   reads: string[]
   /** Every line the plugin wrote to the debug log. */
@@ -88,6 +92,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const toasts: string[] = []
   const fills: string[] = []
   const whoamis: number[] = []
+  const verified: Asked[] = []
   const reads: string[] = []
   const logged: string[] = []
   const checks: string[] = []
@@ -185,6 +190,19 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
   on('model.complete', async ($, e) => {
     const request: Asked = { model: e.model, prompt: e.prompt, system: e.system ?? '', effort: e.effort, timeoutMs: e.timeoutMs }
+
+    // The look for a reason in what the developer wrote is a call of its own
+    // kind: it is answered apart from a test's list of replies, with "absent"
+    // unless the test says otherwise, and kept apart from the calls a test counts.
+    if (request.system.startsWith('You check one thing')) {
+      verified.push(request)
+
+      const found = (await options.verify?.(request, clock)) ?? '{"absent":true}'
+      const spent = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+
+      return { value: { isAnswered: true, text: found, usage: spent } as never }
+    }
+
     const replies = options.replies ?? [NOTHING]
     const reply = replies[Math.min(asked.length, replies.length - 1)] ?? NOTHING
 
@@ -259,6 +277,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     toasts,
     fills,
     whoamis,
+    verified,
     reads,
     logged,
     checks,

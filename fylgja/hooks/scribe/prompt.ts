@@ -8,7 +8,16 @@
  */
 
 import type { PlanDoc } from './plans'
-import { CONDITIONAL_OPENERS, SHAPE_LIMITS, STATEMENT_WORDS, STATUS_PHRASES, STATUS_WORDS, VERB_OPENERS } from './shape'
+import {
+  CONDITIONAL_OPENERS,
+  INSTRUCTION_EXAMPLES,
+  SHAPE_LIMITS,
+  STATEMENT_EXAMPLES,
+  STATEMENT_WORDS,
+  STATUS_PHRASES,
+  STATUS_WORDS,
+  VERB_OPENERS,
+} from './shape'
 import type { Fact } from './types'
 
 /** A piece of a request; `cache` keeps the request up to it in the prompt cache. */
@@ -18,10 +27,14 @@ const quoted = (words: readonly string[]): string => words.map(word => `"${word}
 
 /**
  * How a record's sentence must be shaped for Fylgja's server to take it, in
- * the server's own lists. Stated once, in the instruction, so that a record
- * passes the first time it is sent.
+ * the server's own lists and with the sentences its own refusals give as
+ * acceptable. Stated once, in the instruction, so that a record passes the
+ * first time it is sent.
  */
-const SHAPE = `The knowledge base refuses a sentence by how it opens, so open it in one of two ways and in no other. (1) As an instruction, with one of these words: ${CONDITIONAL_OPENERS.join(', ')}; or with one of these verbs: ${VERB_OPENERS.join(' ')}. (2) Only for a decision or a correction: as a statement that holds one of the words ${quoted(STATEMENT_WORDS)} ("The queue lock is a Postgres advisory lock, not Redlock"). A sentence that opens with any other word and holds none of those is refused: "Meeting times come from the daemon's clock" fails, "Meeting times are taken from the daemon's clock" and "Take meeting times from the daemon's clock" pass. A gotcha always opens the first way. A record is a rule, not a report of where something stands: no ticket numbers, no dates, none of ${quoted(STATUS_PHRASES)}, and none of ${quoted(STATUS_WORDS)} beside a ticket, a pull request or a date.`
+const SHAPE = `The knowledge base takes a sentence in one of two shapes, by its kind.
+  A decision is a STATEMENT of what is so. It names its subject and holds one of the words ${quoted(STATEMENT_WORDS)}: ${quoted(STATEMENT_EXAMPLES)}, "The queue lock is a Postgres advisory lock, not Redlock", "Meeting times are taken from the daemon's clock, not from recorded_at". Never turn a decision into an order: what was decided is how things are, not a command to the reader, and "Always …" claims more than was decided.
+  A gotcha or a correction is an INSTRUCTION. It opens with one of these words: ${CONDITIONAL_OPENERS.join(', ')}; or with one of these verbs and no other: ${VERB_OPENERS.join(' ')}. As in ${quoted(INSTRUCTION_EXAMPLES)}. When the verb you want is not in that list, word it with one that is ("Use …", "Keep …", "Run …") or open with "When …" or "Before …".
+  A sentence in neither shape is refused. Either way a record is a rule, not a report of where something stands: no ticket numbers, no dates, none of ${quoted(STATUS_PHRASES)}, and none of ${quoted(STATUS_WORDS)} beside a ticket, a pull request or a date.`
 
 export const SYSTEM = `You are Scribe, a background note-taker inside a coding session. You never talk to the developer or to the coding assistant. You read what the developer and the coding assistant (Claude) did since you last looked, and decide whether anything belongs in the team's knowledge base, so that a later reader of the code can find out WHY it was built that way. You answer with one JSON object and nothing else.
 

@@ -13,6 +13,10 @@ const words = pattern =>
     .replace(/^\\b\(|\)\\b$/g, '')
     .split('|')
     .map(word => word.replace(/(?:\\d)+/g, 'NN'))
+// The sentences the server's own refusals give as acceptable, sorted by how they open.
+const openers = [...gate.conditionals, ...gate.verbs]
+const examples = Object.values(gate.examples).flatMap(text => [...text.matchAll(/content="([^"]+)"/g)].map(match => match[1]))
+const isInstruction = sentence => openers.some(opener => new RegExp(`^${opener}\\b`, 'i').test(sentence))
 const list = values => `[\n${values.map(value => `  ${JSON.stringify(value)},`).join('\n')}\n]`
 
 writeFileSync(
@@ -30,6 +34,12 @@ export const CONDITIONAL_OPENERS: readonly string[] = ${list(gate.conditionals)}
 
 /** Verbs that may open a sentence as an instruction. */
 export const VERB_OPENERS: readonly string[] = ${list(gate.verbs)}
+
+/** Instructions the server's own refusals give as acceptable: how a gotcha or a correction is worded. */
+export const INSTRUCTION_EXAMPLES: readonly string[] = ${list(examples.filter(isInstruction))}
+
+/** Statements they give as acceptable: how a decision is worded. */
+export const STATEMENT_EXAMPLES: readonly string[] = ${list(examples.filter(sentence => !isInstruction(sentence)))}
 
 /** Words a sentence opens with when it tells what happened or what is the case, and gives no instruction. */
 export const NARRATIVE_OPENERS: readonly string[] = ${list(gate.subjects)}

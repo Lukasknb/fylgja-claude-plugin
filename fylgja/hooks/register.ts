@@ -10,6 +10,7 @@ import type { Live } from './live'
 import { flush, want } from './lookups'
 import { isOwnPrompt } from './origin'
 import { decorationsOf } from './paint'
+import { isLeftToPlugin } from './project'
 import { receiptOf } from './receipts'
 import { drawn } from './plain'
 import { REFUSED, verdictFor } from './scribe/grant'
@@ -123,6 +124,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live)
         () => false,
       ),
     read: path => $.fs.read(path),
+    vouched: root => isLeftToPlugin(hostOf($, session, live), root),
     surfaces: () => $.session.surfaces(),
     rows: () => $.session.messages(),
     destination: () =>

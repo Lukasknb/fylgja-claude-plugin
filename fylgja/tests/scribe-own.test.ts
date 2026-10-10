@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { opensAcceptably, shaped } from '../hooks/scribe/gate'
 import { SYSTEM } from '../hooks/scribe/prompt'
 import { CONDITIONAL_OPENERS, SHAPE_LIMITS, VERB_OPENERS } from '../hooks/scribe/shape'
 import { answer, idOf } from './fixtures'
@@ -161,79 +160,6 @@ describe('the shape the server takes is in the instruction', () => {
     expect(SYSTEM).toMatch(`ONE sentence of at most ${SHAPE_LIMITS.content} characters`)
     expect(SYSTEM).toMatch('holds one of the words "is", "are", "must", "stays", "becomes"')
     expect(SYSTEM).toMatch('"open PR"')
-  })
-})
-
-describe('a sentence is opened the way the server takes it, without a model call, where that needs no judgement', () => {
-  // The openings of first drafts the server refused in a replay of real sessions.
-  const REFUSED = [
-    'Record meeting attendance in a `meeting_attendees` table.',
-    'Backfill `meeting_attendees` in the migration before enabling RLS.',
-    'Render calendar blocks under about 34px as a single centered title line.',
-    'Reconstruct start and end times for uploads from old daemons.',
-    'Flag a transcript with zero speech as `needs_review`.',
-    'Gate the `sync_check.rs` import behind `cfg(target_os = "linux")`.',
-    'Translate `google.genai.errors.APIError` into `ProviderCallError`.',
-    'Identify PostHog users on the frontend by the internal user UUID.',
-    'Name all repos with the `VP_` prefix.',
-  ]
-
-  for (const sentence of REFUSED) {
-    test(`“${sentence.slice(0, 40)}…” opens with “Always”`, () => {
-      expect(opensAcceptably(sentence, 'gotcha')).toBe(false)
-      expect(shaped(sentence, 'gotcha')).toBe(`Always ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`)
-      expect(opensAcceptably(shaped(sentence, 'gotcha'), 'gotcha')).toBe(true)
-    })
-  }
-
-  test('a sentence the server takes is left exactly as it is', () => {
-    for (const [sentence, kind] of [
-      ['Use Postgres advisory locks for the job queue, not Redis.', 'decision'],
-      ['Never run migrations while one is pending.', 'gotcha'],
-      ['The queue lock is a Postgres advisory lock, not Redlock.', 'decision'],
-      ['Page /audit-log with offset and limit.', 'decision'],
-      ["Don't bump the version for each fix.", 'correction'],
-    ] as const) {
-      expect(shaped(sentence, kind), sentence).toBe(sentence)
-    }
-  })
-
-  test('an account of what happened is not dressed up as an instruction: it is left for the server to refuse', () => {
-    for (const sentence of [
-      'We fixed the lock.',
-      'The website uses Vite and React.',
-      'Fixed the flaky seed.',
-      'Investigating the timeout.',
-    ]) {
-      expect(shaped(sentence, 'gotcha'), sentence).toBe(sentence)
-    }
-  })
-
-  test('a name or an acronym keeps its spelling, and a sentence that would grow too long is left alone', () => {
-    expect(shaped('ASR backends funnel through the persist step.', 'gotcha')).toBe(
-      'Always ASR backends funnel through the persist step.',
-    )
-    expect(shaped(`Backfill ${'x'.repeat(212)}.`, 'gotcha')).toBe(`Backfill ${'x'.repeat(212)}.`)
-  })
-
-  test('the sentence is opened before it is first sent, so nothing is refused and no model is asked again', async ($, on) => {
-    const set = stage(on, {
-      replies: [
-        verdict({
-          records: [
-            decision({ content: 'Backfill `meeting_attendees` before enabling RLS on the table.', anchors: [{ path: FILE }] }),
-          ],
-        }),
-      ],
-    })
-
-    await $.session.start(START)
-    await turn($, set, ...one('backfill before enabling row level security'))
-
-    expect(set.of('remember').map(args => args.content)).toEqual([
-      'Always backfill `meeting_attendees` before enabling RLS on the table.',
-    ])
-    expect(set.asked.length).toBe(1)
   })
 })
 

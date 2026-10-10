@@ -20,8 +20,8 @@ import { filesOf, isPrompt, observe, plain } from './delta'
 import type { Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
-import { codeOf, PASSING, shaped, teaches } from './gate'
-import { correct, MAX_STEPS, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
+import { codeOf, PASSING, teaches } from './gate'
+import { correct, MAX_STEPS, reasonIn, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
 import type { LoopHost } from './loop'
 import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
@@ -73,6 +73,12 @@ export type ScribeHost = LoopHost & {
    * thing: the files git keeps about a repository, to read its name.
    */
   read: (path: string) => Promise<string>
+  /**
+   * Whether no `.mcp.json` from `root` upward holds an entry that could
+   * stand in for the plugin's server (see `project.ts`). Asked of a working
+   * tree other than the session's own before anything about it is sent.
+   */
+  vouched: (root: string) => Promise<boolean>
   /** `$.session.surfaces`. */
   surfaces: () => Promise<readonly string[]>
   /** `$.session.messages`: the main conversation's rows. */
@@ -155,6 +161,17 @@ export type Scribe = {
   stated: string[]
   /** Records that were not written because the turn touched no file of any repository. */
   unplaced: number
+  /**
+   * Everything the developer wrote in the session, prompt by prompt, oldest
+   * first: where a reason is looked for before anybody is asked for it. Held
+   * in the running plugin only.
+   */
+  spoken: string[]
+  /** How many of the oldest prompts were let go to keep that within its length. */
+  unspoken: number
+  /** How many times a decision without a reason was checked against what the developer wrote, and how often a reason was there. */
+  checked: number
+  found: number
   /** The records the lookups found since the last wake. */
   anchored: Map<string, Fact>
   deferred: Deferred[]
@@ -214,6 +231,9 @@ export const MAX_PAST_CHARS = 1200
 /** No more things the developer stated are kept for a session than this; the oldest go first. */
 export const MAX_STATED = 20
 
+/** No more of what the developer wrote is kept for a session than this, in characters; the oldest prompts go first. */
+export const MAX_SPOKEN_CHARS = 30_000
+
 /** One lookup of files asks about no more repositories than this; the rest wait for the next. */
 const MAX_LOOKUP_REPOS = 3
 
@@ -255,6 +275,10 @@ export function create(options: Options): Scribe {
     trees: new Map(),
     stated: [],
     unplaced: 0,
+    spoken: [],
+    unspoken: 0,
+    checked: 0,
+    found: 0,
     anchored: new Map(),
     deferred: [],
     commits: new Set(),
@@ -300,6 +324,8 @@ export function startOver(scribe: Scribe): void {
   scribe.lookedUp.clear()
   scribe.places.clear()
   scribe.stated = []
+  scribe.spoken = []
+  scribe.unspoken = 0
   scribe.anchored.clear()
   scribe.deferred = []
 }
@@ -425,8 +451,13 @@ async function treeAt(host: ScribeHost, scribe: Scribe, who: Identity, folder: s
     if (await host.exists(`${at}/.git`).catch(() => false)) {
       // The session's own tree is named as the session names it.
       const repo = at === who.root && who.repo !== null ? who.repo : repoNameOf(await remoteOf(host, at), at)
+      // The session's own tree was looked at when the session started. Any
+      // other is looked at here, before anything about it is sent: a
+      // repository whose own `.mcp.json` could stand in for the plugin's
+      // server is left alone, as if its files lay in no repository.
+      const isVouched = at === who.root || (await host.vouched(at).catch(() => false))
 
-      tree = repo === undefined ? null : { root: at, repo }
+      tree = repo === undefined || !isVouched ? null : { root: at, repo }
       break
     }
 
@@ -937,9 +968,6 @@ async function written(
     return undefined
   }
 
-  // The sentence is opened the way the server takes it where that needs no judgement.
-  draft = { ...draft, content: shaped(draft.content, draft.kind) }
-
   const first = await send(host, scribe, who, draft, prior)
   const part = first.written === undefined ? teaches(first.code) : undefined
 
@@ -1009,7 +1037,7 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<
     return undefined
   }
 
-  const content = shaped(draft.content, draft.kind)
+  const { content } = draft
   const args: Record<string, unknown> = {
     atom_id: own.id,
     op: 'fix',
@@ -1077,6 +1105,57 @@ async function takeBack(host: ScribeHost, scribe: Scribe, id: string): Promise<W
   return { ...own, outcome: 'withdrawn', replaced: null }
 }
 
+/**
+ * A decision as it is written, after its reason was looked for. One that
+ * came without a reason is checked once against everything the developer
+ * wrote in the session and against the plan documents, by a model call of
+ * the wake's own: a reason found there, in their very words, makes the
+ * decision stated. `isAbsent` says the look was made and found none: only
+ * then may the developer be asked.
+ */
+async function withReason(
+  host: ScribeHost,
+  scribe: Scribe,
+  draft: Draft,
+  budget: Budget,
+): Promise<{ draft: Draft; isAbsent: boolean }> {
+  if (draft.kind !== 'decision' || draft.reasonStatus !== 'not_stated') {
+    return { draft, isAbsent: false }
+  }
+
+  // With nothing to look in, there is nothing to find.
+  if (scribe.spoken.length === 0 && scribe.plans.docs.length === 0) {
+    return { draft, isAbsent: true }
+  }
+
+  const left = budget.until - (await host.now())
+
+  // No call left in this wake: the decision is written as it is, and nobody is asked on a guess.
+  if (budget.steps <= 0 || left <= 0) {
+    return { draft, isAbsent: false }
+  }
+
+  budget.steps -= 1
+  scribe.checked += 1
+
+  const reason = await reasonIn(host, {
+    model: scribe.model,
+    decision: draft.content,
+    spoken: scribe.spoken,
+    unspoken: scribe.unspoken,
+    plans: scribe.plans.docs,
+    timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
+  })
+
+  if (reason === undefined) {
+    return { draft, isAbsent: true }
+  }
+
+  scribe.found += 1
+
+  return { draft: { ...draft, detail: reason, reasonStatus: 'stated' }, isAbsent: false }
+}
+
 /** Acts on a wake's verdict: writes its records, and puts its question and its tells in line. */
 async function apply(
   host: ScribeHost,
@@ -1107,9 +1186,13 @@ async function apply(
     const isAskedOf = question?.record === index
     const prior = isAskedOf && question.form === 'reversal' ? facts.get(question.prior) : undefined
 
+    // A decision that came without a reason: before anybody is asked, the
+    // reason is looked for in what the developer wrote and in the plans.
+    const checked = await withReason(host, scribe, draft, budget)
+
     // Scribe's own record of this session, as the decision now stands: rewritten in place, with no key and no second record.
     if (draft.updates !== null) {
-      const own = await rewrite(host, scribe, draft)
+      const own = await rewrite(host, scribe, checked.draft)
 
       if (own !== undefined) {
         Band.receive(band, [own])
@@ -1141,7 +1224,7 @@ async function apply(
     }
 
     // What is written may be the record put right: the question, if there is one, is about that one.
-    const one = await written(host, scribe, who, { ...draft, supersedes: null }, budget)
+    const one = await written(host, scribe, who, { ...checked.draft, supersedes: null }, budget)
 
     if (one === undefined) {
       continue
@@ -1149,7 +1232,14 @@ async function apply(
 
     Band.receive(band, [one])
 
-    if (isAskedOf && question.form === 'reason' && one.reasonStatus === 'not_stated' && one.outcome !== 'held') {
+    // Asked only when the reason was looked for and is nowhere.
+    if (
+      isAskedOf &&
+      question.form === 'reason' &&
+      one.reasonStatus === 'not_stated' &&
+      one.outcome !== 'held' &&
+      checked.isAbsent
+    ) {
       Band.offerQuestion(
         band,
         {
@@ -1579,6 +1669,20 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
 
   scribe.hasPrompt = true
   scribe.prompts.add(plain(text))
+
+  // The developer's own words are kept for the session: a reason they gave
+  // is looked for here before they are asked for it.
+  if (plain(text) !== '') {
+    scribe.spoken.push(plain(text))
+
+    for (
+      let size = scribe.spoken.reduce((sum, one) => sum + one.length, 0);
+      size > MAX_SPOKEN_CHARS && scribe.spoken.length > 1;
+    ) {
+      size -= scribe.spoken.shift()?.length ?? 0
+      scribe.unspoken += 1
+    }
+  }
 
   for (const old of scribe.prompts) {
     if (scribe.prompts.size <= MAX_PROMPTS) {

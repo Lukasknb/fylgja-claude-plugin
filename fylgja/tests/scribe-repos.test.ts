@@ -161,6 +161,75 @@ describe('a record is about the repository its files lie in', () => {
     expect(set.of('attach_commit'), 'a session with no repository of its own attaches no commit').toEqual([])
   })
 
+  describe('a session started in a folder that is no repository', () => {
+    const DECLARED = JSON.stringify({ mcpServers: { fylgja: { type: 'http', url: 'https://fylgja.lknblab.dev/mcp' } } })
+    const theirs = JSON.stringify({
+      mcpServers: {
+        kb: { type: 'http', url: 'https://fylgja.lknblab.dev/mcp', headers: { Authorization: 'Bearer somebody-else' } },
+      },
+    })
+    const outside = { repo: null, cwdNow: () => '/work', declared: DECLARED } as const
+    const begin = { ...START, cwd: '/work' }
+
+    test('who is signed in is asked and pinned all the same: that does not wait for a repository', async ($, on) => {
+      const set = stage(on, { ...outside, files: SIBLING })
+
+      await $.session.start(begin)
+
+      expect(set.whoamis.length).toBe(1)
+      expect(set.kept.get('fylgja.account')).toBeDefined()
+    })
+
+    test('an entry in the start folder’s own `.mcp.json` that could stand in for the plugin’s server keeps the whole plugin out', async ($, on) => {
+      const set = stage(on, {
+        ...outside,
+        files: { ...SIBLING, '/work/.mcp.json': theirs },
+        replies: [verdict({ records: [decision({ anchors: [] })] })],
+      })
+
+      await $.session.start(begin)
+      await turn($, set, dev('fix the other service from up here'), edits('/work/other/lib/y.ts'))
+
+      expect([set.calls, set.asked], 'no call to Fylgja and no model call').toEqual([[], []])
+      expect(set.statuses.filter(line => line !== undefined).length, 'and one line says why').toBe(1)
+    })
+
+    test('a repository the session works in is looked at before anything about it is sent: one whose own `.mcp.json` holds such an entry is left alone', async ($, on) => {
+      const set = stage(on, {
+        ...outside,
+        files: { ...SIBLING, [`${ROOT}/.git/config`]: origin('acme/web'), '/work/other/.mcp.json': theirs },
+        replies: [verdict({ records: [decision({ anchors: [{ path: 'other/lib/y.ts' }, { path: 'repo/src/a.ts' }] })] })],
+      })
+
+      await $.session.start(begin)
+      await turn($, set, dev('change both from up here'), edits('/work/other/lib/y.ts', `${ROOT}/src/a.ts`))
+
+      expect(set.reads, 'its `.mcp.json` was read').toContain('/work/other/.mcp.json')
+      expect(
+        set.of('recall').map(args => args.repo),
+        'nothing is asked about it',
+      ).not.toContain('acme/other')
+      expect(
+        set.of('remember').map(args => [args.repo, args.anchors]),
+        'and the record is filed with the files of the other repository alone',
+      ).toEqual([['acme/web', [{ path: 'src/a.ts' }]]])
+    })
+
+    test('a turn that touched only a repository that is left alone records nothing', async ($, on) => {
+      const set = stage(on, {
+        ...outside,
+        files: { ...SIBLING, '/work/other/.mcp.json': '{ not json' },
+        replies: [verdict({ records: [decision({ anchors: [] })] })],
+      })
+
+      await $.session.start(begin)
+      await turn($, set, dev('fix the other service from up here'), edits('/work/other/lib/y.ts'))
+
+      expect(set.calls, 'a file that cannot be read as configuration counts as hostile').toEqual([])
+      expect(set.asked).toEqual([])
+    })
+  })
+
   test('which repository a folder lies in is asked of the machine once', async ($, on) => {
     const set = stage(on, { files: NESTED })
 

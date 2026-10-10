@@ -207,6 +207,18 @@ export const VERB_OPENERS: readonly string[] = [
   'write',
 ]
 
+/** Instructions the server's own refusals give as acceptable: how a gotcha or a correction is worded. */
+export const INSTRUCTION_EXAMPLES: readonly string[] = [
+  'Never set EPHEMERAL in the runner compose file',
+  'Run alembic upgrade head before starting the worker',
+  'Use `just test-db` for the database tiers',
+  'Always rebase onto main before requesting review',
+  'Never run terraform apply without -target on the GPU stack',
+]
+
+/** Statements they give as acceptable: how a decision is worded. */
+export const STATEMENT_EXAMPLES: readonly string[] = ['The live database is fylgja_rebuild']
+
 /** Words a sentence opens with when it tells what happened or what is the case, and gives no instruction. */
 export const NARRATIVE_OPENERS: readonly string[] = [
   'a',

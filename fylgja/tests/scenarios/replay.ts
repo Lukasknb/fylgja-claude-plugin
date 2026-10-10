@@ -296,6 +296,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
         ? Promise.reject(new Error('not read'))
         : Promise.resolve(remote === null || remote === undefined ? '' : `[remote "origin"]\n\turl = ${remote}\n`)
     },
+    // No project configuration is read here: the stand-in is the only server there is.
+    vouched: () => Promise.resolve(true),
     surfaces: () => Promise.resolve(['terminal']),
     rows: () => Promise.resolve(world.rows),
     destination: () => undefined,

@@ -140,10 +140,15 @@ at a time.
   it, which is not the same as nobody having asked. A typed answer counts
   as "no reason" only when that is all it says; "none of the others
   support ESM" is a reason. Skip saves nothing. It asks only for a
-  reason that is nowhere in the session: not in the turn, not in an
-  earlier one, not in a plan, not among the things you stated. When the
-  reason turns up in a later turn, the question goes and the record is
-  given the reason.
+  reason you have not given. Before a question is put, and for every
+  decision that came without a reason whether or not a question is due,
+  one more small request looks for the reason in everything you wrote in
+  the session and in the plan documents, and may answer only with your
+  own words, quoted, or "absent". A quote is taken only if it stands in
+  what you wrote, or in a plan, word for word; then the decision is
+  recorded with that reason and you are not asked. Only on "absent" is
+  the question put. When the reason turns up in a later turn, the
+  question goes and the record is given the reason.
 - **It asks before anything is replaced.** When a new decision goes against
   a recorded one, the new one is not written until you have said which it
   is: `1 Yes, it replaces it  2 No, tell Claude  3 Different case  0 Skip`.
@@ -207,10 +212,27 @@ Staying out of the way is the point, and the limits are in the code:
 
 Scribe runs only where you are at the prompt of a terminal or desktop
 session, signed in to Fylgja. In a `claude -p` run or signed out it does
-nothing at all: no model call, no call to Fylgja. Started in a folder
-that is no git repository (one that holds several checkouts, say) it
-does nothing until the session reads or changes a file that lies in a
-repository, and then records for that repository.
+nothing at all: no model call, no call to Fylgja.
+
+A session need not start inside a git repository. Started in a folder
+that is none (one that holds several checkouts, say), these rules hold:
+
+- A turn that touches no file of any repository records nothing, and no
+  model is asked before the session has touched a file of one.
+- A record is filed under the repository its files lie in, as everywhere.
+- Who is signed in is asked, and the account pinned or checked, when the
+  session starts, as everywhere. That does not wait for a repository.
+- The `.mcp.json` files from the start folder upward are checked when
+  the session starts, and again when it moves (`cd`) into another
+  folder. Claude Code loads no `.mcp.json` from a folder below the one
+  the session is in, so a repository the session only reaches into
+  cannot swap the connection (checked on Claude Code 2.1.296: an entry
+  for Fylgja's address in a checkout below the start folder was not
+  loaded). Scribe looks at it all the same: before anything about a
+  repository other than the session's own is sent, the `.mcp.json` files
+  from that repository's root upward are read, and a repository whose
+  own configuration holds an entry that could stand in for the plugin's
+  server is left alone, as if its files lay in no repository.
 
 Before it asks a model anything in a session, one call of its own has to
 get through to Fylgja. That first call is waited for up to eight seconds;
@@ -332,7 +354,9 @@ cost line for these requests, so here is what they are.
   records, 3 lookups of 4,000 characters each) and 1,500 output tokens
   each: about 123,000 input and 6,000 output tokens. All but the first
   request of a turn read most of that from the prompt cache. A refused
-  record that is put right inside the look uses one of those 4. On top of
+  record that is put right inside the look uses one of those 4, and so
+  does the request that looks for a decision's reason in what you wrote
+  (up to about 8,000 input tokens of your own prompts, plus the plans). On top of
   the 4, the end of a turn may put right up to 10 records that waited
   from earlier turns, and each key of yours that writes a record may do
   it once: one small request each (the record and the refusal, under
@@ -433,8 +457,11 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   a plan document nobody has read or changed for five looks is sent as
   its headings only. Scribe also keeps, in memory, up to twenty short
   sentences of reasons and constraints you stated in the session, and
-  sends them along, so that it does not ask for a reason you already
-  gave. No file's contents and no
+  sends them along. And it keeps, in memory and for the session, the
+  prompts you sent themselves, up to 30,000 characters of them (the
+  oldest go first): they are sent, with the plan documents and one
+  sentence of a decision, in the small request that looks for a reason
+  you already gave before you are asked for it. No file's contents and no
   other tool output, with one exception: the text of a plan document as
   described above, at most three of them, 12,000 characters each and
   24,000 together. A background task's report, a skill's text and a
