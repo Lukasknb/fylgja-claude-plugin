@@ -25,8 +25,8 @@ const TALK = [dev('Use Postgres for the queue lock.'), claude('Done.', edit('src
 
 const refused = (text: string) => ({ content: [{ type: 'text', text }], isError: true })
 const created = (n: number) => answer({ atom_id: idOf(n), outcome: 'created', supersede: 'not_requested', note: null })
-const NOT_IMPERATIVE =
-  'refused:not_imperative — content opens with "Paginate", which is not an instruction word this server knows; open with one (Use, Never, Always, Run, Check, Before, When …), e.g. "Use offset and limit to paginate /audit-log." or "Always paginate /audit-log with offset and limit."'
+// The words of the server's gate for this record.
+const NOT_IMPERATIVE = `refused:not_imperative — content opens with "Paginate", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a decision or correction may instead read "X is/must/stays Y". Keep your sentence and open it with one it knows, for example "Always paginate <…>" or "Use <…> to paginate <…>". Acceptable instead: content="Never run terraform apply without -target on the GPU stack" (runbook/gotcha), or content="The live database is fylgja_rebuild" (decision/correction)`
 
 /** A server that refuses a sentence opening with `opener` and takes every other. */
 function refusing(opener: string, refusal = NOT_IMPERATIVE) {
@@ -71,9 +71,8 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(correction?.prompt).toMatch('"content":"Paginate /audit-log with offset and limit, not a cursor."')
     expect(correction?.prompt).toMatch('refused:not_imperative')
     expect(correction?.prompt, 'the word the server named reaches the model').toMatch('opens with "Paginate"')
-    expect(correction?.prompt, 'and so do both of its examples, whole').toMatch(
-      '"Always paginate /audit-log with offset and limit."',
-    )
+    expect(correction?.prompt, 'and so do both of its rewrites').toMatch('"Use <…> to paginate <…>"')
+    expect(correction?.prompt, 'and the refusal to its end').toMatch('fylgja_rebuild')
     expect(correction?.system).toMatch('When the refusal names the word it did not accept')
     expect(correction?.prompt).not.toMatch('SESSION-TEXT')
     expect(correction?.prompt.match(/^<<< /gm)?.length, 'both are fenced as data').toBe(2)

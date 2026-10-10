@@ -37,51 +37,41 @@ const failed = text => ({ content: [{ type: 'text', text }], isError: true })
 const everything = () => [...held.values()].flat()
 
 // ---- the server's gate (domain/services/memory_gate.py) ----
-// How a sentence may open is a list of words, as the server announced it: the list it had before commit 94b96b85 with
-// `launch` and `page` added, and a refusal that names the word it did not know and shows two ways to say it.
-const OPENERS = [
-  'after', 'always', 'before', 'do not', "don't", 'for', 'if', 'never', 'on', 'only', 'when',
-  'add', 'assume', 'avoid', 'bind', 'build', 'call', 'cap', 'check', 'confirm', 'configure', 'copy', 'delete', 'deploy',
-  'disable', 'drop', 'enable', 'ensure', 'expect', 'export', 'fetch', 'grant', 'install', 'keep', 'kill', 'label', 'launch', 'leave',
-  'limit', 'log', 'make', 'merge', 'mount', 'move', 'page', 'pass', 'pin', 'point', 'prefer', 'put', 'query', 'read', 'rebuild',
-  'reboot', 'reindex', 'remove', 'rename', 'restart', 'restore', 'retry', 'reuse', 'revoke', 'rotate', 'route', 'run', 'send',
-  'set', 'skip', 'split', 'stamp', 'start', 'stop', 'store', 'tag', 'treat', 'update', 'use', 'verify', 'wait', 'wrap', 'write',
-] // prettier-ignore
+// Its word lists and refusal texts are read from server-gate.json, which gate-from-server.py writes out of the server's
+// own file; nothing of them is typed here.
+const GATE = JSON.parse(readFileSync(new URL('./server-gate.json', import.meta.url), 'utf8'))
+const OPENERS = [...GATE.conditionals, ...GATE.verbs]
+const SUBJECTS = new Set(GATE.subjects)
 const STATES = /\b(is|are|must|stays|becomes)\b/i
 const STATUS = /\b(open PR|draft PR|in review|awaiting review|blocked on|waiting for|as of 20\d\d|is now live)\b/i
 const STATUS_WORD = /\b(merged|pending|landed|WIP|awaiting|deployed on)\b/gi
 const STATUS_ANCHOR = /#\d+|\b[A-Z]{2,6}-\d+\b|\b20\d\d-\d{2}-\d{2}\b|\b20\d\d\b/g
 const TICKET = /#\d+|\b[A-Z]{2,6}-\d+\b/g
-const HINTS = {
-  too_long:
-    'content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail',
-  detail_too_long: 'detail is at most 1200 characters — this is a memory, not a write-up',
-  not_one_sentence: 'content is ONE sentence — everything after the first full stop belongs in detail',
-  status_not_memory:
-    'this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing',
-  no_trigger:
-    'a runbook or gotcha nobody can be warned about is unreachable — pass the verbatim command or error keywords in triggers',
-  burst: 'batch settled findings at the end of the task; one atom per fact',
-  not_a_decision:
-    'alternatives and reason_status describe a decision: what was ruled out, and whether a reason was given. This kind has neither',
-  reason_missing:
-    'a decision says why. Put the reason in detail. If there is none on record, say which case it is: reason_status="not_stated" or reason_status="no_strong_reason"',
-  reason_contradiction:
-    'detail and reason_status disagree: stated needs a reason in detail, and not_stated means there is no reason to put in detail',
-  alternatives_too_many: 'alternatives holds at most 6 options of at most 220 characters each',
+const HINTS = GATE.hints
+
+/** What the gate says of a sentence that does not open with an instruction: the word it opened with, the rule, two rewrites. */
+function notImperative(sentence) {
+  const word = sentence.match(/^[A-Za-z][A-Za-z'_-]*/)?.[0].slice(0, GATE.max_echoed_word)
+  const rule = HINTS.not_imperative
+
+  if (word === undefined) {
+    return `content does not open with a word. Rule: ${rule}. Rewrite it as, for example, "Run <the command> when <the symptom>" or "Never <do this> without <that>"`
+  }
+
+  const verb = word.toLowerCase()
+
+  return SUBJECTS.has(verb) || verb.endsWith('ed') || verb.endsWith('ing')
+    ? `content opens with "${word}", which tells what happened or what is the case. Rule: ${rule}. State the rule that came out of it, for example "Always <do this> before <that>" or "Check <this> when <that happens>"`
+    : `content opens with "${word}", which is not an opener the gate knows as an instruction. Rule: ${rule}. Keep your sentence and open it with one it knows, for example "Always ${verb} <…>" or "Use <…> to ${verb} <…>"`
 }
 
-/** What the gate says of a sentence whose opening word it does not know: the word, and two ways to say it. */
-function unknownOpener(sentence) {
-  const word = sentence.match(/[A-Za-z][A-Za-z'-]*/)?.[0] ?? sentence.split(/\s+/)[0]
-  const rest = sentence.replace(/[.!?]\s*$/, '')
-  const lowered = rest.charAt(0).toLowerCase() + rest.slice(1)
+/** The one line a refused write gets: its code, what to do, and one acceptable rewrite. */
+function refusal(rule, content) {
+  const hint = rule === 'not_imperative' ? notImperative(String(content ?? '').trim()) : HINTS[rule]
+  const example = GATE.examples[rule]
 
-  return `content opens with "${word}", which is not an instruction word this server knows; open with one (Use, Never, Always, Run, Check, Before, When …), e.g. "Use ${lowered}." or "Always ${lowered}."`
+  return failed(example === undefined ? `refused:${rule} — ${hint}` : `refused:${rule} — ${hint}. Acceptable instead: ${example}`)
 }
-
-const refusal = (rule, content) =>
-  failed(`refused:${rule} — ${rule === 'not_imperative' ? unknownOpener(String(content ?? '').trim()) : HINTS[rule]}`)
 
 function readsAsStatus(text) {
   if (STATUS.test(text)) {
