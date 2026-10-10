@@ -87,7 +87,15 @@ The plugin no longer holds a sentence to the server's rules itself. It sends the
 
 ### After the final sync to the server's contract
 
-Not run yet. The tree at commit `91d7119` follows the server as it landed (records with no link, commits as objects, the landed refusal codes), but the server's rule for how a sentence may open was still due to change once more when this was written: back to a list of opening words, with a refusal that names the word it did not know and shows two ways to say it. The stand-in refuses in that announced shape. The ten sessions are run three times once that rule is in the server's code and the stand-in has been checked against it, so that the calls are spent once.
+The stand-in refuses by the server's own gate: its opener lists, its hints and its examples are read out of the server's `memory_gate.py` at commit `df67963f` (`gate-from-server.py` writes `server-gate.json`), and a sentence that does not open with an instruction is refused in the server's words, naming the word it opened with and two ways to rewrite it. Records come back with no link. The ten sessions, three times, on the tree at commit `0364262` (46 model calls in 51 turns); the prompt was not touched.
+
+|Run|Correct|False records|False questions|Put right after a refusal|Lost|
+|-|-|-|-|-|-|
+|1|10/10|0|0|0|0|
+|2|10/10|0|0|0|0|
+|3|10/10|0|0|1|0|
+
+Zero questions and zero tells in the sessions that expect silence. The one record handed back, in the session with a design document in the repository, was a sentence opening with "Web push uses …"; it came back as "Use our own service worker and the browsers' push endpoints directly with VAPID keys for web push, not a vendor SDK such as OneSignal." and was written with its reason and anchors unchanged.
 
 What the table does not say:
 
