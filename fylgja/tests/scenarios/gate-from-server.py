@@ -28,18 +28,14 @@ out = {
     "statement_verbs": gate._STATEMENT_VERBS.pattern,
     "status_phrases": gate._UNAMBIGUOUS_STATUS.pattern,
     "status_words": gate._AMBIGUOUS_STATUS.pattern,
-    # What a decision may not be: an account of what happened.
+    # What a decision may not be: an account of what happened. Only the words the instruction names are taken;
+    # the rule itself is too long to copy, and the stand-in asks the server's own code for it (gate-check.py).
     "narrative": {
         "first_person": sorted(gate.FIRST_PERSON),
         "report_openers": sorted(gate.REPORT_OPENERS),
-        "report_times": gate.REPORT_TIMES.pattern,
-        "past_forms": sorted(gate.PAST_FORMS),
-        "not_past_in_ed": sorted(gate.NOT_PAST_IN_ED),
-        "only_ever_a_verb": sorted(gate.ONLY_EVER_A_VERB),
-        "after_a_verb": sorted(gate.AFTER_A_VERB),
-        "relatives": sorted(gate._RELATIVES),
-        "main_verb_within": gate.MAIN_VERB_WITHIN,
-        "says": gate._NARRATIVE_SAYS,
+        "progress_openers": sorted(getattr(gate, "PROGRESS_OPENERS", [])),
+        "question_openers": sorted(getattr(gate, "QUESTION_OPENERS", [])),
+        "hedges": sorted(getattr(gate, "HEDGES", [])),
         "rule": gate._DECISION_RULE,
         "rewrites": gate._DECISION_REWRITES,
     },
@@ -48,7 +44,7 @@ out = {
 }
 
 # Sentences of every shape the gate tells apart, with what the server itself says of each: the stand-in's own
-# reading of the rules is checked against these (gate-selfcheck.mjs), so that it cannot drift from the server's.
+# answers are checked against these (gate-selfcheck.mjs).
 # Every sentence here is made up for the purpose.
 SUBJECTS = ["The reducer", "Rows without a start", "The old job", "Lukas", "A deduplicated upload", "`is_default`", "Meetings uploaded by daemons"]
 TAILS = ["rejects stale tokens", "stay NULL", "was killed", "chose Redis for the queue", "adds its uploader as an attendee", "finished without errors", "failed", "uses offset paging", "moved to Postgres", "is a Postgres advisory lock", "get their times from the daemon"]
@@ -75,6 +71,8 @@ for kind in ("decision", "gotcha", "correction"):
     for sentence in SENTENCES:
         triggers = ["queue"] if kind == "gotcha" else []
         verdict = gate.check_memory(sentence, "because it is so" if kind == "decision" else None, kind, triggers)
+        if verdict.ok:
+            verdict = gate.check_decision_fields(kind, "because it is so" if kind == "decision" else None, None, [])
         out["cases"].append(
             {
                 "kind": kind,

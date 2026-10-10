@@ -45,6 +45,11 @@ export const STATEMENT_EXAMPLES: readonly string[] = ${list(examples.filter(sent
 export const DECISION_RULE = ${JSON.stringify(gate.narrative.rule)}
 export const DECISION_REWRITES = ${JSON.stringify(gate.narrative.rewrites)}
 
+/** Words that open a report of work in progress, a question, and a guess: none of them is a decision. */
+export const PROGRESS_OPENERS: readonly string[] = ${list(gate.narrative.progress_openers)}
+export const QUESTION_OPENERS: readonly string[] = ${list(gate.narrative.question_openers)}
+export const HEDGES: readonly string[] = ${list(gate.narrative.hedges)}
+
 /** Words a decision may not open with: who did it, when it was, how far it has got. Such a sentence is an account. */
 export const ACCOUNT_OPENERS: readonly string[] = ${list([...gate.narrative.first_person, ...gate.narrative.report_openers])}
 

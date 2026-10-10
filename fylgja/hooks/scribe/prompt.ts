@@ -13,7 +13,10 @@ import {
   CONDITIONAL_OPENERS,
   DECISION_REWRITES,
   DECISION_RULE,
+  HEDGES,
   INSTRUCTION_EXAMPLES,
+  PROGRESS_OPENERS,
+  QUESTION_OPENERS,
   SHAPE_LIMITS,
   STATEMENT_EXAMPLES,
   STATEMENT_WORDS,
@@ -35,7 +38,7 @@ const quoted = (words: readonly string[]): string => words.map(word => `"${word}
  * first time it is sent.
  */
 const SHAPE = `The knowledge base takes a sentence by its kind.
-  A decision says what holds: ${DECISION_RULE}. Any words that say it will do, as a statement ("The reducer rejects stale tokens", "Rows without a start stay NULL", ${quoted(STATEMENT_EXAMPLES)}) or as an instruction ("Use offset paging for the audit log, not a cursor"). The server's own patterns are ${DECISION_REWRITES}. Say it the way it was decided: do not make a statement into an order, and do not put "Always" before it. It is refused when it reads as an account of what happened: a question; a sentence that opens with one of ${ACCOUNT_OPENERS.join(', ')}, or with a word ending in -ing; one that says when it was ("today", "yesterday", "this week", "two days ago", or "now" at its end); or one whose verb, among its first four words, is a past form ("fixed", "chose", "moved", "was killed", "failed").
+  A decision says what holds: ${DECISION_RULE}. Any words that say it will do, as a statement ("The reducer rejects stale tokens", "Rows without a start stay NULL", ${quoted(STATEMENT_EXAMPLES)}) or as an instruction ("Use offset paging for the audit log, not a cursor"). The server's own patterns are ${DECISION_REWRITES}. Say it the way it was decided: do not make a statement into an order, and do not put "Always" before it. It is refused when it reads as an account of what happened or of what somebody thinks: a question (also one that opens with ${QUESTION_OPENERS.slice(0, 6).join(', ')} and the like); a sentence that opens with who did it, when it was or how far it has got (${ACCOUNT_OPENERS.join(', ')}); one that opens with what somebody is in the middle of (${PROGRESS_OPENERS.slice(0, 6).join(', ')} and the like); a guess (${HEDGES.join(', ')}); one that says when it was ("today", "yesterday", "this week", "two days ago", or "now" at its end); one that reports something done, a past form as its verb ("fixed", "chose", "moved", "was killed", "failed", "has been merged"); or one that reports what somebody said or believes ("Lukas says the tunnel should stay").
   A gotcha or a correction is an INSTRUCTION. It opens with one of these words: ${CONDITIONAL_OPENERS.join(', ')}; or with one of these verbs and no other: ${VERB_OPENERS.join(' ')}. As in ${quoted(INSTRUCTION_EXAMPLES)}. When the verb you want is not in that list, word it with one that is ("Use …", "Keep …", "Run …") or open with "When …" or "Before …". A correction may instead be a statement that holds one of the words ${quoted(STATEMENT_WORDS)}.
   Whatever its kind a record is a rule, not a report of where something stands: no ticket numbers, no dates, none of ${quoted(STATUS_PHRASES)}, and none of ${quoted(STATUS_WORDS)} beside a ticket, a pull request or a date.`
 

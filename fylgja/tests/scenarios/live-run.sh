@@ -22,7 +22,7 @@ rm -rf "$out"; mkdir -p "$out/plugin/.claude-plugin" "$out/repo/src"
 out="$(cd "$out" && pwd)"
 cp -r "$plugin/hooks" "$out/plugin/"
 cp "$plugin/.claude-plugin/plugin.json" "$out/plugin/.claude-plugin/"
-cp "$here/stub-server.mjs" "$here/stub-gate.mjs" "$here/server-gate.json" "$out/plugin/"
+cp "$here/stub-server.mjs" "$here/stub-gate.mjs" "$here/gate-check.py" "$here/server-gate.json" "$out/plugin/"
 sed -i "s/scribe.isInteractive = isInteractive && (surface === 'terminal' || surface === 'desktop')/scribe.isInteractive = true/" "$out/plugin/hooks/scribe/scribe.ts"
 sed -i "s/return origin.kind === 'composer' || origin.kind === 'bridge'/return true/" "$out/plugin/hooks/origin.ts"
 sed -i "s/surfaces: () => \$.session.surfaces(),/surfaces: () => Promise.resolve(['terminal']),/" "$out/plugin/hooks/register.ts"
@@ -34,7 +34,7 @@ cat > "$out/scenarios.json" <<JSON
 JSON
 cat > "$out/plugin/.mcp.json" <<JSON
 { "mcpServers": { "fylgja": { "command": "node", "args": ["$out/plugin/stub-server.mjs"],
-  "env": { "SCRIBE_SCENARIOS": "$out/scenarios.json", "SCRIBE_STUB_LOG": "$out/stub.log" } } } }
+  "env": { "SCRIBE_SCENARIOS": "$out/scenarios.json", "SCRIBE_STUB_LOG": "$out/stub.log", "SCRIBE_SERVER_GATE": "${SCRIBE_SERVER_GATE:-}" } } } }
 JSON
 cd "$out/repo" || exit 2
 git init -q . && git remote add origin git@github.com:probe/live.git

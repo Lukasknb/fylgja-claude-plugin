@@ -3,7 +3,7 @@
  * state to its model so that a record passes the first time it is sent.
  *
  * Written by tests/scenarios/shape-from-gate.mjs out of the server's own
- * rules as they stood at its commit 0a369ec7. Not edited by hand.
+ * rules as they stood at its commit 08378510. Not edited by hand.
  */
 
 /** Words that may open a sentence before its instruction: "Never run …". */
@@ -225,30 +225,90 @@ export const DECISION_RULE =
 export const DECISION_REWRITES =
   '"<The thing> uses <the choice> for <the purpose>" or "Use <the choice> for <the purpose>, not <the other>"'
 
+/** Words that open a report of work in progress, a question, and a guess: none of them is a decision. */
+export const PROGRESS_OPENERS: readonly string[] = [
+  'attempting',
+  'chasing',
+  'checking',
+  'considering',
+  'continuing',
+  'debugging',
+  'digging',
+  'evaluating',
+  'experimenting',
+  'exploring',
+  'figuring',
+  'fixing',
+  'investigating',
+  'looking',
+  'researching',
+  'struggling',
+  'testing',
+  'thinking',
+  'trying',
+  'waiting',
+  'wondering',
+  'working',
+]
+export const QUESTION_OPENERS: readonly string[] = [
+  'can',
+  'could',
+  'did',
+  'does',
+  'how',
+  'shall',
+  'should',
+  'what',
+  'where',
+  'which',
+  'who',
+  'why',
+  'will',
+  'would',
+]
+export const HEDGES: readonly string[] = [
+  'eventuell',
+  'maybe',
+  'might',
+  'perhaps',
+  'possibly',
+  'probably',
+  'vielleicht',
+  'wahrscheinlich',
+]
+
 /** Words a decision may not open with: who did it, when it was, how far it has got. Such a sentence is an account. */
 export const ACCOUNT_OPENERS: readonly string[] = [
   'i',
   "i'll",
   "i'm",
   "i've",
+  'ich',
   'my',
   'our',
+  'unser',
+  'unsere',
   'we',
   "we'll",
   "we're",
   "we've",
+  'wir',
+  'aktuell',
   'already',
   'apparently',
   'currently',
+  'derzeit',
   'earlier',
   'finally',
   'fyi',
+  'gerade',
+  'gestern',
   'he',
-  'it',
-  'just',
+  'heute',
   'lately',
   'maybe',
   'meanwhile',
+  'momentan',
   'now',
   'perhaps',
   'probably',
@@ -257,12 +317,12 @@ export const ACCOUNT_OPENERS: readonly string[] = [
   'so',
   'still',
   'tbd',
-  'they',
   'today',
   'todo',
   'tomorrow',
   'tonight',
   'update',
+  'vorhin',
   'wip',
   'yesterday',
 ]

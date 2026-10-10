@@ -21,14 +21,14 @@ cp -r "$plugin/hooks/." "$copy/hooks/"
 sed "s#'\.\./\.\./hooks/#'./#g" "$here/harness.ts" > "$copy/hooks/harness.ts"
 echo '{ "modules": ["./harness.ts"] }' > "$copy/hooks/hooks.json"
 echo '{ "name": "fylgja", "version": "0.0.0", "description": "Scribe scenario run." }' > "$copy/.claude-plugin/plugin.json"
-cp "$here/stub-server.mjs" "$here/stub-gate.mjs" "$here/server-gate.json" "$copy/"
+cp "$here/stub-server.mjs" "$here/stub-gate.mjs" "$here/gate-check.py" "$here/server-gate.json" "$copy/"
 # SCRIBE_ONLY="id,id" runs only the scenarios named.
 # SCRIBE_SET=heldout runs the sessions of scenarios-heldout.mjs.
 set="scenarios${SCRIBE_SET:+-$SCRIBE_SET}.mjs"
 node -e "import('$here/$set').then(m => require('fs').writeFileSync('$out/scenarios.json', JSON.stringify(m.SCENARIOS.filter(s => !process.env.SCRIBE_ONLY || process.env.SCRIBE_ONLY.split(',').includes(s.id)))))"
 cat > "$copy/.mcp.json" <<JSON
 { "mcpServers": { "fylgja": { "command": "node", "args": ["$copy/stub-server.mjs"],
-  "env": { "SCRIBE_SCENARIOS": "$out/scenarios.json", "SCRIBE_STUB_LOG": "$out/stub.log" } } } }
+  "env": { "SCRIBE_SCENARIOS": "$out/scenarios.json", "SCRIBE_STUB_LOG": "$out/stub.log", "SCRIBE_SERVER_GATE": "${SCRIBE_SERVER_GATE:-}" } } } }
 JSON
 cd "$out/cwd" || exit 2
 for model in $models; do

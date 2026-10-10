@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
-import { GATE, gate, refusalText } from './stub-gate.mjs'
+import { GATE, refusalOf, refusalText } from './stub-gate.mjs'
 
 const scenarios = JSON.parse(readFileSync(process.env.SCRIBE_SCENARIOS, 'utf8'))
 const LOG = process.env.SCRIBE_STUB_LOG
@@ -39,7 +39,6 @@ const failed = text => ({ content: [{ type: 'text', text }], isError: true })
 const everything = () => [...held.values()].flat()
 
 // ---- the server's gate (domain/services/memory_gate.py): see stub-gate.mjs ----
-const refusal = (rule, content, kind) => failed(refusalText(rule, content, kind))
 
 // ---- the server's anchor rules (domain/services/code_anchor.py) ----
 const PATH_RULE =
@@ -232,10 +231,17 @@ function call(name, args) {
       return failed(fault)
     }
 
-    const rule = gate(args.kind ?? 'gotcha', args.content, args.detail, args.triggers, args.reason_status, args.alternatives)
+    const refused = refusalOf(
+      args.kind ?? 'gotcha',
+      args.content,
+      args.detail,
+      args.triggers,
+      args.reason_status,
+      args.alternatives,
+    )
 
-    if (rule !== undefined) {
-      return refusal(rule, args.content, args.kind ?? 'gotcha')
+    if (refused !== undefined) {
+      return failed(refused)
     }
 
     // No more than the server's own number of records from one session and one author inside its window; the next is refused.
@@ -245,7 +251,7 @@ function call(name, args) {
     const recent = (bursts.get(key) ?? []).filter(when => at - when < GATE.burst.window_minutes * 60_000)
 
     if (recent.length >= GATE.burst[author]) {
-      return refusal('burst')
+      return failed(refusalText('burst'))
     }
 
     const existing = records.find(record => record.content === args.content)
@@ -340,7 +346,7 @@ function call(name, args) {
     }
 
     const status = args.reason_status ?? (String(detail ?? '').trim() === '' ? (record.reason_status ?? undefined) : undefined)
-    const rule = gate(
+    const refused = refusalOf(
       record.type,
       content,
       detail,
@@ -349,8 +355,8 @@ function call(name, args) {
       args.alternatives ?? record.alternatives,
     )
 
-    if (rule !== undefined) {
-      return refusal(rule, content, record.type)
+    if (refused !== undefined) {
+      return failed(refused)
     }
 
     const gone = args.remove_anchors ?? []

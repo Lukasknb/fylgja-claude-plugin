@@ -1,5 +1,5 @@
 {
-  "commit": "0a369ec7",
+  "commit": "08378510",
   "conditionals": [
     "after",
     "always",
@@ -235,26 +235,34 @@
       "i'll",
       "i'm",
       "i've",
+      "ich",
       "my",
       "our",
+      "unser",
+      "unsere",
       "we",
       "we'll",
       "we're",
-      "we've"
+      "we've",
+      "wir"
     ],
     "report_openers": [
+      "aktuell",
       "already",
       "apparently",
       "currently",
+      "derzeit",
       "earlier",
       "finally",
       "fyi",
+      "gerade",
+      "gestern",
       "he",
-      "it",
-      "just",
+      "heute",
       "lately",
       "maybe",
       "meanwhile",
+      "momentan",
       "now",
       "perhaps",
       "probably",
@@ -263,171 +271,65 @@
       "so",
       "still",
       "tbd",
-      "they",
       "today",
       "todo",
       "tomorrow",
       "tonight",
       "update",
+      "vorhin",
       "wip",
       "yesterday"
     ],
-    "report_times": "\\b(yesterday|today|tonight|currently|recently|right now|at the moment|so far|just now|(this|last) (morning|afternoon|evening|night|week|month|sprint|time)|\\w+ ago)\\b|\\bnow[.!]?$",
-    "past_forms": [
-      "became",
-      "began",
-      "broke",
-      "brought",
-      "built",
-      "came",
-      "caught",
-      "chose",
+    "progress_openers": [
+      "attempting",
+      "chasing",
+      "checking",
+      "considering",
+      "continuing",
+      "debugging",
+      "digging",
+      "evaluating",
+      "experimenting",
+      "exploring",
+      "figuring",
+      "fixing",
+      "investigating",
+      "looking",
+      "researching",
+      "struggling",
+      "testing",
+      "thinking",
+      "trying",
+      "waiting",
+      "wondering",
+      "working"
+    ],
+    "question_openers": [
+      "can",
+      "could",
       "did",
-      "drew",
-      "fell",
-      "forgot",
-      "found",
-      "gave",
-      "got",
-      "had",
-      "held",
-      "kept",
-      "knew",
-      "led",
-      "left",
-      "lost",
-      "made",
-      "meant",
-      "ran",
-      "said",
-      "saw",
-      "sent",
-      "spent",
-      "thought",
-      "told",
-      "took",
-      "was",
-      "went",
-      "were",
-      "won",
-      "wrote"
-    ],
-    "not_past_in_ed": [
-      "bed",
-      "bleed",
-      "breed",
-      "creed",
-      "deed",
-      "embed",
-      "exceed",
-      "feed",
-      "greed",
-      "heed",
-      "hundred",
-      "imbed",
-      "indeed",
-      "need",
-      "proceed",
-      "red",
-      "reed",
-      "seed",
-      "shed",
-      "shred",
-      "sled",
-      "speed",
-      "succeed",
-      "weed"
-    ],
-    "only_ever_a_verb": [
-      "became",
-      "began",
-      "broke",
-      "came",
-      "chose",
-      "did",
-      "drew",
-      "fell",
-      "forgot",
-      "gave",
-      "got",
-      "had",
-      "knew",
-      "ran",
-      "saw",
-      "took",
-      "was",
-      "went",
-      "were",
-      "wrote"
-    ],
-    "after_a_verb": [
-      "a",
-      "about",
-      "after",
-      "again",
-      "all",
-      "an",
-      "and",
-      "around",
-      "at",
-      "back",
-      "because",
-      "before",
-      "down",
-      "during",
-      "every",
-      "for",
-      "from",
-      "her",
-      "his",
-      "in",
-      "into",
-      "it",
-      "its",
-      "my",
-      "off",
-      "on",
-      "once",
-      "our",
-      "out",
-      "over",
-      "some",
-      "successfully",
-      "that",
-      "the",
-      "their",
-      "them",
-      "these",
-      "this",
-      "those",
-      "to",
-      "today",
-      "twice",
-      "under",
-      "until",
-      "up",
-      "us",
-      "when",
-      "while",
-      "with",
-      "without",
-      "yesterday"
-    ],
-    "relatives": [
-      "that",
+      "does",
+      "how",
+      "shall",
+      "should",
+      "what",
+      "where",
       "which",
       "who",
-      "whose"
+      "why",
+      "will",
+      "would"
     ],
-    "main_verb_within": 4,
-    "says": {
-      "question": "content is a question",
-      "opener": "content opens with \"{word}\", which starts an account of what happened or where things stand",
-      "progress": "content opens with \"{word}\", which reports work in progress",
-      "time": "content says when it was (\"{word}\"), which makes it the state of things at a moment",
-      "past": "content reports something done (\"{word}\")",
-      "no_words": "content has no words outside code and quotations"
-    },
+    "hedges": [
+      "eventuell",
+      "maybe",
+      "might",
+      "perhaps",
+      "possibly",
+      "probably",
+      "vielleicht",
+      "wahrscheinlich"
+    ],
     "rule": "a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done",
     "rewrites": "\"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\""
   },
@@ -542,13 +444,13 @@
       "kind": "decision",
       "content": "Rows without a start was killed.",
       "triggers": [],
-      "refusal": null
+      "refusal": "refused:not_imperative — content reports something done (\"was\"). Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
       "content": "Rows without a start chose Redis for the queue.",
       "triggers": [],
-      "refusal": null
+      "refusal": "refused:not_imperative — content reports something done (\"chose\"). Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
@@ -872,13 +774,13 @@
       "kind": "decision",
       "content": "Meetings uploaded by daemons was killed.",
       "triggers": [],
-      "refusal": null
+      "refusal": "refused:not_imperative — content reports something done (\"was\"). Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
       "content": "Meetings uploaded by daemons chose Redis for the queue.",
       "triggers": [],
-      "refusal": null
+      "refusal": "refused:not_imperative — content reports something done (\"chose\"). Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
@@ -924,6 +826,12 @@
     },
     {
       "kind": "decision",
+      "content": "Aktuell the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"aktuell\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
       "content": "Already the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"already\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
@@ -939,6 +847,12 @@
       "content": "Currently the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"currently\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
+      "content": "Derzeit the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"derzeit\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
@@ -960,9 +874,27 @@
     },
     {
       "kind": "decision",
+      "content": "Gerade the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"gerade\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
+      "content": "Gestern the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"gestern\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
       "content": "He the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"he\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
+      "content": "Heute the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"heute\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
@@ -990,15 +922,9 @@
     },
     {
       "kind": "decision",
-      "content": "It the queue uses Postgres.",
+      "content": "Ich the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"it\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
-    },
-    {
-      "kind": "decision",
-      "content": "Just the queue uses Postgres.",
-      "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"just\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:not_imperative — content opens with \"ich\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
@@ -1017,6 +943,12 @@
       "content": "Meanwhile the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"meanwhile\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
+      "content": "Momentan the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"momentan\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
@@ -1080,12 +1012,6 @@
     },
     {
       "kind": "decision",
-      "content": "They the queue uses Postgres.",
-      "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"they\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
-    },
-    {
-      "kind": "decision",
       "content": "Today the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"today\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
@@ -1110,9 +1036,27 @@
     },
     {
       "kind": "decision",
+      "content": "Unser the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"unser\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
+      "content": "Unsere the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"unsere\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
       "content": "Update the queue uses Postgres.",
       "triggers": [],
       "refusal": null
+    },
+    {
+      "kind": "decision",
+      "content": "Vorhin the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"vorhin\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
@@ -1143,6 +1087,12 @@
       "content": "Wip the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"wip\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "decision",
+      "content": "Wir the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"wir\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "decision",
@@ -1924,6 +1874,14 @@
     },
     {
       "kind": "gotcha",
+      "content": "Aktuell the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Aktuell\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always aktuell <…>\" or \"Use <…> to aktuell <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
       "content": "Already the queue uses Postgres.",
       "triggers": [
         "queue"
@@ -1945,6 +1903,14 @@
         "queue"
       ],
       "refusal": "refused:not_imperative — content opens with \"Currently\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always currently <…>\" or \"Use <…> to currently <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
+      "content": "Derzeit the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Derzeit\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always derzeit <…>\" or \"Use <…> to derzeit <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "gotcha",
@@ -1972,11 +1938,35 @@
     },
     {
       "kind": "gotcha",
+      "content": "Gerade the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Gerade\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always gerade <…>\" or \"Use <…> to gerade <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
+      "content": "Gestern the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Gestern\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always gestern <…>\" or \"Use <…> to gestern <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
       "content": "He the queue uses Postgres.",
       "triggers": [
         "queue"
       ],
       "refusal": "refused:not_imperative — content opens with \"He\", which tells what happened or what is the case. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. State the rule that came out of it, for example \"Always <do this> before <that>\" or \"Check <this> when <that happens>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
+      "content": "Heute the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Heute\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always heute <…>\" or \"Use <…> to heute <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "gotcha",
@@ -2012,19 +2002,11 @@
     },
     {
       "kind": "gotcha",
-      "content": "It the queue uses Postgres.",
+      "content": "Ich the queue uses Postgres.",
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:not_imperative — content opens with \"It\", which tells what happened or what is the case. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. State the rule that came out of it, for example \"Always <do this> before <that>\" or \"Check <this> when <that happens>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
-    },
-    {
-      "kind": "gotcha",
-      "content": "Just the queue uses Postgres.",
-      "triggers": [
-        "queue"
-      ],
-      "refusal": "refused:not_imperative — content opens with \"Just\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always just <…>\" or \"Use <…> to just <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:not_imperative — content opens with \"Ich\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always ich <…>\" or \"Use <…> to ich <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "gotcha",
@@ -2049,6 +2031,14 @@
         "queue"
       ],
       "refusal": "refused:not_imperative — content opens with \"Meanwhile\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always meanwhile <…>\" or \"Use <…> to meanwhile <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
+      "content": "Momentan the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Momentan\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always momentan <…>\" or \"Use <…> to momentan <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "gotcha",
@@ -2132,14 +2122,6 @@
     },
     {
       "kind": "gotcha",
-      "content": "They the queue uses Postgres.",
-      "triggers": [
-        "queue"
-      ],
-      "refusal": "refused:not_imperative — content opens with \"They\", which tells what happened or what is the case. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. State the rule that came out of it, for example \"Always <do this> before <that>\" or \"Check <this> when <that happens>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
-    },
-    {
-      "kind": "gotcha",
       "content": "Today the queue uses Postgres.",
       "triggers": [
         "queue"
@@ -2172,11 +2154,35 @@
     },
     {
       "kind": "gotcha",
+      "content": "Unser the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Unser\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always unser <…>\" or \"Use <…> to unser <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
+      "content": "Unsere the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Unsere\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always unsere <…>\" or \"Use <…> to unsere <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
       "content": "Update the queue uses Postgres.",
       "triggers": [
         "queue"
       ],
       "refusal": null
+    },
+    {
+      "kind": "gotcha",
+      "content": "Vorhin the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Vorhin\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always vorhin <…>\" or \"Use <…> to vorhin <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "gotcha",
@@ -2217,6 +2223,14 @@
         "queue"
       ],
       "refusal": "refused:not_imperative — content opens with \"Wip\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always wip <…>\" or \"Use <…> to wip <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "gotcha",
+      "content": "Wir the queue uses Postgres.",
+      "triggers": [
+        "queue"
+      ],
+      "refusal": "refused:not_imperative — content opens with \"Wir\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always wir <…>\" or \"Use <…> to wir <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "gotcha",
@@ -2898,6 +2912,12 @@
     },
     {
       "kind": "correction",
+      "content": "Aktuell the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Aktuell\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always aktuell <…>\" or \"Use <…> to aktuell <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
       "content": "Already the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"Already\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always already <…>\" or \"Use <…> to already <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
@@ -2913,6 +2933,12 @@
       "content": "Currently the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"Currently\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always currently <…>\" or \"Use <…> to currently <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
+      "content": "Derzeit the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Derzeit\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always derzeit <…>\" or \"Use <…> to derzeit <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "correction",
@@ -2934,9 +2960,27 @@
     },
     {
       "kind": "correction",
+      "content": "Gerade the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Gerade\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always gerade <…>\" or \"Use <…> to gerade <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
+      "content": "Gestern the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Gestern\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always gestern <…>\" or \"Use <…> to gestern <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
       "content": "He the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"He\", which tells what happened or what is the case. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. State the rule that came out of it, for example \"Always <do this> before <that>\" or \"Check <this> when <that happens>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
+      "content": "Heute the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Heute\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always heute <…>\" or \"Use <…> to heute <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "correction",
@@ -2964,15 +3008,9 @@
     },
     {
       "kind": "correction",
-      "content": "It the queue uses Postgres.",
+      "content": "Ich the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"It\", which tells what happened or what is the case. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. State the rule that came out of it, for example \"Always <do this> before <that>\" or \"Check <this> when <that happens>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
-    },
-    {
-      "kind": "correction",
-      "content": "Just the queue uses Postgres.",
-      "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"Just\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always just <…>\" or \"Use <…> to just <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:not_imperative — content opens with \"Ich\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always ich <…>\" or \"Use <…> to ich <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "correction",
@@ -2991,6 +3029,12 @@
       "content": "Meanwhile the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"Meanwhile\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always meanwhile <…>\" or \"Use <…> to meanwhile <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
+      "content": "Momentan the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Momentan\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always momentan <…>\" or \"Use <…> to momentan <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "correction",
@@ -3054,12 +3098,6 @@
     },
     {
       "kind": "correction",
-      "content": "They the queue uses Postgres.",
-      "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"They\", which tells what happened or what is the case. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. State the rule that came out of it, for example \"Always <do this> before <that>\" or \"Check <this> when <that happens>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
-    },
-    {
-      "kind": "correction",
       "content": "Today the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"Today\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always today <…>\" or \"Use <…> to today <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
@@ -3084,9 +3122,27 @@
     },
     {
       "kind": "correction",
+      "content": "Unser the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Unser\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always unser <…>\" or \"Use <…> to unser <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
+      "content": "Unsere the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Unsere\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always unsere <…>\" or \"Use <…> to unsere <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
       "content": "Update the queue uses Postgres.",
       "triggers": [],
       "refusal": null
+    },
+    {
+      "kind": "correction",
+      "content": "Vorhin the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Vorhin\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always vorhin <…>\" or \"Use <…> to vorhin <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "correction",
@@ -3117,6 +3173,12 @@
       "content": "Wip the queue uses Postgres.",
       "triggers": [],
       "refusal": "refused:not_imperative — content opens with \"Wip\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always wip <…>\" or \"Use <…> to wip <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+    },
+    {
+      "kind": "correction",
+      "content": "Wir the queue uses Postgres.",
+      "triggers": [],
+      "refusal": "refused:not_imperative — content opens with \"Wir\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always wir <…>\" or \"Use <…> to wir <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
     },
     {
       "kind": "correction",
