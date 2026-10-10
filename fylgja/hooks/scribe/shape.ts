@@ -3,7 +3,7 @@
  * state to its model so that a record passes the first time it is sent.
  *
  * Written by tests/scenarios/shape-from-gate.mjs out of the server's own
- * rules as they stood at its commit 08378510. Not edited by hand.
+ * rules as they stood at its commit f9ba9a06. Not edited by hand.
  */
 
 /** Words that may open a sentence before its instruction: "Never run …". */

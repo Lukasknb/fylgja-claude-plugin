@@ -1,5 +1,5 @@
 {
-  "commit": "08378510",
+  "commit": "f9ba9a06",
   "conditionals": [
     "after",
     "always",
@@ -1242,19 +1242,19 @@
       "kind": "decision",
       "content": "PLA-266 pending.",
       "triggers": [],
-      "refusal": "refused:status_not_memory — this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
+      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
     },
     {
       "kind": "decision",
       "content": "Use Postgres. It is already there.",
       "triggers": [],
-      "refusal": "refused:not_one_sentence — content is ONE sentence — everything after the first full stop belongs in detail. Acceptable instead: content=\"Use `just test-db` for the database tiers\" — the second sentence belongs in detail"
+      "refusal": "refused:not_one_sentence — content is 2 sentences: the first ends after \"Postgres\". Rule: content is ONE sentence — everything after the first full stop belongs in detail. Acceptable instead: content=\"Use `just test-db` for the database tiers\" — the second sentence belongs in detail"
     },
     {
       "kind": "decision",
       "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "triggers": [],
-      "refusal": "refused:too_long — content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail. Acceptable instead: content=\"Run alembic upgrade head before starting the worker\" with the reasoning moved into detail"
+      "refusal": "refused:too_long — content is 230 characters and the limit is 220. Rule: content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail. Acceptable instead: content=\"Run alembic upgrade head before starting the worker\" with the reasoning moved into detail"
     },
     {
       "kind": "gotcha",
@@ -2430,7 +2430,7 @@
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:status_not_memory — this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
+      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
     },
     {
       "kind": "gotcha",
@@ -2438,7 +2438,7 @@
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:not_one_sentence — content is ONE sentence — everything after the first full stop belongs in detail. Acceptable instead: content=\"Use `just test-db` for the database tiers\" — the second sentence belongs in detail"
+      "refusal": "refused:not_one_sentence — content is 2 sentences: the first ends after \"Postgres\". Rule: content is ONE sentence — everything after the first full stop belongs in detail. Acceptable instead: content=\"Use `just test-db` for the database tiers\" — the second sentence belongs in detail"
     },
     {
       "kind": "gotcha",
@@ -2446,7 +2446,7 @@
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:too_long — content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail. Acceptable instead: content=\"Run alembic upgrade head before starting the worker\" with the reasoning moved into detail"
+      "refusal": "refused:too_long — content is 230 characters and the limit is 220. Rule: content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail. Acceptable instead: content=\"Run alembic upgrade head before starting the worker\" with the reasoning moved into detail"
     },
     {
       "kind": "correction",
@@ -3328,19 +3328,19 @@
       "kind": "correction",
       "content": "PLA-266 pending.",
       "triggers": [],
-      "refusal": "refused:status_not_memory — this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
+      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
     },
     {
       "kind": "correction",
       "content": "Use Postgres. It is already there.",
       "triggers": [],
-      "refusal": "refused:not_one_sentence — content is ONE sentence — everything after the first full stop belongs in detail. Acceptable instead: content=\"Use `just test-db` for the database tiers\" — the second sentence belongs in detail"
+      "refusal": "refused:not_one_sentence — content is 2 sentences: the first ends after \"Postgres\". Rule: content is ONE sentence — everything after the first full stop belongs in detail. Acceptable instead: content=\"Use `just test-db` for the database tiers\" — the second sentence belongs in detail"
     },
     {
       "kind": "correction",
       "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "triggers": [],
-      "refusal": "refused:too_long — content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail. Acceptable instead: content=\"Run alembic upgrade head before starting the worker\" with the reasoning moved into detail"
+      "refusal": "refused:too_long — content is 230 characters and the limit is 220. Rule: content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail. Acceptable instead: content=\"Run alembic upgrade head before starting the worker\" with the reasoning moved into detail"
     }
   ]
 }

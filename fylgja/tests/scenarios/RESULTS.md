@@ -15,6 +15,24 @@ Seventeen scripted sessions (`scenarios.mjs`) are put through the plugin's own c
 - **A model is asked in 75 of 87 turns**, once each and never a second time: the records anchored to the turn's files are handed over at the start, so no lookup was asked for, and 12 turns were too slight to ask about at all (no file changed, under 200 characters). About 2,500 input tokens a call, 2,200 of them read from the prompt cache; 14 output tokens for a silent look, up to 320 for one that records; a median of 1.7 s and at most 4.2 s.
 - **Haiku is not offered.** See the last section.
 
+## Which commit each result belongs to
+
+Commits of this repository's `scribe` branch; the server's gate is named by the server's own commit. Where a run was made on a tree just before it was committed, the commit named is the one that tree became.
+
+|Result|Plugin commit|Server gate|
+|-|-|-|
+|The seventeen sessions, three Sonnet runs, and the Haiku runs|`79382e1`|a hand-written stand-in|
+|The ten held-out sessions, first three runs|`86f0387`|a hand-written stand-in|
+|Once more, on the tree as committed|`c279421`|a hand-written stand-in|
+|After the sync to the server's contract|`de5b991`|the server's rules, copied by hand|
+|With a refused record put right once|`7d33aa4`|the server's rules, copied by hand|
+|After the final sync to the server's contract|`0364262`|`df67963f`, read out of the server's file|
+|A second right outcome for the fix found by trial (the run it regrades)|`e0de058`|`0a369ec7`, the server's own code|
+|An eleventh session, and the fix found by trial as a gotcha|`51c8a89`|`08378510`, the server's own code|
+|After the server named what a refusal matched|`1e469dc` with `shape.ts` regenerated, as committed with this section|`f9ba9a06`, the server's own code|
+
+The replays of recorded sessions are not in this file: they are the author's own sessions and their reports are kept outside the repository.
+
 ## The ten sessions held out at first
 
 Only the first run below, on the prompt as it then stood, measured sessions the prompt had not been shaped on. The prompt was changed after it (one sentence, with the correction step), so the later runs in this section check that nothing got worse; they are not held-out measurements.
@@ -108,6 +126,10 @@ In the session where a flag found by trying things is kept, the scripted develop
 `h-no-reason-asked` was added for one path the ten do not reach for certain: a plain choice between two ways with no reason anywhere, where the developer, asked why, types "no idea". It must end as a decision recorded without a reason, the question, and the answer saved as `no_strong_reason` with the words kept; it has no second right outcome. The fix found by trial (`h-no-idea`) is not a choice between designs, so a gotcha with no question now counts as right for it too.
 
 One Sonnet run of the eleven on the tree as committed, against the server's own gate at `08378510`, 23 model calls: 10 of 11, no false record. The new session came out as expected (`not_stated`, asked, `no_strong_reason` with detail "no idea"). The miss is the fix found by trial: the model wrote it as a gotcha four times over two looks, each sentence holding "hangs in headless Chrome waiting for fonts", and the server refused all four as `status_not_memory`: "waiting for" is one of its status phrases. The refusal does not name the phrase, so the one correction per look kept it. Nothing was recorded. The instruction was not changed for it.
+
+### After the server named what a refusal matched
+
+The server's gate at `f9ba9a06` names in every refusal what it matched (the phrase for a status report, the length and the limit, the word a second sentence starts after, that the triggers are empty), and no longer takes a status word inside a rule for a status report. `server-gate.json` and `shape.ts` were regenerated from it; no refusal code is new, so nothing else changed in the plugin. One Sonnet run of the eleven, 21 model calls: 11 of 11, no false record, no record refused, nothing handed back. The fix found by trial was written at the first try as a gotcha, with the very sentence the gate before had refused four times ("When PDF export hangs in headless Chrome waiting for fonts, start Chrome with `--font-render-hinting=none`, since a longer navigation timeout and data-URL fonts did not help."). The "no idea" session came out as before: recorded without a reason, asked, and the answer saved as `no_strong_reason` with its words.
 
 What the table does not say:
 
