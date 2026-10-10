@@ -103,6 +103,12 @@ Zero questions and zero tells in the sessions that expect silence. The one recor
 
 In the session where a flag found by trying things is kept, the scripted developer says "Then the flag stays" and, when asked why, "no idea, it just worked". Until the fourth replay round the only outcome counted as right was a record without a reason and that question. Since then two rules were added on purpose: a reason the assistant gave for what it proposed, which the developer accepted without objecting, is the decision's reason; and a question is only for a reason found nowhere. In this session Claude says what the trials showed (the flag fixed every failing case where two other attempts did not) and the developer keeps the flag on that. Recording the decision with that reason and asking nothing is what those rules ask for, so it now counts as right beside the older outcome (`expect.or` in `scenarios-heldout.mjs`). The prompt was not changed for it. Graded so, the run of the fourth round is 10 of 10; by the older expectation alone it was 9 of 10.
 
+### An eleventh session, and the fix found by trial as a gotcha
+
+`h-no-reason-asked` was added for one path the ten do not reach for certain: a plain choice between two ways with no reason anywhere, where the developer, asked why, types "no idea". It must end as a decision recorded without a reason, the question, and the answer saved as `no_strong_reason` with the words kept; it has no second right outcome. The fix found by trial (`h-no-idea`) is not a choice between designs, so a gotcha with no question now counts as right for it too.
+
+One Sonnet run of the eleven on the tree as committed, against the server's own gate at `08378510`, 23 model calls: 10 of 11, no false record. The new session came out as expected (`not_stated`, asked, `no_strong_reason` with detail "no idea"). The miss is the fix found by trial: the model wrote it as a gotcha four times over two looks, each sentence holding "hangs in headless Chrome waiting for fonts", and the server refused all four as `status_not_memory`: "waiting for" is one of its status phrases. The refusal does not name the phrase, so the one correction per look kept it. Nothing was recorded. The instruction was not changed for it.
+
 What the table does not say:
 
 - Thirty runs of ten sessions is a small sample, and the sessions and what counts as right were written by the same hand as the prompt. It is a first measurement, not a rate to plan on.
