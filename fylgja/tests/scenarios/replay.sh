@@ -80,7 +80,7 @@ left="$calls"
 for one in $policies; do
   rm -f "$out/stub.log"
   timeout 3600 claude -p "/scribe-replay $out/session.json $out/pass-$one.json $one $wakes $left $mode" \
-    --plugin-dir "$copy" --permission-mode default --setting-sources project,local \
+    --plugin-dir "$copy" --permission-mode default --setting-sources project,local --no-session-persistence \
     --output-format json --debug-file "$out/pass-$one.debug.log" < /dev/null > "$out/pass-$one.out.json" 2> "$out/pass-$one.err.txt"
   [ -s "$out/pass-$one.json" ] || { echo "the $one pass left no result (exit $?): see $out/pass-$one.out.json"; exit 1; }
   [ "$mode" = "live" ] && left=$(( left - $(node -e "console.log(JSON.parse(require('fs').readFileSync('$out/pass-$one.json')).modelCalls)") ))

@@ -1,5 +1,6 @@
 // Reads a recorded session for a replay and writes, into the output
-// directory and nowhere else: the session's turns (`session.json`), and what
+// directory and nowhere else: the session's turns (`session.json` and its
+// parts, `session-<n>.json`), and what
 // the stand-in server holds (`scenarios.json`). Prints numbers only.
 //
 //   node replay-read.mjs <transcript.jsonl> <out-dir> [--seed <records.json>] [--root <dir>] [--remote <url>]
@@ -92,10 +93,42 @@ const records = seed.map(one => ({
   origin: one.origin ?? 'assistant',
 }))
 
+// The engine reads no file over four megabytes, so the turns go into parts well under that.
+const PART_BYTES = 3_000_000
+const parts = [[]]
+let size = 0
+
+for (const turn of recorded.turns) {
+  let text = JSON.stringify(turn)
+
+  // One turn too large for a part keeps its rows and calls, with less of what each call held.
+  if (text.length > PART_BYTES) {
+    for (const row of turn.rows) {
+      for (const use of row.toolUses) {
+        use.text = use.text?.slice(0, 300)
+        use.input = Object.fromEntries(
+          Object.entries(use.input).map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 300) : value]),
+        )
+      }
+    }
+
+    text = JSON.stringify(turn)
+  }
+
+  if (size + text.length > PART_BYTES && parts.at(-1).length > 0) {
+    parts.push([])
+    size = 0
+  }
+
+  parts.at(-1).push(turn)
+  size += text.length
+}
+
 writeFileSync(
   join(out, 'session.json'),
-  JSON.stringify({ sessionId: recorded.sessionId ?? 'replayed-session', repo, turns: recorded.turns }),
+  JSON.stringify({ sessionId: recorded.sessionId ?? 'replayed-session', repo, parts: parts.length }),
 )
+parts.forEach((turns, at) => writeFileSync(join(out, `session-${at}.json`), JSON.stringify(turns)))
 writeFileSync(join(out, 'scenarios.json'), JSON.stringify([{ id: 'replay', repo: name ?? 'none/none', records }]))
 
 const prompts = recorded.turns.filter(turn => turn.kind === 'prompt').length

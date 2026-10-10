@@ -506,7 +506,13 @@ export function register(on: On): void {
 
   on('command.run', { command: 'scribe-replay' }, async ($, e) => {
     const [from = '', to = '', policy = 'none', maxWakes = '40', maxCalls = '120', mode = 'live'] = e.args.trim().split(/\s+/)
-    const session = JSON.parse(await $.fs.read(from)) as Session
+    // The turns lie beside the session's own file, in parts small enough for the engine to read.
+    const head = JSON.parse(await $.fs.read(from)) as { sessionId: string; repo: Session['repo']; parts: number }
+    const session: Session = { sessionId: head.sessionId, repo: head.repo, turns: [] }
+
+    for (let part = 0; part < head.parts; part += 1) {
+      session.turns.push(...(JSON.parse(await $.fs.read(from.replace(/\.json$/, `-${part}.json`))) as Turn[]))
+    }
     const connection = await $.mcp.connect('fylgja')
 
     if (!connection.isConnected) {
