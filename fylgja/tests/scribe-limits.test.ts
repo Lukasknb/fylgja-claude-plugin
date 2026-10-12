@@ -9,8 +9,9 @@ import { MAX_PLANS_CHARS } from '../hooks/scribe/prompt'
 import * as Band from '../hooks/scribe/band'
 import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS } from '../hooks/scribe/scribe'
 import { TWIN_STATUS } from '../hooks/session'
-import { ACCOUNT, answer, CONNECTED, idOf, MARK, NEEDS_SIGN_IN } from './fixtures'
+import { ACCOUNT, answer, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
+  EMPTY,
   claude,
   decision,
   dev,
@@ -20,6 +21,7 @@ import {
   NOTHING,
   press,
   pressTwice,
+  QUIET,
   ROOT,
   send,
   shown,
@@ -143,7 +145,7 @@ describe('nothing Scribe waits for can wait for ever', () => {
     await $.session.start(START)
     await endsInTime($, set, ...WORK)
 
-    expect(await shown($), 'nothing is said to be recorded').toBe('engine: AbovePrompt')
+    expect(await shown($), 'nothing is said to be recorded').toBe(QUIET)
 
     await goesOn($, set, 2)
   })
@@ -209,20 +211,16 @@ describe('whether Scribe’s calls get through is settled before a model is aske
     await turn($, set, ...WORK)
 
     expect(set.asked).toEqual([])
-    expect(set.statuses.slice(1)).toEqual([MARK, OFF_STATUS])
+    expect(set.statuses.slice(1)).toEqual([OFF_STATUS])
     expect(set.logged).toEqual(['Scribe: its own call to Fylgja was refused; off for this session'])
     expect(set.toasts).toEqual([])
     expect(set.of('recall').length).toBe(1)
 
     await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
 
-    expect(set.statuses.slice(1), 'the line goes with the next prompt, leaves the mark at rest, and is not said again').toEqual([
-      MARK,
-      OFF_STATUS,
-      MARK,
-    ])
+    expect(set.statuses.slice(1), 'the line goes with the next prompt, and is not said again').toEqual([OFF_STATUS, undefined])
     expect([set.asked.length, set.calls.length], 'nothing more is asked of anyone').toEqual([0, 1])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('a lookup that fails for any other reason ends nothing: the turn is not asked about, the next one is', async ($, on) => {
@@ -242,7 +240,7 @@ describe('whether Scribe’s calls get through is settled before a model is aske
     await $.session.start(START)
     await turn($, set, ...WORK)
 
-    expect([set.asked.length, set.statuses.slice(1)]).toEqual([0, [MARK]])
+    expect([set.asked.length, set.statuses.slice(1)]).toEqual([0, []])
 
     isDown = false
     await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
@@ -369,7 +367,7 @@ describe('Scribe works only through the plugin’s own connection', () => {
       // Said once, by the plugin as a whole, and gone with the next prompt.
       expect(set.statuses.filter((line, at) => at > 0)).toEqual([TWIN_STATUS, undefined])
       expect(set.logged).toEqual([])
-      expect(await shown($)).toBe('engine: AbovePrompt')
+      expect(await shown($)).toBe(EMPTY)
     })
   }
 
@@ -382,8 +380,8 @@ describe('Scribe works only through the plugin’s own connection', () => {
     await $.session.start(START)
     await turn($, set, ...WORK)
 
-    expect(set.statuses.filter(line => line !== undefined)).toEqual([MARK, OFF_STATUS])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(set.statuses.filter(line => line !== undefined)).toEqual([OFF_STATUS])
+    expect(await shown($)).toBe(QUIET)
 
     await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
 
@@ -401,10 +399,7 @@ describe('Scribe works only through the plugin’s own connection', () => {
     await pressTwice($, 'remove:0')
     await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
 
-    expect(
-      set.statuses.filter(line => line !== undefined),
-      'the mark counts the record, stops counting it once it is removed, and rests when the line has gone',
-    ).toEqual([MARK, `${MARK} · 1 kept`, MARK, OFF_STATUS, MARK])
+    expect(set.statuses.filter(line => line !== undefined)).toEqual([OFF_STATUS])
     expect([set.asked.length, set.of('amend_memory').length]).toEqual([1, 1])
   })
 
@@ -611,11 +606,11 @@ describe('a tell from the wake', () => {
 
     await press($, 'dismiss')
 
-    expect(await shown($), 'one a turn').toBe('engine: AbovePrompt')
+    expect(await shown($), 'one a turn').toBe(QUIET)
 
     await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/mail/retry.ts')))
 
-    expect(await shown($), 'never the same one twice').toBe('engine: AbovePrompt')
+    expect(await shown($), 'never the same one twice').toBe(QUIET)
   })
 })
 
@@ -821,7 +816,7 @@ describe('a conversation that is rewritten or started over', () => {
 
     await set.clock.advance(15_000)
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(`${QUIET} · 1 kept`)
   })
 })
 

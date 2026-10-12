@@ -8,6 +8,7 @@ import {
   edit,
   fact,
   press,
+  QUIET,
   REPO,
   ROOT,
   shown,
@@ -45,13 +46,13 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await turn($, set, ...WORK)
     await press($, 'dismiss')
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
 
     await $.prompt.submit({ text: 'again', wait: false, origin: { kind: 'composer' } })
     await turn($, set, dev('again'), claude('Again.', edit(FILE), edit('src/mail/other.ts')))
 
     expect(set.of('recall').map(args => args.paths)).toEqual([[FILE], ['src/mail/other.ts']])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('“Knew this” keeps the record away for good, in a later session too', async ($, on) => {
@@ -74,7 +75,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await turn($, set, ...WORK)
 
     expect(set.of('recall').length).toBe(2)
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('a record anchored to a folder above is not shown unasked, only when the wake judges it worth telling', async ($, on) => {
@@ -84,7 +85,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await $.session.start(START)
     await turn($, quiet, ...WORK)
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
     expect(quiet.asked[0]?.prompt, 'the wake is shown it').toMatch('Never log a recipient address.')
   })
 
@@ -104,7 +105,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await $.session.start(START)
     await turn($, set, ...WORK)
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('one turn shows at most one tell', async ($, on) => {
@@ -124,7 +125,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
 
     await press($, 'dismiss')
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('every fourth step of a turn looks up the files named so far, and an agent’s steps are not counted', async ($, on) => {
@@ -176,7 +177,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await stepped
 
     expect(isDone).toBe(true)
-    expect(await shown($, true)).toBe('engine: AbovePrompt')
+    expect(await shown($, true)).toBe(QUIET)
 
     await set.clock.advance(3500)
 
@@ -247,7 +248,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
       ].join('\n'),
     ])
     expect(set.sent.length, 'nothing was sent').toBe(sent)
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('Tell Claude leaves a prompt box with text in it alone, and says so', async ($, on) => {

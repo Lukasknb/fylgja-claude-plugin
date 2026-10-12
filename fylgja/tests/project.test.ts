@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { standsIn } from '../hooks/project'
 import { TWIN_STATUS } from '../hooks/session'
-import { answer, MARK, MEETING_ID, meetingRecord, token } from './fixtures'
+import { answer, MEETING_ID, meetingRecord, token } from './fixtures'
 import { claude, decision, dev, edit, ROOT, stage, START, step, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 
@@ -140,7 +140,7 @@ describe('a project that leaves Fylgja to the plugin', () => {
 
       expect(set.asked.length).toBe(1)
       expect(set.of('remember').length).toBe(1)
-      expect(set.statuses.filter(line => line !== undefined)).toEqual([MARK, `${MARK} · 1 kept`])
+      expect(set.statuses.filter(line => line !== undefined)).toEqual([])
     })
   }
 

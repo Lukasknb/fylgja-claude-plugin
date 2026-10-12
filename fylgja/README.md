@@ -82,13 +82,15 @@ Very little, on purpose.
 - One line when Claude writes to Fylgja: `✓ Remembered.`, `✓ Fixed in
   Fylgja.`, `✓ Commit noted on 2 records.` A write that did less than was
   asked keeps Claude Code's own row, which says why.
-- A small mark on the line under the prompt, `ᚠ fylgja`, while Fylgja is
-  connected through the plugin and signed in as the account this machine is
-  set up for. It reads `ᚠ· fylgja is reading` while Scribe looks at the turn
-  that just ended, and `ᚠ fylgja · 2 kept` while records Scribe wrote in
-  this conversation still stand (it lists the last forty, and counts no
-  further). Any other line the plugin puts there is shown in its place.
-  The mark only shows: nothing is asked, read or written for it.
+- A small dim mark above the prompt, `ᚠ fylgja`, while Fylgja is connected
+  through the plugin and signed in as the account this machine is set up
+  for. It reads `ᚠ· fylgja is reading` while Scribe looks at the turn that
+  just ended, and `ᚠ fylgja · 2 kept` while records Scribe wrote in this
+  conversation still stand (it lists the last forty, and counts no
+  further). Whatever else the plugin shows above the prompt is drawn in
+  its place. It comes up only over an empty prompt box, and takes no key.
+  The mark only shows: nothing is asked, read or written for it. The line
+  under the prompt is for notices alone.
 
 ## Scribe
 
@@ -831,9 +833,14 @@ see in ordinary work, and last what needs your setup changed.
     Code answered the other entry's name and Scribe made no call.) With
     another address under the name `fylgja`, the plugin's own server is
     used and Scribe runs.
-21. The mark: that `ᚠ fylgja` stands under the prompt once the session
-    has started, that the rune draws in your terminal's font and in the
-    desktop app, that it reads `ᚠ· fylgja is reading` for the seconds
+21. The mark: that `ᚠ fylgja` stands above the prompt once the session
+    has started, dim, one line, with no warning sign and no plugin name
+    before it, and that nothing of it is on the line under the prompt.
+    That the rune draws in your terminal's font and in the desktop app,
+    that a digit typed into an empty box is your text while only the
+    mark is there, that it reads `ᚠ· fylgja is reading` for the seconds
     after a turn ends and never longer, that the count follows a record,
     a Remove and a Put back, and that it is gone under 19 and 20. The
-    line takes plain text, so how dim it is drawn is Claude Code's.
+    mark is drawn under what Claude Code itself draws in the band: if
+    the band shows nothing at all, the debug log says whether the tree
+    was refused (`ui.render (AbovePrompt)`).

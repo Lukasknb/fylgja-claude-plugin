@@ -1,8 +1,9 @@
 import { drawn } from './plain'
 
 /**
- * The companion mark: one short line under the prompt that says Fylgja is
- * here, and that it is working for the account this machine is set up for.
+ * The companion mark: one short, dim line above the prompt that says Fylgja
+ * is here, and that it is working for the account this machine is set up
+ * for. The line under the prompt is for notices, and the mark is none.
  *
  * It only shows. Nothing is asked of Fylgja or of a model for it, nothing is
  * read or written, it takes no key and runs no timer: it is worked out from

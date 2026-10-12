@@ -1,19 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { TWIN_STATUS } from '../hooks/session'
-import {
-  answer,
-  asked,
-  CONNECTED,
-  MARK,
-  MEETING_ID,
-  meetingRecord,
-  NEEDS_SIGN_IN,
-  rowOf,
-  scene,
-  SESSION,
-  token,
-} from './fixtures'
+import { answer, asked, CONNECTED, MEETING_ID, meetingRecord, NEEDS_SIGN_IN, rowOf, scene, SESSION, token } from './fixtures'
 
 const MEETING = token('meeting', 'Standup', MEETING_ID)
 const RESOLVING = { resolve: () => answer({ records: [meetingRecord()] }) }
@@ -85,13 +73,13 @@ describe('Fylgja set up outside the plugin as well', () => {
     expect(started.calls).toEqual([])
   })
 
-  test('with the plugin’s own connection a reference is looked up as ever, and nothing is said but the mark', async ($, on) => {
+  test('with the plugin’s own connection a reference is looked up as ever, and nothing is said', async ($, on) => {
     const started = scene(on, { ...RESOLVING, connect: () => CONNECTED })
 
     await $.session.start(SESSION)
 
     expect(await rowOf($, started, MEETING, 1000)).toBe('[◉ "Engineering Retrospective" · 2026-09-30]')
     expect(started.calls.map(call => call.tool)).toEqual(['resolve'])
-    expect(started.statuses.filter(line => line !== undefined)).toEqual([MARK])
+    expect(started.statuses.filter(line => line !== undefined)).toEqual([])
   })
 })

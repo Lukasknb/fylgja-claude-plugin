@@ -2,8 +2,24 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { UNSAID_STATUS } from '../hooks/session'
-import { ACCOUNT, answer, MARK, MEETING_ID, meetingRecord, token } from './fixtures'
-import { band, claude, decision, dev, edit, press, shown, stage, START, step, turn, typing, verdict } from './scribe-fixtures'
+import { ACCOUNT, answer, MEETING_ID, meetingRecord, token } from './fixtures'
+import {
+  EMPTY,
+  band,
+  claude,
+  decision,
+  dev,
+  edit,
+  press,
+  QUIET,
+  shown,
+  stage,
+  START,
+  step,
+  turn,
+  typing,
+  verdict,
+} from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 
 const WORK = [dev('make the mailer retry'), claude('Retrying three times now.', edit('src/mail/send.ts'))]
@@ -124,8 +140,8 @@ describe('the account this machine is set up for', () => {
     await press($, 'account-accept')
 
     expect(set.kept.get('fylgja.account')).toEqual({ user: OTHER_ID, team: OTHER_ID, profile: ACCOUNT.profile.id })
-    expect(set.statuses.at(-1), 'the line goes, and the mark stands for the account now pinned').toBe(MARK)
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(set.statuses.at(-1), 'the line goes').toBeUndefined()
+    expect(await shown($)).toBe(QUIET)
 
     await turn($, set, ...WORK)
 
@@ -140,7 +156,7 @@ describe('the account this machine is set up for', () => {
     await set.clock.settle()
     await press($, 'account-later')
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(EMPTY)
     expect(set.kept.get('fylgja.account')).toEqual(PIN)
 
     await turn($, set, ...WORK)
@@ -229,7 +245,7 @@ describe('the account this machine is set up for', () => {
     expect(await chip($, set), 'the next step asks once more, and then looks the reference up').toMatch(
       'Engineering Retrospective',
     )
-    expect(set.statuses.at(-1), 'the line that said otherwise goes, and the mark comes').toBe(MARK)
+    expect(set.statuses.at(-1), 'the line that said otherwise goes').toBeUndefined()
     expect(set.kept.get('fylgja.account')).toEqual(PIN)
 
     await turn($, set, ...WORK)

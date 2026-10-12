@@ -55,7 +55,12 @@ export type Session = {
    * the account this machine is set up for. The mark shows only then.
    */
   isHere: boolean
-  /** The mark the line under the prompt shows now; undefined while it shows something else or nothing. */
+  /**
+   * Whether the mark's line is up above the prompt. It comes up only while
+   * the prompt box is empty, and goes whenever Fylgja is not here.
+   */
+  isMarked: boolean
+  /** The mark as it read when the band was last asked to draw; undefined for none. */
   mark: string | undefined
   /** What Scribe is at, asked whenever the mark is worked out. Set once, by the plugin; without it the mark rests. */
   doing: (() => Doing | undefined) | undefined
@@ -108,6 +113,7 @@ export function create(): Session {
     notice: undefined,
     isOutside: false,
     isHere: false,
+    isMarked: false,
     mark: undefined,
     doing: undefined,
     offLine: undefined,
@@ -152,37 +158,44 @@ export function say(host: Host, session: Session, notice: string | undefined): v
   }
 }
 
-/** The mark as it would read now; undefined while Fylgja is not here for the pinned account. */
-function markNow(session: Session): string | undefined {
-  return session.isHere ? markOf(session.doing?.()) : undefined
-}
-
 /**
- * The mark for the line under the prompt, which is about to be written as
- * `line`: the mark when the line has nothing else to say and Fylgja is here,
- * undefined otherwise. What it answers is kept as what the line shows.
+ * The mark as the band above the prompt draws it now, in the place of
+ * nothing: undefined while its line is not up. What it says is worked out
+ * as it is drawn, so it never says more than is true at that moment.
  */
-export function markFor(session: Session, line: string | undefined): string | undefined {
-  session.mark = line === undefined ? markNow(session) : undefined
-
-  return session.mark
+export function markView(session: Session): string | undefined {
+  return session.isMarked && session.isHere ? markOf(session.doing?.()) : undefined
 }
 
 /**
- * Brings the mark up to date after something it says may have changed. The
- * line is written only when it is the mark's to write, with no sign-in line
- * and no notice up, and only when the mark reads differently than it shows.
+ * Brings the mark up to date after something it says may have changed, and
+ * has the band drawn again only when the mark reads differently than it did.
  *
- * It only shows, so it never fails: a line that could not be written stays
- * as it is, and whatever called this goes on as it would have without it.
+ * Its line comes up only while the prompt box is empty, as nothing new
+ * comes up above the prompt while the person is typing; once the box is
+ * empty again it comes. A line that is up changes its words where it
+ * stands, which moves nothing. It goes at once, typing or not, when Fylgja
+ * is no longer here for the pinned account: it must never say what is not so.
+ *
+ * It only shows, so it never fails: a band that could not be drawn again
+ * stays as it is, and whatever called this goes on as it would have without it.
  */
 export function remark(host: Host, session: Session): void {
   try {
-    if (!session.signIn.isShown && session.notice === undefined && markNow(session) !== session.mark) {
-      host.status(undefined)
+    if (!session.isHere) {
+      session.isMarked = false
+    } else if (!session.isTyping) {
+      session.isMarked = true
+    }
+
+    const mark = markView(session)
+
+    if (mark !== session.mark) {
+      session.mark = mark
+      host.redraw()
     }
   } catch {
-    // The line stays as it is.
+    // The band stays as it is.
   }
 }
 
@@ -330,6 +343,8 @@ export function typed(host: Host, session: Session, text: string): void {
   if (isTyping !== session.isTyping) {
     session.isTyping = isTyping
     session.acceptUntil = 0
+    // The mark's line waits for an empty box to come up.
+    remark(host, session)
 
     if (session.account.state === 'other' && !session.isPutOff) {
       host.redraw()
@@ -373,6 +388,7 @@ export async function pressed(host: Host, session: Session, key: string): Promis
       session.isOutside = false
       session.isHere = true
       session.offLine = undefined
+      remark(host, session)
       say(host, session, undefined)
       // What was known was another account's to see.
       startOver(session)

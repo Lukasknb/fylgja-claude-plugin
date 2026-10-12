@@ -10,6 +10,7 @@ import {
   fact,
   NOTHING,
   press,
+  QUIET,
   shown,
   stage,
   START,
@@ -173,7 +174,7 @@ describe('a decision recorded before its code exists gets its places later', () 
       `(id=${OWN}, no place in the code yet) The retry queue lock is a Postgres advisory lock.`,
     )
     expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'fix', anchors: [{ path: 'src/queue/lock.ts' }] }])
-    expect(await shown($), 'no receipt for places alone').toBe('engine: AbovePrompt')
+    expect(await shown($), 'no receipt for places alone').toBe(`${QUIET} · 1 kept`)
   })
 
   test('the places it had are kept, and each place is added once', async ($, on) => {

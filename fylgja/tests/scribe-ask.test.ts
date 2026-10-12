@@ -11,6 +11,7 @@ import {
   NOTHING,
   press,
   pressTwice,
+  QUIET,
   shown,
   stage,
   START,
@@ -266,7 +267,7 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
     expect(set.fills[0]).toMatch('> Decision: Use Redis with Redlock for the job queue.')
     expect(set.fills[0]).toMatch('> Fylgja record 00000000, written down by Scribe')
     expect(set.fills[0]).not.toMatch('https://')
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   for (const key of ['different', 'skip']) {

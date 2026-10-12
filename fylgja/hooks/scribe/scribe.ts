@@ -51,7 +51,7 @@ export type ScribeHost = LoopHost & {
   toast: (text: string) => void
   /** `$.ui.status`: the plugin's one line under the prompt; undefined removes it. */
   status: (text: string | undefined) => void
-  /** The mark under the prompt is brought up to date with what Scribe is at. It only shows, and never fails. */
+  /** The mark above the prompt is brought up to date with what Scribe is at. It only shows, and never fails. */
   mark: () => void
   /** A line for the debug log alone. Counts and fixed words; never anything a person or a record wrote. */
   debug: (text: string) => void
@@ -435,7 +435,7 @@ export function startOver(scribe: Scribe): void {
 }
 
 /**
- * What the mark under the prompt may say of Scribe: whether a look is under
+ * What the mark above the prompt may say of Scribe: whether a look is under
  * way, and how many records it wrote in this session still stand. Undefined
  * while Scribe does not run in this conversation.
  */

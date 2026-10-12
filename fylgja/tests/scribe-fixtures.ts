@@ -14,6 +14,19 @@ export const START = { surface: 'terminal', isInteractive: true, cwd: ROOT } as 
 
 export const NOTHING = '{"outcome":"nothing"}'
 
+/** The band as the stand-in for Claude Code draws it when the plugin draws nothing there at all. */
+export const EMPTY = 'engine: AbovePrompt'
+
+/** The mark at rest, as the band above the prompt draws it while it has nothing of its own to show. */
+export const MARK = 'ᚠ fylgja'
+
+/**
+ * The band with nothing of Scribe's or of the account's in it, in a session
+ * the plugin works for: what the stand-in for Claude Code draws there, and
+ * the mark at rest under it.
+ */
+export const QUIET = `${EMPTY}${MARK}`
+
 type Call = { tool: string; args: Record<string, unknown> }
 
 /** One request to Scribe's model, as the engine was handed it. */
@@ -456,7 +469,7 @@ export async function band($: Engine, surface: 'terminal' | 'desktop' = 'termina
   return {
     text,
     /** Whether the plugin draws nothing there. */
-    isEmpty: async () => (await text()) === 'engine: AbovePrompt',
+    isEmpty: async () => (await text()) === EMPTY,
     press: (key: string) => ui.press({ key } as never),
     enter: (key: string, value: string) =>
       (ui as unknown as { input: (act: { key: string; text: string }) => Promise<unknown> }).input({ key, text: value }),

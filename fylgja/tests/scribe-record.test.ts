@@ -11,6 +11,7 @@ import {
   NOTHING,
   press,
   pressTwice,
+  QUIET,
   REPO,
   ROOT,
   SESSION_ID,
@@ -61,7 +62,7 @@ describe('Scribe records', () => {
 
     expect(set.asked.length).toBe(1)
     expect(set.of('remember')).toEqual([])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('an anchor outside the tree, absolute or climbing out is left off, and the record is still written', async ($, on) => {
@@ -164,7 +165,7 @@ describe('Scribe records', () => {
     await turn($, set, ...TALK)
 
     expect(refusals, 'not tried again').toBe(1)
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
     expect(set.toasts).toEqual([])
 
     await turn(
@@ -190,7 +191,7 @@ describe('Scribe records', () => {
     await press($, 'remove:0')
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'remove' }])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('Fix opens the sentence in a field and saves what is entered', async ($, on) => {
@@ -234,7 +235,7 @@ describe('Scribe records', () => {
 
     await set.clock.advance(1)
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(`${QUIET} · 1 kept`)
     expect(set.of('amend_memory')).toEqual([])
   })
 
@@ -245,7 +246,7 @@ describe('Scribe records', () => {
     await turn($, set, ...TALK)
     await $.prompt.submit({ text: 'next thing', wait: false, origin: { kind: 'composer' } })
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(`${QUIET} · 1 kept`)
   })
 
   for (const outcome of ['duplicate', 'reconfirmed']) {
@@ -259,7 +260,7 @@ describe('Scribe records', () => {
       await turn($, set, ...TALK)
 
       expect(set.of('remember').length).toBe(1)
-      expect(await shown($)).toBe('engine: AbovePrompt')
+      expect(await shown($)).toBe(QUIET)
     })
   }
 

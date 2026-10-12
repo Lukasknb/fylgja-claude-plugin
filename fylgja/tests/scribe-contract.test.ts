@@ -15,6 +15,7 @@ import {
   NOTHING,
   press,
   pressTwice,
+  QUIET,
   shown,
   stage,
   START,
@@ -146,7 +147,7 @@ describe('a refusal that says what is wrong is used once', () => {
 
     expect(set.of('remember').length).toBe(2)
     expect(set.asked.length).toBe(2)
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
     expect(set.toasts).toEqual([])
   })
 
@@ -166,7 +167,7 @@ describe('a refusal that says what is wrong is used once', () => {
       await turn($, set, ...TALK)
 
       expect(set.of('remember').length).toBe(1)
-      expect(await shown($)).toBe('engine: AbovePrompt')
+      expect(await shown($)).toBe(QUIET)
     })
   }
 
@@ -431,7 +432,7 @@ describe('a record another member already holds', () => {
     await $.session.start(START)
     await turn($, set, ...TALK)
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 })
 

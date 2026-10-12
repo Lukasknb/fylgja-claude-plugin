@@ -38,14 +38,11 @@ function hostOf($: EngineInterface, session: Session.Session, live?: Live): Host
     call: (server, tool, args) => called(live, () => $.mcp.call(server, tool, args)),
     isLive: () => live?.isOpen === true,
     // The line under the prompt has one owner. Sign-in comes first; when it
-    // has nothing to say, the line shows what the plugin left there, if
-    // anything; and when nothing was left there, the mark, which is made of
-    // safe parts and keeps its own dots.
+    // has nothing to say, the line shows what the plugin left there, if anything.
     status: text => {
       const line = text ?? session.notice
-      const mark = Session.markFor(session, line)
 
-      $.ui.status(line === undefined ? mark : drawn(line, MAX_LINE))
+      $.ui.status(line === undefined ? undefined : drawn(line, MAX_LINE))
     },
     redraw: () => $.ui.invalidate('ui.render'),
     every: (ms, fn) => $.clock.every(ms, fn),
@@ -136,7 +133,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live)
   }
 }
 
-/** Brings the mark under the prompt up to date; see `Session.remark`. No call to Fylgja is started for it. */
+/** Brings the mark above the prompt up to date; see `Session.remark`. No call to Fylgja is started for it. */
 function remark($: EngineInterface, session: Session.Session): void {
   Session.remark(hostOf($, session), session)
 }
@@ -439,26 +436,35 @@ export function register(on: On, options: PluginOptions = {}): void {
     return done
   }).catch(($, e, next) => next(e))
 
-  on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // The band is the survey's while one is up, and an agent's transcript is not Scribe's.
     // The question of which account is signed in comes before anything of Scribe's.
-    const shown =
-      e.props.hasSurvey || e.props.view?.agentId !== undefined
-        ? undefined
-        : (Session.accountView(session) ??
-          Scribe.view(
-            scribe,
-            e.props.isWorking,
-            session.account.state === 'pinned' && session.account.who !== undefined
-              ? destinationOf(session.account.who)
-              : undefined,
-          ))
+    const isOthers = e.props.hasSurvey || e.props.view?.agentId !== undefined
+    const shown = isOthers
+      ? undefined
+      : (Session.accountView(session) ??
+        Scribe.view(
+          scribe,
+          e.props.isWorking,
+          session.account.state === 'pinned' && session.account.who !== undefined
+            ? destinationOf(session.account.who)
+            : undefined,
+        ))
+    // The mark comes last: only while the band has nothing of its own to show.
+    const mark = isOthers || shown !== undefined ? undefined : Session.markView(session)
 
-    if (shown === undefined || (e.surface !== 'terminal' && e.surface !== 'desktop')) {
+    if ((shown === undefined && mark === undefined) || (e.surface !== 'terminal' && e.surface !== 'desktop')) {
       return next(e)
     }
 
     const { Box, Button, Input, Link, Text } = $.ui.resolve(e)
+
+    // One dim line under whatever is drawn beneath, which is passed on as
+    // it came. It is text alone: no key, no field, nothing to focus, so a
+    // digit typed into an empty prompt box is the person's text as ever.
+    if (shown === undefined) {
+      return Box({ flexDirection: 'column', children: [await next(e), Text({ dimColor: true, children: [mark ?? ''] })] })
+    }
     const keys = (list: readonly { key: string; hotkey: string; label: string }[]) =>
       list.map(key =>
         Button({ key: key.key, label: key.label, hotkey: key.hotkey, plain: true, onPress: () => void presses.push(key.key) }),

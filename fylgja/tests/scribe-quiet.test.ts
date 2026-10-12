@@ -5,6 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import { isOwnCall, verdictFor } from '../hooks/scribe/grant'
 import { answer, idOf, MEETING_ID, meetingRecord, NEEDS_SIGN_IN, token } from './fixtures'
 import {
+  EMPTY,
   band,
   claude,
   decision,
@@ -15,6 +16,7 @@ import {
   NOTHING,
   press,
   pressTwice,
+  QUIET,
   send,
   shown,
   stage,
@@ -22,8 +24,8 @@ import {
   step,
   stepping,
   turn,
-  use,
   typing,
+  use,
   verdict,
 } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
@@ -105,8 +107,8 @@ describe('Scribe stays quiet', () => {
     await finish($, set, dev('step 1'), claude('Done.', edit('src/file-1.ts')))
 
     expect(set.of('remember').length, 'written all the same').toBe(1)
-    expect(await shown($)).toBe('engine: AbovePrompt')
-    expect(await shown($, true)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(`${QUIET} · 1 kept`)
+    expect(await shown($, true)).toBe(`${QUIET} · 1 kept`)
 
     await set.clock.advance(60_000)
     await typing($, set, '')
@@ -125,7 +127,7 @@ describe('Scribe stays quiet', () => {
 
     await set.clock.advance(20_000)
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(`${QUIET} · 1 kept`)
   })
 
   test('a receipt that waited for the developer to stop typing goes with the prompt they send', async ($, on) => {
@@ -140,7 +142,7 @@ describe('Scribe stays quiet', () => {
 
     await send($, 'next thing')
 
-    expect(await shown($, true)).toBe('engine: AbovePrompt')
+    expect(await shown($, true)).toBe(`${QUIET} · 1 kept`)
   })
 
   test('a late lookup does not bring a second tell into a turn that has had one', async ($, on) => {
@@ -183,7 +185,7 @@ describe('Scribe stays quiet', () => {
     // The slow lookup answers after the turn has ended, and before the next prompt.
     await set.clock.advance(5000)
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('the first thing ever shown says what Scribe is, and can turn it off for the machine with two presses', async ($, on) => {
@@ -212,7 +214,7 @@ describe('Scribe stays quiet', () => {
     await ui.press('off')
     await ui.redraw()
 
-    expect(await ui.isEmpty()).toBe(true)
+    expect(await ui.text(), 'nothing of Scribe’s is left, and the mark rests').toBe(QUIET)
     expect(set.kept.get('scribe.off')).toBe(true)
 
     const asked = set.asked.length
@@ -272,19 +274,19 @@ describe('Scribe stays quiet', () => {
 })
 
 describe('Scribe does nothing at all', () => {
-  const idle = async ($: Engine, set: Stage): Promise<void> => {
+  const idle = async ($: Engine, set: Stage, above = QUIET): Promise<void> => {
     await turn($, set, ...WORK)
 
     expect(set.asked, 'no model call').toEqual([])
     expect(set.calls, 'no call to Fylgja').toEqual([])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(above)
   }
 
   test('signed out of Fylgja', async ($, on) => {
     const set = stage(on, { connect: () => NEEDS_SIGN_IN })
 
     await $.session.start(START)
-    await idle($, set)
+    await idle($, set, EMPTY)
     expect(set.statuses).toEqual(['sign in with /mcp'])
   })
 
@@ -301,7 +303,7 @@ describe('Scribe does nothing at all', () => {
 
     expect(set.asked, 'no model call').toEqual([])
     expect(set.calls, 'no call to Fylgja').toEqual([])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('in a headless run', async ($, on) => {
@@ -445,7 +447,7 @@ describe('Scribe’s model', () => {
     expect(set.asked.length).toBe(2)
     expect(set.asked[1]?.prompt).toMatch('Your last reply could not be used: the reply held no JSON object.')
     expect(set.of('remember')).toEqual([])
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('an answer wrapped in a code fence and words is read all the same', async ($, on) => {
@@ -619,7 +621,7 @@ describe('Scribe fails quietly', () => {
     await $.session.start(START)
     await turn($, set, ...WORK)
 
-    expect(await shown($)).toBe('engine: AbovePrompt')
+    expect(await shown($)).toBe(QUIET)
     expect(set.toasts).toEqual([])
   })
 })
