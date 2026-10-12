@@ -98,9 +98,11 @@ Very little, on purpose.
 
 Scribe is the one part that does more than draw. At the end of a turn you
 started it reads what happened, thinks about it with a small model on your
-own Claude plan, and works with Fylgja. Most turns it does nothing, and you
-see nothing. What it shows, it shows in the band above the prompt, one thing
-at a time, as a small card. A card is one of two kinds, and you can tell
+own Claude plan, and works with Fylgja. When you answer a question Claude
+put to you, it does so right then, while Claude goes on working: that is
+where most decisions are made, and the turn may run for a long time after.
+Most turns it does nothing, and you see nothing. What it shows, it shows
+in the band above the prompt, one thing at a time, as a small card. A card is one of two kinds, and you can tell
 which without reading it:
 
 - **It asks.** A heavy frame in your theme's amber, and `ᚠ fylgja asks` on
@@ -497,7 +499,18 @@ cost line for these requests, so here is what they are.
   a hook started in which you did none of that, not
   for a turn that changed no file and holds under 200 characters of talk
   (its lines are read with the next turn's), and no more than 30 times in
-  any hour; past that Scribe is quiet until the hour has rolled on. A
+  any hour; past that Scribe is quiet until the hour has rolled on. And
+  once more inside a turn each time you answer a question Claude put to
+  you, as the step after your answer begins: over what happened up to
+  there, which the look at the turn's end then leaves out. Such a look is
+  made whatever the turn holds and whoever started it, and counts as one
+  of the 30 without being refused when they are used up: you have to
+  answer each question, so there are only so many. It never holds the
+  turn. One look runs at a time: a turn that ends while such a look is
+  still thinking stops it, and the look at the turn's end reads what it
+  was reading. A look inside a turn that is stopped, comes to nothing or
+  cannot reach Fylgja leaves everything as if it had not been made. The
+  same question answered the same way again is another answer. A
   request that puts a refused record right outside such a look (after a
   key of yours wrote the record, or for a record that waited a turn)
   counts as one of the 30 by itself, and is not made once they are used
@@ -892,3 +905,17 @@ see in ordinary work, and last what needs your setup changed.
     mark is drawn under what Claude Code itself draws in the band: if
     the band shows nothing at all, the debug log says whether the tree
     was refused (`ui.render (AbovePrompt)`).
+22. The look inside a turn: answer a question Claude puts to you in a
+    turn that goes on for a while after it. The mark should read
+    `ᚠ· fylgja is reading` within moments of your answer and a receipt
+    come up while Claude is still working, with no pause in Claude's own
+    work. In the debug log of that session: no `refused` and no `denied`
+    for a `mcp__plugin_fylgja_fylgja__` tool, which shows that the calls
+    of a look that outlived the step it began in go through when a later
+    step makes them, and that the row of the question holds your answer
+    by the time the next step begins. If the look only ever happens at
+    the turn's end, the answer was not in the rows then, or the look was
+    still thinking when the turn ended, or a tool ran for more than three
+    seconds just as it had a call to make. End a turn right after an
+    answer too: no `hook was skipped` for `turn.complete`, and the
+    decision is recorded once.

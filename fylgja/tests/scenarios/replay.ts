@@ -511,6 +511,12 @@ async function play(
       let index = 0
 
       for (const row of turn.rows) {
+        // A step begins with the rows before it in hand: an answer the developer gave by then is looked at here.
+        if (row.role === 'assistant') {
+          Scribe.began(scribe)
+          await Scribe.stepping(host, scribe)
+        }
+
         world.rows.push(row)
 
         if (row.role === 'assistant') {

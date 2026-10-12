@@ -17,6 +17,8 @@ export type Row = {
   role: 'user' | 'assistant'
   text: string
   toolUses: readonly {
+    /** The call's id, where the engine gives it: what tells two calls with the same words apart. */
+    tool_use_id?: string
     tool: string
     input: Record<string, unknown>
     text?: string
@@ -365,6 +367,21 @@ export function rejectionOf(use: Row['toolUses'][number]): { feedback: string } 
   return { feedback: rest.startsWith(SAID) && !use.tool.startsWith('mcp__') ? rest.slice(SAID.length).trim() : '' }
 }
 
+/** Whether an act is an answer to a question Claude put to the developer. */
+export function isAnswer(act: { key: string }): boolean {
+  return act.key.startsWith('chose\u0000')
+}
+
+/**
+ * Whether a question Claude put to the developer is still out among `rows`:
+ * the call is there and what it came to is not.
+ */
+export function hasOpenQuestion(rows: readonly Row[]): boolean {
+  return rows.some(row =>
+    row.toolUses.some(use => use.tool === 'AskUserQuestion' && use.text === undefined && use.isError !== true),
+  )
+}
+
 // Calls that keep Claude's own books or wait on its own tasks: they say
 // nothing of what was decided, and are left out of what a wake is told.
 const BOOKKEEPING: ReadonlySet<string> = new Set([
@@ -501,7 +518,10 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
             developer.push(choice.typed)
           }
 
-          acts.push({ key: `chose\u0000${choice.question}\u0000${choice.chosen}`, words: choice.chosen })
+          // One act per answered call: the same question answered the same way again is another.
+          const call = use.tool_use_id === undefined ? '' : `${use.tool_use_id}\u0000`
+
+          acts.push({ key: `chose\u0000${call}${choice.question}\u0000${choice.chosen}`, words: choice.chosen })
 
           if (choice.picked.some(option => option.description !== '')) {
             offers.push({ question: choice.question, picked: choice.picked.filter(option => option.description !== '') })

@@ -189,6 +189,13 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   // The model's step: it asks for the tool calls a test named with `stepping`, or for none.
   // eslint-disable-next-line require-yield
   on('turn.step', async function* ($, e) {
+    // The model takes as long over its answer as a test said with `stepping`.
+    const ms = STEP_TIMES.get(on) ?? 0
+
+    if (ms > 0) {
+      await clock.sleep(ms)
+    }
+
     return {
       turnId: e.turnId,
       index: e.index,
@@ -471,12 +478,18 @@ export async function step(
   await stream.result
 }
 
-/** Stands for the model's step: it asks for the tool calls the test names. */
-export function stepping(on: On, uses: () => readonly { name: string; input: unknown }[]): void {
+/**
+ * Stands for the model's step: it asks for the tool calls the test names.
+ *
+ * @param ms how long the model takes over the step, on the test's clock
+ */
+export function stepping(on: On, uses: () => readonly { name: string; input: unknown }[], ms = 0): void {
   STEPS.set(on, uses)
+  STEP_TIMES.set(on, ms)
 }
 
 const STEPS = new WeakMap<On, () => readonly { name: string; input: unknown }[]>()
+const STEP_TIMES = new WeakMap<On, number>()
 
 const BAND = {
   plugin: 'fylgja',

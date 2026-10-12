@@ -49,6 +49,8 @@ export type Request = {
   prompt: readonly Block[]
   maxTokens: number
   timeoutMs: number
+  /** Cuts the call short when it aborts; the call then comes back with no text. */
+  signal?: AbortSignal
 }
 
 /** The engine calls a wake makes. */
@@ -74,6 +76,8 @@ export type Wake = {
   repo: string | null
   /** The records the wake is shown from the start. */
   shown: readonly Fact[]
+  /** Ends the wake when it aborts: the model call under way is cut, and no further one is made. */
+  signal?: AbortSignal
   seen: Omit<Seen, 'facts'>
 }
 
@@ -133,6 +137,8 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
     startedAt,
   })
 
+  // Read anew each time: it changes while the wake waits for the model.
+  const isStopped = (): boolean => input.signal?.aborted === true
   let said = ''
   let steps = 0
   let lookups = 0
@@ -150,6 +156,10 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
         return ended('deadline', steps, lookups)
       }
 
+      if (isStopped()) {
+        return ended('no-reply', steps, lookups)
+      }
+
       steps += 1
 
       const reply = await host.complete({
@@ -158,6 +168,7 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
         prompt: [...input.fixed, { text: `${input.current}${said}${ANSWER_NOW}` }],
         maxTokens: MAX_REPLY_TOKENS,
         timeoutMs: Math.max(1, Math.min(STEP_TIMEOUT_MS, Math.floor(left))),
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
       })
 
       usage.input += reply.usage.input
@@ -167,6 +178,11 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
 
       if (reply.text === undefined) {
         return ended((await host.now()) - startedAt >= WAKE_DEADLINE_MS ? 'deadline' : 'no-reply', steps, lookups)
+      }
+
+      // Stopped while the model answered: nothing more is asked of anyone.
+      if (isStopped()) {
+        return ended('no-reply', steps, lookups)
       }
 
       const asked = replyOf(reply.text)

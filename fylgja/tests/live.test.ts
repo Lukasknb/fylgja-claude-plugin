@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { briefly, called, close, DETACHED, open } from '../hooks/live'
+import { briefly, called, close, DETACHED, line, open, passed, serve } from '../hooks/live'
 import {
   answer,
   asked,
@@ -36,6 +36,56 @@ describe('a call to Fylgja is started only in a hook that is being waited on', (
     expect(await called(live, start).catch((error: Error) => error.message)).toBe(DETACHED)
     expect(await called(undefined, start).catch((error: Error) => error.message)).toBe(DETACHED)
     expect(started, 'the two refused calls were never begun').toBe(1)
+  })
+
+  test('a call of work that outlived its hook waits for a hook that is being waited on, which starts it as its own', async () => {
+    const timers: (() => void)[] = []
+    const after = (_ms: number, fn: () => void) => {
+      const at = timers.push(fn) - 1
+
+      return { cancel: () => void (timers[at] = () => undefined) }
+    }
+    const calls = line<string>()
+    const begun = open()
+    const startedBy: string[] = []
+    const start = (by: string): Promise<string> => {
+      startedBy.push(by)
+
+      return Promise.resolve(`answered to ${by}`)
+    }
+
+    expect(await passed(calls, begun, 'the hook it began in', after, 8000, start)).toBe('answered to the hook it began in')
+
+    close(begun)
+
+    const late = passed(calls, begun, 'the hook it began in', after, 8000, start)
+
+    await Promise.resolve()
+
+    expect(startedBy.length, 'with no hook being waited on, it is not started').toBe(1)
+
+    const next = open()
+
+    void serve(calls, next, 'the next hook')
+
+    expect(await late).toBe('answered to the next hook')
+
+    const joined = passed(calls, begun, 'the hook it began in', after, 8000, start)
+
+    expect(await joined, 'one that joins while a hook is there is started by it too').toBe('answered to the next hook')
+
+    close(next)
+
+    const never = passed(calls, begun, 'the hook it began in', after, 8000, start).catch((error: Error) => error.message)
+
+    timers.at(-1)?.()
+
+    expect(await never, 'one no hook took in time is given up').toBe(DETACHED)
+
+    void serve(calls, open(), 'a hook that came too late')
+    await Promise.resolve()
+
+    expect(startedBy.length, 'and is not started after that').toBe(3)
   })
 
   test('a short wait ends with the work or with the time, whichever comes first, and never fails', async () => {

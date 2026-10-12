@@ -6,8 +6,8 @@ import { withGlyphs } from './citations'
 import * as Draft from './draft'
 import { restored } from './known'
 import type { Host } from './host'
-import { briefly, called, close, open, SHORT_WAIT_MS } from './live'
-import type { Live } from './live'
+import { briefly, called, close, line, LINE_WAIT_MS, open, passed, serve, SHORT_WAIT_MS } from './live'
+import type { Line, Live } from './live'
 import { flush, want } from './lookups'
 import { isOwnPrompt } from './origin'
 import { decorationsOf } from './paint'
@@ -61,19 +61,45 @@ function hostOf($: EngineInterface, session: Session.Session, live?: Live): Host
   }
 }
 
+/** One hook's own way to call a tool on Fylgja: `$.mcp.call`, bound to that hook. */
+type Caller = (server: string, tool: string, args: Record<string, unknown>) => Promise<unknown>
+
+function callerOf($: EngineInterface): Caller {
+  return (server, tool, args) => $.mcp.call(server, tool, args)
+}
+
 /**
  * The engine calls Scribe makes, spelled out here as the others are. A call
  * to Fylgja goes to the session's own connection, under the name the
  * sign-in check last gave for it.
+ *
+ * @param calls given to a host whose work may go on after its hook has
+ *   handed back: a call it makes then waits there, a short while, for the
+ *   next hook that is being waited on, and is started by that hook. A call
+ *   of such a host that was not let through only failed: whether Scribe's
+ *   calls are let through at all is found out by a hook that is waited on
+ *   for its whole look, never by work that may have been left behind.
  */
-function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live): ScribeHost {
+function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live, calls?: Line<Caller>): ScribeHost {
+  const start = (server: string, tool: string, args: Record<string, unknown>): Promise<unknown> =>
+    calls === undefined
+      ? called(live, () => $.mcp.call(server, tool, args))
+      : passed(
+          calls,
+          live,
+          callerOf($),
+          (ms, fn) => $.clock.after(ms, fn),
+          LINE_WAIT_MS,
+          call => call(server, tool, args),
+        )
+
   return {
     server: () => Session.serverOf(hostOf($, session, live), session),
     // Why a call failed is kept as one word: whether it was not let
     // through, or anything else. The engine's own words are not handed on.
     call: (server, tool, args) =>
-      called(live, () => $.mcp.call(server, tool, args)).catch((error: unknown) => {
-        throw new Error(error instanceof Error && REFUSAL.test(error.message) ? REFUSED : 'failed')
+      start(server, tool, args).catch((error: unknown) => {
+        throw new Error(calls === undefined && error instanceof Error && REFUSAL.test(error.message) ? REFUSED : 'failed')
       }),
     lookup: async (tool, args) => {
       const server = await Session.serverOf(hostOf($, session, live), session)
@@ -82,17 +108,20 @@ function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live)
         throw new Error('Fylgja is not connected')
       }
 
-      return called(live, () => $.mcp.call(server, tool, args))
+      return start(server, tool, args)
     },
     complete: async request => {
-      const reply = await $.model.complete({
-        model: request.model,
-        system: request.system,
-        prompt: request.prompt,
-        maxTokens: request.maxTokens,
-        effort: 'low',
-        timeoutMs: request.timeoutMs,
-      })
+      const reply = await $.model.complete(
+        {
+          model: request.model,
+          system: request.system,
+          prompt: request.prompt,
+          maxTokens: request.maxTokens,
+          effort: 'low',
+          timeoutMs: request.timeoutMs,
+        },
+        request.signal === undefined ? {} : { signal: request.signal },
+      )
 
       return {
         text: reply.isAnswered ? reply.text : undefined,
@@ -163,7 +192,8 @@ const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
  * from work a hook left behind. It rides the session's own Fylgja
  * connection, and a failure leaves the row as it is drawn without an answer.
  *
- * Scribe is the one part that does more than draw: at the end of a turn it
+ * Scribe is the one part that does more than draw: at the end of a turn,
+ * and inside one when the developer has answered a question of Claude's, it
  * reads what happened, asks its own model, and writes to Fylgja. It runs
  * beside the conversation and never in it: nothing it reads, asks or writes
  * is added to what Claude reads, and no prompt waits for it.
@@ -179,6 +209,8 @@ export function register(on: On, options: PluginOptions = {}): void {
   // own handlers took them; the hook on the press does the work.
   const presses: string[] = []
   const entries: { key: string; value: string }[] = []
+  // The calls to Fylgja of a look that outlived the hook it began in.
+  const calls = line<Caller>()
 
   on('session.start', async ($, e, next) => {
     Session.startOver(session)
@@ -367,12 +399,34 @@ export function register(on: On, options: PluginOptions = {}): void {
   // about as the step begins and waited for a moment after it, so the step
   // itself is never held. The files the step names are then noted for a
   // lookup of what is recorded about them; a slow one is not waited for.
+  //
+  // A step that begins after the developer answered a question of Claude's
+  // has Scribe look right then, beside the step and never waited for: the
+  // step, and the turn, go on as they would have. What that look still has
+  // to call on Fylgja once this hook has handed back is started by the hooks
+  // that follow, each for as long as it is being waited on.
   on('turn.step', async function* ($, e, next) {
     const live = open()
+
+    // A hook Claude Code has stopped waiting on starts nothing more.
+    next.signal.addEventListener('abort', () => close(live))
 
     try {
       const host = hostOf($, session, live)
       const looked = flush(host, session)
+
+      void serve(calls, live, callerOf($))
+
+      if (e.agentId === undefined) {
+        // Claude is working from here until the turn ends, whoever began the turn.
+        Scribe.began(scribe)
+        void looked
+          .catch(() => undefined)
+          .then(() => Scribe.stepping(scribeHostOf($, session, live, calls), scribe))
+          .catch(() => undefined)
+          .finally(() => remark($, session))
+      }
+
       const stepped = yield* next(e)
 
       await briefly(host.after, looked, SHORT_WAIT_MS)
@@ -396,13 +450,21 @@ export function register(on: On, options: PluginOptions = {}): void {
 
   // The end of a turn of the main conversation is where Scribe does its
   // work, after the turn itself is done with. An agent's turn is not its
-  // business.
+  // business. A look begun inside the turn that is still under way is
+  // stopped here, and this one reads what it was reading. The hook has ten
+  // seconds of its own time, and waiting for work begun elsewhere counts
+  // against them, where waiting for its own calls does not.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     const live = open()
 
+    // A hook Claude Code has stopped waiting on starts nothing more.
+    next.signal.addEventListener('abort', () => close(live))
+
     try {
       const host = hostOf($, session, live)
+
+      void serve(calls, live, callerOf($))
 
       if (e.agentId === undefined) {
         // A session that has moved is in another project; what that one holds is looked at before anything else.
@@ -418,7 +480,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       // The turn ended as it would have without the plugin.
     } finally {
       close(live)
-      // Every look of Scribe's has ended by here, however it ended.
+      // The look at the turn's end has ended by here, however it ended.
       remark($, session)
     }
 

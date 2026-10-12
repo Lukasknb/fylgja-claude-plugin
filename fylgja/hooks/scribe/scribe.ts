@@ -17,7 +17,7 @@ import type { Doing } from '../companion'
 import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
 import * as Band from './band'
-import { changesOf, filesOf, isPrompt, observe, plain } from './delta'
+import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain } from './delta'
 import type { Offer, Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
@@ -28,7 +28,7 @@ import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
 import type { Block } from './prompt'
 import { relativeTo, repoNameOf } from './repo'
-import { CALL_TIMEOUT_MS, limited } from './time'
+import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
 import type { Draft, Fact, Place, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReason } from './verdict'
 import type { Seen } from './verdict'
@@ -129,7 +129,7 @@ export type Scribe = {
   plans: Plans.Plans
   /** The prompts the developer sent, as `plain` leaves them: what tells their words from every other row. */
   prompts: Set<string>
-  /** Whether the developer has sent a prompt since Scribe last came to a verdict. */
+  /** Whether the developer has sent a prompt since Scribe last came to a verdict, at a turn's end or inside one. */
   hasPrompt: boolean
   /** How many rows of the conversation a wake has been through; -1 when not known. */
   consumed: number
@@ -187,6 +187,26 @@ export type Scribe = {
   /** Whether they decided something since Scribe last came to a verdict. */
   hasActed: boolean
   /**
+   * Whether a step of the turn in hand put a question to the developer whose
+   * answer has not been seen in the rows yet.
+   */
+  isAsking: boolean
+  /**
+   * Whether a look inside the turn in hand came to a verdict. The developer
+   * answered a question in that turn, so it is theirs, and what came after
+   * the answer is looked at when the turn ends.
+   */
+  hasAnsweredInTurn: boolean
+  /** The look under way and those waiting behind it, as one; null with none. One look runs at a time. */
+  looking: Promise<void> | null
+  /** Stops the looks begun inside the turn in hand, when the turn ends; null with none begun. */
+  cut: AbortController | null
+  /**
+   * Whether a look inside the turn in hand put a question to the developer.
+   * It is that turn's one question: the look at its end asks none.
+   */
+  hasAskedInside: boolean
+  /**
    * What the assistant wrote in the turn in hand and in the one before, for
    * one purpose: a reason it gave for something it proposed, which the
    * developer then accepted, is looked for here.
@@ -227,8 +247,14 @@ export type Scribe = {
   /** The records the lookups found since the last wake. */
   anchored: Map<string, Fact>
   deferred: Deferred[]
-  /** Commits already attached. */
+  /** Commits already seen in the rows: each is attached once. */
   commits: Set<string>
+  /**
+   * Commits seen in the rows and not yet attached, oldest first. The look
+   * that sees a commit may end before it attaches it; whichever look comes
+   * next does.
+   */
+  toAttach: string[]
   /** Whether a call of Scribe's own has got through to Fylgja in this session. */
   isGranted: boolean
   /** Whether Fylgja has been asked at all in this session, got through or not. */
@@ -357,6 +383,11 @@ export function create(options: Options): Scribe {
     unspoken: 0,
     acted: new Set(),
     hasActed: false,
+    isAsking: false,
+    hasAnsweredInTurn: false,
+    looking: null,
+    cut: null,
+    hasAskedInside: false,
     proposals: [],
     earlier: [],
     offered: [],
@@ -374,6 +405,7 @@ export function create(options: Options): Scribe {
     anchored: new Map(),
     deferred: [],
     commits: new Set(),
+    toAttach: [],
     isGranted: false,
     hasAsked: false,
     said: new Set(),
@@ -422,6 +454,11 @@ export function startOver(scribe: Scribe): void {
   scribe.unspoken = 0
   scribe.acted.clear()
   scribe.hasActed = false
+  scribe.isAsking = false
+  scribe.hasAnsweredInTurn = false
+  scribe.cut?.abort()
+  scribe.cut = null
+  scribe.hasAskedInside = false
   scribe.offered = []
   scribe.offers = []
   scribe.editedRepos.clear()
@@ -774,6 +811,15 @@ function once(scribe: Scribe, what: string): boolean {
   return isFirst
 }
 
+// How many calls each host made that did not get to Fylgja, were not let
+// through or were not answered in time. A host is one hook's, or one look's:
+// what failed for a key press or a step's lookup is not counted against a look.
+const MISSED = new WeakMap<ScribeHost, number>()
+
+function missedBy(host: ScribeHost): number {
+  return MISSED.get(host) ?? 0
+}
+
 /** What one call to Fylgja came to: its answer, or the server's own words for why it did not do it. */
 type Tried = { answer: Record<string, unknown> | undefined; refusal: string | undefined }
 
@@ -788,10 +834,14 @@ async function tried(host: ScribeHost, scribe: Scribe, tool: string, args: Recor
   const server = await connected(host)
 
   if (server === undefined) {
+    MISSED.set(host, missedBy(host) + 1)
+
     throw new Error('Fylgja is not connected')
   }
 
   const result = await limited(host.after, host.call(server, tool, args), CALL_TIMEOUT_MS).catch((error: unknown) => {
+    MISSED.set(host, missedBy(host) + 1)
+
     // A call that is not let through, whichever it is, ends Scribe for
     // the session: it does not go on reading and asking a model for
     // records it may not write.
@@ -1702,6 +1752,9 @@ export async function stepped(
     return
   }
 
+  // A question put to the developer: the step that follows it has their answer.
+  scribe.isAsking ||= uses.some(use => use.name === 'AskUserQuestion')
+
   const who = await identityOf(host, scribe)
 
   if (who === null) {
@@ -1810,8 +1863,13 @@ function gist(lines: readonly string[]): string[] {
 /**
  * Whether a wake may begin now: none is under way, and the hour has not had
  * its share. The hour's share used up is said once in the debug log.
+ *
+ * @param isAnswered the rows hold an answer of the developer's that no look
+ *   has been begun for. Such a look is counted in the hour's share and never
+ *   refused by it: a person has to answer each question, so there are only
+ *   so many.
  */
-function mayWake(host: ScribeHost, scribe: Scribe, now: number): boolean {
+function mayWake(host: ScribeHost, scribe: Scribe, now: number, isAnswered: boolean): boolean {
   // A wake always ends, by its own limits; one that somehow did not is not
   // let stand in the way of every later one.
   if (scribe.wakingSince !== 0 && now - scribe.wakingSince < 2 * WAKE_DEADLINE_MS) {
@@ -1823,6 +1881,10 @@ function mayWake(host: ScribeHost, scribe: Scribe, now: number): boolean {
   if (scribe.wakeTimes.length < MAX_WAKES_PER_HOUR) {
     scribe.said.delete('ceiling')
 
+    return true
+  }
+
+  if (isAnswered) {
     return true
   }
 
@@ -1900,31 +1962,278 @@ export async function agentStepped(
 }
 
 /**
- * A turn of the main conversation ended. Scribe reads what happened since
- * it last looked, looks up the files touched, runs one wake over it, acts on
- * the verdict, and attaches any commit the turn made to the session's
- * records.
+ * Puts a look behind the one under way, so that one runs at a time: two at
+ * once would read the same rows as new. Each reads where the rows not yet
+ * seen begin when its own turn comes, so it has what the look before it
+ * left and nothing that look went through. One that waited through the
+ * conversation starting over is not run.
  *
- * A model is asked only for a turn the developer started, that has
- * something in it, and only once a call of Scribe's own has got through to
- * Fylgja. A wake that did not come to a verdict, or was not begun, leaves
- * the rows unread, so the next turn's wake has them too.
+ * A look always ends, by its own limits; one that somehow did not is waited
+ * for no longer than two looks may take, and then no longer stands in the
+ * way of the ones behind it.
  */
-export async function completed(host: ScribeHost, scribe: Scribe): Promise<void> {
-  scribe.band.isWorking = false
-  scribe.band.hasAskedThisTurn = false
-  scribe.turn += 1
+function inTurn(host: ScribeHost, scribe: Scribe, look: () => Promise<void>): Promise<void> {
+  const { epoch } = scribe
+  const run = (): Promise<void> => (epoch === scribe.epoch ? look() : Promise.resolve())
+  const mine = (scribe.looking === null ? Promise.resolve() : within(host, scribe.looking, 2 * WAKE_DEADLINE_MS)).then(run)
+  const ended = mine.catch(() => undefined)
 
+  scribe.looking = ended
+  void ended.then(() => {
+    if (scribe.looking === ended) {
+      scribe.looking = null
+    }
+  })
+
+  return mine
+}
+
+/** Who Scribe works for, when it may read and ask now: null when it is off, or signed out. */
+async function reader(host: ScribeHost, scribe: Scribe): Promise<Identity | null> {
   const who = await identityOf(host, scribe)
 
   // Signed out, nothing is read and no model is asked.
-  if (who === null || (await connected(host)) === undefined) {
+  return who === null || (await connected(host)) === undefined ? null : who
+}
+
+/**
+ * A step of the main conversation begins: Claude is working, whoever began
+ * the turn. A turn a background task began has no prompt to say so.
+ */
+export function began(scribe: Scribe): void {
+  scribe.band.isWorking = true
+}
+
+/**
+ * A step of the main conversation begins. When a step before it put a
+ * question to the developer and the rows now hold their answer, Scribe looks
+ * right then, as it does at a turn's end: most decisions are made in such
+ * an answer, and the turn may go on for a long time after it.
+ *
+ * The step does not wait for this, and neither does the turn. What it
+ * resolves with says only that the look has ended.
+ */
+export async function stepping(host: ScribeHost, scribe: Scribe): Promise<void> {
+  if (!scribe.isAsking) {
+    return
+  }
+
+  const who = await reader(host, scribe)
+
+  if (who === null) {
+    return
+  }
+
+  scribe.cut ??= new AbortController()
+
+  const cut = scribe.cut.signal
+
+  await inTurn(host, scribe, () => look(host, scribe, who, cut))
+}
+
+/**
+ * How long a turn's end waits for a look begun inside the turn to end, once
+ * it has been told to stop. The end of a turn has little time of its own,
+ * and waiting for work begun elsewhere is paid from it.
+ */
+export const INSIDE_WAIT_MS = 2000
+
+/**
+ * A turn of the main conversation ended. Scribe looks at what happened
+ * since it last looked.
+ *
+ * A look begun inside the turn that has not come to its verdict is stopped,
+ * and ends at once: it leaves its rows as it found them, and this look reads
+ * them with the rest. One that is past its verdict, writing down what it
+ * came to, cannot be stopped and is given a moment. If it needs longer, no
+ * look is made now: two would write at once. The rows that came after it
+ * are then read at the next turn's end, whoever begins that turn, and not
+ * before.
+ */
+export async function completed(host: ScribeHost, scribe: Scribe): Promise<void> {
+  scribe.band.isWorking = false
+  // One question a turn: where a look inside the turn asked, that was it.
+  scribe.band.hasAskedThisTurn = scribe.hasAskedInside
+  scribe.hasAskedInside = false
+  scribe.turn += 1
+  // Whatever the turn asked the developer is in its rows by now, answered or not.
+  scribe.isAsking = false
+  scribe.cut?.abort()
+  scribe.cut = null
+
+  let isRead = true
+
+  try {
+    const who = await reader(host, scribe)
+
+    if (who === null) {
+      return
+    }
+
+    if (scribe.looking !== null) {
+      await within(host, scribe.looking, INSIDE_WAIT_MS)
+    }
+
+    if (scribe.looking !== null) {
+      // What waited for Claude to finish may come up now.
+      settle(host, scribe)
+      // The turn stays the developer's: its remaining rows are looked at when the next turn ends.
+      isRead = false
+
+      return
+    }
+
+    await inTurn(host, scribe, () => look(host, scribe, who))
+  } finally {
+    if (isRead) {
+      scribe.hasAnsweredInTurn = false
+    }
+  }
+}
+
+/**
+ * One look. Scribe reads what happened since it last looked, looks up the
+ * files touched, runs one wake over it, acts on the verdict, and attaches
+ * any commit made to the session's records.
+ *
+ * A model is asked only for a turn that is the developer's (they started
+ * it, or decided something in it), that has something in it, and only once
+ * a call of Scribe's own has got through to Fylgja. A wake that did not come
+ * to a verdict, or was not begun, leaves the rows unread, so the next look
+ * has them too.
+ *
+ * @param cut given to a look made inside a turn, for an answer the
+ *   developer gave to a question of Claude's; it aborts when the turn ends.
+ *   With no such answer among the rows not yet seen, nothing is done: they
+ *   wait for the turn's end. Such a look either goes all the way or leaves
+ *   everything as it found it. Stopped, come to no verdict, or with a call
+ *   to Fylgja that did not get through while it wrote down what it came to,
+ *   it leaves its rows unread and the answer as one no look was begun for:
+ *   the turn's end looks at them as if this look had never been tried.
+ */
+async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: AbortSignal): Promise<void> {
+  const isInside = cut !== undefined
+
+  if (cut?.aborted === true) {
     return
   }
 
   const rows = await host.rows()
   const from = startOf(scribe, rows)
   const seen = observe(rows.slice(from), who.root, scribe.prompts)
+  // An answer to a question of Claude's that no look has been begun for.
+  const isAnswered = seen.acts.some(act => isAnswer(act) && !scribe.acted.has(act.key))
+
+  if (isInside) {
+    scribe.isAsking = hasOpenQuestion(rows.slice(from))
+
+    if (!isAnswered) {
+      return
+    }
+  }
+
+  const { epoch, turn } = scribe
+  const hadAsked = scribe.band.hasAskedThisTurn
+  // What a look inside a turn puts back when it does not go all the way.
+  const found: Found = {
+    consumed: scribe.consumed,
+    mark: scribe.mark,
+    hasActed: scribe.hasActed,
+    hasPrompt: scribe.hasPrompt,
+    hasAnsweredInTurn: scribe.hasAnsweredInTurn,
+    commitsToPair: scribe.commitsToPair,
+    earlier: scribe.earlier,
+    anchored: new Map(),
+    acts: [],
+  }
+  let isWhole = false
+
+  try {
+    isWhole = await looked(host, scribe, who, { rows, from, seen, isAnswered, found, cut })
+  } finally {
+    if (isInside && !isWhole && epoch === scribe.epoch) {
+      scribe.consumed = found.consumed
+      scribe.mark = found.mark
+      scribe.hasActed = found.hasActed
+      scribe.hasPrompt = found.hasPrompt
+      scribe.hasAnsweredInTurn = found.hasAnsweredInTurn
+      scribe.commitsToPair = found.commitsToPair
+      scribe.earlier = found.earlier
+
+      for (const [id, fact] of found.anchored) {
+        scribe.anchored.set(id, fact)
+      }
+
+      for (const act of found.acts) {
+        const at = scribe.spoken.lastIndexOf(wordsOf(act))
+
+        scribe.acted.delete(act.key)
+
+        if (at !== -1) {
+          scribe.spoken.splice(at, 1)
+        }
+      }
+    }
+
+    // A question it put in line is the one question of the turn it was made in.
+    if (isInside && turn === scribe.turn && !hadAsked && scribe.band.hasAskedThisTurn) {
+      scribe.hasAskedInside = true
+    }
+  }
+}
+
+/**
+ * `work`, or undefined as soon as `cut` aborts. `work` goes on either way;
+ * a model call it has under way is cut by the same signal, and whatever it
+ * comes to after that is let go.
+ */
+function unless<T>(cut: AbortSignal | undefined, work: Promise<T>): Promise<T | undefined> {
+  return cut === undefined
+    ? work
+    : new Promise((resolve, reject) => {
+        if (cut.aborted) {
+          resolve(undefined)
+        }
+
+        cut.addEventListener('abort', () => resolve(undefined))
+        work.then(resolve, reject)
+      })
+}
+
+/** An act's words as they are kept with the developer's prompts. */
+function wordsOf(act: { words: string }): string {
+  return act.words.replace(/\s+/g, ' ').trim()
+}
+
+/** What a look changes before it has gone all the way, as it was found: a look inside a turn may have to put it back. */
+type Found = Pick<Scribe, 'consumed' | 'mark' | 'hasActed' | 'hasPrompt' | 'hasAnsweredInTurn' | 'commitsToPair' | 'earlier'> & {
+  /** The records the lookups had found when the verdict came. */
+  anchored: Map<string, Fact>
+  /** What the developer decided that this look was the first to see. */
+  acts: { key: string; words: string }[]
+}
+
+/** What a look has in hand once it has read the rows. */
+type Sight = {
+  rows: readonly Row[]
+  from: number
+  seen: ReturnType<typeof observe>
+  isAnswered: boolean
+  found: Found
+  cut: AbortSignal | undefined
+}
+
+/**
+ * The body of a look, from the rows read to its last call. Whether it went
+ * all the way: it came to a verdict, and a look inside a turn wrote down
+ * what the verdict held with every call to Fylgja getting through.
+ */
+async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Sight): Promise<boolean> {
+  const { rows, from, seen, isAnswered, found, cut } = sight
+  const isInside = cut !== undefined
+  // Whether the turn has ended since: read anew each time, as it changes while this waits.
+  const isStopped = (): boolean => cut?.aborted === true
+  let isWhole = false
 
   // Held from here on: a wake that comes to nothing leaves these rows for the next.
   scribe.consumed = from
@@ -1943,23 +2252,45 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
 
   // Which repository each file of the turn lies in: a record is filed under
   // the one its files are in, and each repository is asked about its own.
-  const here = await placesOf(host, scribe, who, seen.files)
+  // Everything a look inside a turn waits for before its verdict is let go
+  // of the moment the turn ends, so that the turn's end finds no look under
+  // way and reads the rows itself.
+  const here = await unless(cut, placesOf(host, scribe, who, seen.files))
 
-  await placesOf(
-    host,
-    scribe,
-    who,
-    scribe.plans.docs.flatMap(doc => (doc.key.startsWith('/') ? [doc.key] : [])),
+  await unless(
+    cut,
+    placesOf(
+      host,
+      scribe,
+      who,
+      scribe.plans.docs.flatMap(doc => (doc.key.startsWith('/') ? [doc.key] : [])),
+    ),
   )
+
+  const changed = await unless(cut, placesOf(host, scribe, who, seen.changed))
+
+  if (here === undefined || changed === undefined || isStopped()) {
+    return false
+  }
+
   // What was written or changed, per repository, since its last commit; and
   // the commits made since the last look, each with those files. A commit is
   // the moment a decision recorded before its code existed can be given its
   // place: the next look is asked to pair them, once.
-  noteEdits(scribe, who, seen.changed, await placesOf(host, scribe, who, seen.changed))
+  noteEdits(scribe, who, seen.changed, changed)
   wanted(scribe, who, here)
 
   if (who.repo !== null && seen.commits.some(sha => !scribe.commits.has(sha))) {
     committed(scribe, who.repo)
+  }
+
+  // Noted now, each once, and attached at the end of a look: this one's, or
+  // a later one's when this one is stopped or its rows are read again.
+  for (const sha of seen.commits) {
+    if (!scribe.commits.has(sha)) {
+      scribe.commits.add(sha)
+      scribe.toAttach = [...scribe.toAttach, sha].slice(-MAX_PENDING_COMMITS)
+    }
   }
 
   // The developer's rows are told from every other by the prompt they sent.
@@ -1975,25 +2306,37 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   // decides whether Scribe runs at all. After that a slow lookup does not
   // hold the turn's end.
   if (scribe.isGranted) {
-    await within(
-      host,
-      lookUp(host, scribe, who).catch(() => undefined),
-      LOOKUP_WAIT_MS,
+    await unless(
+      cut,
+      within(
+        host,
+        lookUp(host, scribe, who).catch(() => undefined),
+        LOOKUP_WAIT_MS,
+      ),
     )
   } else {
     const first = lookUp(host, scribe, who, true).catch(() => undefined)
 
     // Waited for in full once. A server that did not answer then is not
     // given more than a moment at each later turn's end.
-    await (scribe.hasAsked ? within(host, first, LOOKUP_WAIT_MS) : first)
+    await unless(cut, scribe.hasAsked ? within(host, first, LOOKUP_WAIT_MS) : first)
+
+    // The turn ended meanwhile: its end asks for itself, and waits in full.
+    if (isStopped()) {
+      return false
+    }
+
     scribe.hasAsked = true
   }
 
-  if (scribe.identity === null || !scribe.isGranted) {
-    return
+  if (scribe.identity === null || !scribe.isGranted || isStopped()) {
+    return false
   }
 
-  await flush(host, scribe, who)
+  // What waits from earlier turns is a turn's end's to do.
+  if (!isInside) {
+    await flush(host, scribe, who)
+  }
 
   const now = await host.now()
   // What the developer decided without typing: an answer to a question put
@@ -2006,7 +2349,8 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   for (const act of seen.acts) {
     if (!scribe.acted.has(act.key)) {
       scribe.acted.add(act.key)
-      spoke(scribe, act.words.replace(/\s+/g, ' ').trim())
+      found.acts.push(act)
+      spoke(scribe, wordsOf(act))
       scribe.hasActed = true
     }
   }
@@ -2034,7 +2378,11 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     -MAX_PROPOSALS,
   )
 
-  if ((scribe.hasPrompt || scribe.hasActed) && isWorthAsking && mayWake(host, scribe, now)) {
+  if (
+    (scribe.hasPrompt || scribe.hasActed || scribe.hasAnsweredInTurn) &&
+    isWorthAsking &&
+    mayWake(host, scribe, now, isAnswered)
+  ) {
     scribe.wakingSince = now
     scribe.wakeTimes.push(now)
 
@@ -2092,7 +2440,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         ownRepos: new Map(mine.flatMap(one => (typeof one.repo === 'string' ? [[one.id, one.repo] as const] : []))),
         choices: seen.choices,
       }
-      const woken = await wake(host, {
+      const woken = await unless(cut, wake(host, {
         model: scribe.model,
         system: SYSTEM,
         fixed: [
@@ -2116,14 +2464,23 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         repo: judged.home ?? who.repo,
         shown,
         seen: judged,
-      })
+        ...(cut === undefined ? {} : { signal: cut }),
+      }))
 
-      if (woken.ending === 'verdict' && epoch === scribe.epoch) {
+      // A verdict that comes once the turn has ended is let go: the turn's end is reading these rows by then.
+      if (woken?.ending === 'verdict' && epoch === scribe.epoch && !isStopped()) {
         const before = scribe.written.length
+        const missed = missedBy(host)
+
+        for (const [id, fact] of scribe.anchored) {
+          found.anchored.set(id, fact)
+        }
 
         scribe.consumed = rows.length
         scribe.mark = markOf(rows.at(-1))
         scribe.hasPrompt = false
+        // What comes after the answer is the developer's turn too: its end is looked at as theirs.
+        scribe.hasAnsweredInTurn = isInside
         scribe.hasActed = false
         // Each commit is asked about once: the ones this look could be asked about are done with.
         scribe.commitsToPair = []
@@ -2137,19 +2494,25 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
           until: woken.startedAt + WAKE_DEADLINE_MS,
           seen: { ...judged, facts: woken.facts },
         })
-        scribe.past = [
-          ...scribe.past,
-          pastBlock(scribe.wakes, gist(seen.lines), summaryOf(woken.verdict, scribe.written.slice(before))),
-        ]
+        isWhole = !isInside || missedBy(host) === missed
 
-        // The oldest are folded into one line, in one piece, so the blocks
-        // that stay are read from the prompt cache until the next cut.
-        if (scribe.past.length > MAX_PAST) {
-          const gone = scribe.past.length - MAX_PAST / 2
+        // A look whose rows will be read again is not kept as one that was
+        // made. What it did write is on record, and listed as recorded.
+        if (isWhole) {
+          scribe.past = [
+            ...scribe.past,
+            pastBlock(scribe.wakes, gist(seen.lines), summaryOf(woken.verdict, scribe.written.slice(before))),
+          ]
 
-          scribe.past = scribe.past.slice(gone)
-          scribe.folded.wakes += gone
-          scribe.folded.block = foldedBlock(scribe.folded.wakes, scribe.recorded.length)
+          // The oldest are folded into one line, in one piece, so the blocks
+          // that stay are read from the prompt cache until the next cut.
+          if (scribe.past.length > MAX_PAST) {
+            const gone = scribe.past.length - MAX_PAST / 2
+
+            scribe.past = scribe.past.slice(gone)
+            scribe.folded.wakes += gone
+            scribe.folded.block = foldedBlock(scribe.folded.wakes, scribe.recorded.length)
+          }
         }
       }
     } finally {
@@ -2159,21 +2522,41 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     }
   }
 
+  // The turn ended meanwhile. What this look came to stands as it is, and
+  // what it wrote is shown. The commits it saw stay noted, and the look
+  // that comes next attaches them.
+  if (isStopped()) {
+    settle(host, scribe)
+
+    return isWhole
+  }
+
   // A commit made in this repository is attached to what the session
   // recorded: Scribe's records and Claude's own. Fylgja attaches it once.
-  for (const sha of seen.commits) {
-    if (!scribe.commits.has(sha)) {
-      scribe.commits.add(sha)
-      // A commit at the session's own root is its repository's; a session with none attaches none.
-      if (who.repo !== null) {
-        await call(host, scribe, 'attach_commit', { repo: who.repo, sha, session_id: who.sessionId }).catch(() => undefined)
-      }
+  // One whose call did not get to Fylgja stays noted for the next look. One
+  // that Fylgja did not answer in time is let go: it is not waited for twice.
+  for (const sha of scribe.toAttach) {
+    // A commit at the session's own root is its repository's; a session with none attaches none.
+    const isDone =
+      who.repo === null ||
+      (await call(host, scribe, 'attach_commit', { repo: who.repo, sha, session_id: who.sessionId }).then(
+        () => true,
+        (error: unknown) => error instanceof TimedOut,
+      ))
+
+    if (isDone) {
+      scribe.toAttach = scribe.toAttach.filter(one => one !== sha)
     }
   }
 
   settle(host, scribe)
-  await flush(host, scribe, who)
-  settle(host, scribe)
+
+  if (!isInside) {
+    await flush(host, scribe, who)
+    settle(host, scribe)
+  }
+
+  return isWhole
 }
 
 /** Keeps something the developer wrote or chose, for the session, within its length: the oldest go first. */
