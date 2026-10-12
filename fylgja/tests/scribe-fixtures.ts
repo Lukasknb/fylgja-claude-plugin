@@ -3,6 +3,7 @@ import { mock } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
 import type { Row } from '../hooks/scribe/delta'
+import { HEADLINES, NOTES } from '../hooks/scribe/view'
 import { ACCOUNT, answer, CONNECTED, idOf } from './fixtures'
 
 export const ROOT = '/work/repo'
@@ -13,6 +14,54 @@ export const SESSION_ID = 'c0ffee00-0000-4000-8000-000000000001'
 export const START = { surface: 'terminal', isInteractive: true, cwd: ROOT } as const
 
 export const NOTHING = '{"outcome":"nothing"}'
+
+const RECEIPTS: readonly [string, string][] = [
+  ['✓ Recorded', HEADLINES.created],
+  ['✓ Restored', HEADLINES.restored],
+  ['✓ Reason saved', HEADLINES.reasoned],
+  ['✓ Already recorded by someone else', HEADLINES.held],
+  ['✓ Updated', HEADLINES.updated],
+  ['✓ Withdrawn', HEADLINES.withdrawn],
+]
+
+/**
+ * The words of the card that holds `line`, as a test reads them off the
+ * band: Fylgja's name and what the card is, the line's own words, what the
+ * card says about being left alone, and then its keys. `line` is the card's
+ * rows and its keys alone, as `[1 Fix]`; which card it is, is told from how
+ * the line opens.
+ */
+export function carded(line: string): string {
+  // A field's own label reads as a key does; the keys begin after the field.
+  const at = line.startsWith(' [') ? line.indexOf('>') + 1 : line.indexOf(' [')
+  const rows = at === -1 ? line : line.slice(0, at)
+  const keys = at === -1 ? '' : line.slice(at)
+  const asks = (head: string, note: string): string => ` ᚠ fylgja asks ${head}${rows}${note}${keys}`
+
+  if (rows.startsWith('? Why: ')) {
+    return asks('why was this decided?', NOTES.reason)
+  }
+
+  if (rows.startsWith(' [Why]')) {
+    return asks('the reason, in your words', NOTES.field)
+  }
+
+  if (rows.startsWith(' [Fix]')) {
+    return asks('the record, as it should read', NOTES.field)
+  }
+
+  if (rows.startsWith('◆ ')) {
+    return `ᚠ fylgjahas a note on this code${rows}${NOTES.told}${keys}`
+  }
+
+  const head = RECEIPTS.find(([opening]) => rows.startsWith(`${opening} `))?.[1]
+
+  if (head === undefined) {
+    throw new Error(`no card is known to open with: ${rows.slice(0, 40)}`)
+  }
+
+  return `ᚠ fylgja${head}${rows}${NOTES.receipt}${keys}`
+}
 
 /** The band as the stand-in for Claude Code draws it when the plugin draws nothing there at all. */
 export const EMPTY = 'engine: AbovePrompt'

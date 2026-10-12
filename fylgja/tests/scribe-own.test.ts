@@ -3,7 +3,21 @@ import { describe, expect, test } from 'claude-code/testing'
 import { SYSTEM } from '../hooks/scribe/prompt'
 import { ACCOUNT_OPENERS, CONDITIONAL_OPENERS, DECISION_RULE, SHAPE_LIMITS, VERB_OPENERS } from '../hooks/scribe/shape'
 import { answer, idOf } from './fixtures'
-import { claude, decision, dev, edit, fact, NOTHING, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import {
+  carded,
+  claude,
+  decision,
+  dev,
+  edit,
+  fact,
+  NOTHING,
+  shown,
+  stage,
+  START,
+  turn,
+  use,
+  verdict,
+} from './scribe-fixtures'
 
 const FILE = 'src/queue/lock.ts'
 const FIRST = decision({
@@ -34,7 +48,7 @@ describe('Scribe keeps its own records of the session true', () => {
     expect(set.of('amend_memory')).toMatchObject([
       { atom_id: OWN, op: 'fix', content: SECOND.content, detail: SECOND.detail, reason_status: 'stated' },
     ])
-    expect(await shown($)).toMatch(`✓ Updated · ${SECOND.content} [1 Fix] [2 Remove]`)
+    expect(await shown($)).toBe(carded(`✓ Updated · ${SECOND.content} [1 Fix] [2 Remove] [9 What is this] [0 OK]`))
   })
 
   test('a decision that was dropped is taken back, and the receipt says so', async ($, on) => {
@@ -47,8 +61,8 @@ describe('Scribe keeps its own records of the session true', () => {
     await turn($, set, ...one('forget the lock altogether, the queue is single-consumer now'))
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'remove' }])
-    expect(await shown($), 'what is gone can be neither fixed nor removed; it can be put back').toMatch(
-      /^✓ Withdrawn · Use a Redis lock for the retry queue\. \[1 Put back\](?: \[9 What is this\])? \[0 OK\]$/,
+    expect(await shown($), 'what is gone can be neither fixed nor removed; it can be put back').toBe(
+      carded('✓ Withdrawn · Use a Redis lock for the retry queue. [1 Put back] [9 What is this] [0 OK]'),
     )
 
     await turn($, set, ...one('and one more routine change to the same file here'))

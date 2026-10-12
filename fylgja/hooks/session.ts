@@ -310,7 +310,12 @@ export function accountView(session: Session): View | undefined {
         : `account #${session.pinTail}`
       : nameOf(session.known)
 
+  const isArmed = !session.isTyping && session.acceptUntil !== 0
+
   return {
+    register: 'asks',
+    head: 'which account is this?',
+    note: 'Until you answer, the plugin stays out: nothing is looked up, and nothing is recorded.',
     rows: [
       {
         parts: [
@@ -329,9 +334,10 @@ export function accountView(session: Session): View | undefined {
           {
             key: 'account-accept',
             hotkey: '1',
-            label: session.acceptUntil === 0 ? 'Use this account from now on' : 'Press again to use this account',
+            label: isArmed ? 'Press again to use this account' : 'Use this account from now on',
+            ...(isArmed ? { isArmed: true as const } : {}),
           },
-          { key: 'account-later', hotkey: '0', label: 'Not now' },
+          { key: 'account-later', hotkey: '0', label: 'Not now', tone: 'quiet' as const },
         ],
   }
 }

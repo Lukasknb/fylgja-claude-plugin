@@ -123,7 +123,10 @@ describe('the account this machine is set up for', () => {
     await set.clock.settle()
 
     expect(await shown($)).toBe(
-      '? Fylgja is signed in as another account than this machine is set up for. Now: Eve Moneypenny (Rival) #090903 · before: account #010203 [1 Use this account from now on] [0 Not now]',
+      ' ᚠ fylgja asks which account is this?' +
+        '? Fylgja is signed in as another account than this machine is set up for. Now: Eve Moneypenny (Rival) #090903 · before: account #010203' +
+        'Until you answer, the plugin stays out: nothing is looked up, and nothing is recorded.' +
+        ' [1 Use this account from now on] [0 Not now]',
     )
 
     // A digit typed alone into an empty box presses this once.

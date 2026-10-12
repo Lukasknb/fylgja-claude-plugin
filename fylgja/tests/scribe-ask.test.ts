@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { NOTES } from '../hooks/scribe/view'
 import { answer, idOf } from './fixtures'
 import {
   band,
+  carded,
   claude,
   decision,
   dev,
@@ -26,7 +28,7 @@ const WHY = { form: 'reason', record: 0, options: ['One less service to run', 'R
 const ASKING = verdict({ records: [UNEXPLAINED], question: WHY })
 
 const QUESTION =
-  '? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Redis was flaky in CI] [3 Other] [4 No particular reason] [9 What is this] [0 Skip]'
+  carded('? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Redis was flaky in CI] [3 Other] [4 No particular reason] [9 What is this] [0 Skip]')
 
 const PRIOR = fact(5, { content: 'Use Redis with Redlock for the job queue.', anchors: [{ path: 'src/queue/lock.ts' }] })
 const REVERSAL = { form: 'reversal', record: 0, prior: idOf(5), options: ['One less service to run'] }
@@ -65,7 +67,7 @@ describe('Scribe asks why', () => {
       { atom_id: idOf(101), op: 'fix', detail: 'Redis was flaky in CI', reason_status: 'stated' },
     ])
     expect(await shown($)).toBe(
-      '✓ Reason saved · Use Postgres advisory locks for the job queue, not Redis. [1 Fix] [2 Remove] [0 OK]',
+      carded('✓ Reason saved · Use Postgres advisory locks for the job queue, not Redis. [1 Fix] [2 Remove] [0 OK]'),
     )
   })
 
@@ -107,7 +109,7 @@ describe('Scribe asks why', () => {
       await ui.press('other')
       await ui.redraw()
 
-      expect(await ui.text()).toBe(' [Why]<> [0 Cancel]')
+      expect(await ui.text()).toBe(carded(' [Why]<> [0 Cancel]'))
 
       await ui.enter('reason-text', typed)
 
@@ -223,7 +225,12 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
 
     expect(set.of('remember'), 'not written before the answer').toEqual([])
     expect(await shown($)).toBe(
-      '? This looks like it replaces a recorded decision.Now: Use Postgres advisory locks for the job queue, not Redis.Recorded: Use Redis with Redlock for the job queue. · 2026-09-12 [1 Yes, it replaces it] [2 No, tell Claude] [3 Different case] [9 What is this] [0 Skip]',
+      ' ᚠ fylgja asks does this replace an earlier decision?' +
+        '? This looks like it replaces a recorded decision.' +
+        '  Now: Use Postgres advisory locks for the job queue, not Redis.' +
+        '  Recorded: Use Redis with Redlock for the job queue. · 2026-09-12' +
+        NOTES.reversal +
+        ' [1 Yes, it replaces it] [2 No, tell Claude] [3 Different case] [9 What is this] [0 Skip]',
     )
   })
 
@@ -247,7 +254,7 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
 
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5), reason_status: 'not_stated' }])
     expect(await shown($)).toBe(
-      '? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Other] [3 No particular reason] [0 Skip]',
+      carded('? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Other] [3 No particular reason] [0 Skip]'),
     )
 
     await pressTwice($, 'no-reason')
@@ -316,7 +323,7 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
 
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5) }])
     expect(await shown($)).toBe(
-      '✓ Recorded · Use Postgres advisory locks for the job queue, not Redis. · replaces: Use Redis with Redlock for the job queue. [1 Fix] [2 Remove] [0 OK]',
+      carded('✓ Recorded · Use Postgres advisory locks for the job queue, not Redis. · replaces: Use Redis with Redlock for the job queue. [1 Fix] [2 Remove] [0 OK]'),
     )
   })
 

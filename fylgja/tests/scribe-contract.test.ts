@@ -4,9 +4,11 @@ import { codeOf, isRepoPath, teaches } from '../hooks/scribe/gate'
 import { anchorsOf } from '../hooks/scribe/repo'
 import { MAX_WAKES_PER_HOUR, refusalLine } from '../hooks/scribe/scribe'
 import { correctedOf, draftOf } from '../hooks/scribe/verdict'
+import { NOTES } from '../hooks/scribe/view'
 import { answer, idOf } from './fixtures'
 import {
   band,
+  carded,
   claude,
   decision,
   dev,
@@ -91,7 +93,8 @@ describe('a refusal that says what is wrong is used once', () => {
     await $.session.start(START)
     await turn($, set, ...TALK)
 
-    expect(await shown($)).toMatch('? Why: Use offset and limit to page /audit-log, not a cursor. [1 Clients jump to a page]')
+    expect(await shown($)).toMatch('? Why: Use offset and limit to page /audit-log, not a cursor.')
+    expect(await shown($)).toMatch(' [1 Clients jump to a page] [2 Simplest to build]')
 
     await pressTwice($, 'reason:0')
 
@@ -417,7 +420,7 @@ describe('a record another member already holds', () => {
       await turn($, set, ...TALK)
 
       expect(await shown($)).toBe(
-        '✓ Already recorded by someone else · Use Postgres advisory locks for the job queue, not Redis. [9 What is this] [0 OK]',
+        carded('✓ Already recorded by someone else · Use Postgres advisory locks for the job queue, not Redis. [9 What is this] [0 OK]'),
       )
       expect(set.of('amend_memory')).toEqual([])
     })
@@ -588,7 +591,7 @@ describe('where a record came from', () => {
 
     const opened = await shown($)
 
-    expect(opened).toMatch('In: src/queue/lock.tsFylgja record ab12cd34, written down by Claude [2 Tell Claude]')
+    expect(opened).toMatch(`  In: src/queue/lock.ts  Fylgja record ab12cd34, written down by Claude${NOTES.told} [2 Tell Claude]`)
     expect(opened).not.toMatch('Open where it came from')
 
     await press($, 'tell-claude')
@@ -605,7 +608,7 @@ describe('where a record came from', () => {
     await turn($, set, ...TALK)
     await press($, 'open')
 
-    expect(await shown($)).toMatch('Fylgja record 00000000, read out of a meeting or session [Open where it came from]')
+    expect(await shown($)).toMatch('Fylgja record 00000000, read out of a meeting or session   [Open where it came from]')
 
     await press($, 'tell-claude')
 

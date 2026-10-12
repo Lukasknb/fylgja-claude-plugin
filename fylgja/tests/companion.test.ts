@@ -5,6 +5,7 @@ import { markOf, RUNE } from '../hooks/companion'
 import { OFF_STATUS } from '../hooks/scribe/scribe'
 import { ACCOUNT, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
+  carded,
   claude,
   decision,
   dev,
@@ -431,8 +432,9 @@ describe('the mark and what else is shown', () => {
     await $.session.start(START)
     await turn($, set, ...WORK)
 
-    expect(await shown($)).toMatch(/^✓ Recorded/)
-    expect(await shown($)).not.toMatch(RUNE)
+    expect(await shown($), 'the card, which carries the name itself, and no mark under it').toBe(
+      carded('✓ Recorded · Use a Redis lock for the retry queue. [1 Fix] [2 Remove] [9 What is this] [0 OK]'),
+    )
 
     await press($, 'ok')
 

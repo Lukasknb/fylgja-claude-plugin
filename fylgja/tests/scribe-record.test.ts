@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { NOTES } from '../hooks/scribe/view'
 import { answer, idOf } from './fixtures'
 import {
   band,
+  carded,
   claude,
   decision,
   dev,
@@ -48,7 +50,7 @@ describe('Scribe records', () => {
       },
     ])
     expect(await shown($)).toBe(
-      '✓ Recorded · Use Postgres advisory locks for the job queue, not Redis. [1 Fix] [2 Remove] [9 What is this] [0 OK]',
+      carded('✓ Recorded · Use Postgres advisory locks for the job queue, not Redis. [1 Fix] [2 Remove] [9 What is this] [0 OK]'),
     )
     expect(set.asked[0]?.model).toBe('sonnet')
     expect(set.asked[0]?.effort).toBe('low')
@@ -205,7 +207,7 @@ describe('Scribe records', () => {
     await ui.press('fix:0')
     await ui.redraw()
 
-    expect(await ui.text()).toBe(' [Fix]<Use Postgres advisory locks for the job queue, not Redis.> [0 Cancel]')
+    expect(await ui.text()).toBe(carded(' [Fix]<Use Postgres advisory locks for the job queue, not Redis.> [0 Cancel]'))
 
     await ui.enter('fix-text', `Use ${'x'.repeat(230)}`)
 
@@ -215,7 +217,9 @@ describe('Scribe records', () => {
     await ui.enter('fix-text', 'Use Postgres advisory locks for the job queue.')
     await ui.redraw()
 
-    expect(await ui.text()).toMatch('✓ Recorded · Use Postgres advisory locks for the job queue. ')
+    expect(await ui.text()).toBe(
+      carded('✓ Recorded · Use Postgres advisory locks for the job queue. [1 Fix] [2 Remove] [9 What is this] [0 OK]'),
+    )
 
     expect(set.of('amend_memory')[0]).toEqual({
       atom_id: idOf(101),
@@ -285,13 +289,20 @@ describe('Scribe records', () => {
 
     const ui = await band($)
 
-    expect(await ui.text()).toBe('✓ Recorded 3 [1 Review] [9 What is this] [0 OK]')
+    expect(await ui.text()).toBe(carded('✓ Recorded 3 [1 Review] [9 What is this] [0 OK]'))
 
     await ui.press('review')
     await ui.redraw()
 
     expect(await ui.text()).toBe(
-      '✓ Recorded 3Use A. · src/queue/lock.ts [1 Fix] [2 Remove]Use B. · src/queue/lock.ts [3 Fix] [4 Remove]Use C. · src/queue/lock.ts [5 Fix] [6 Remove]Recorded to Acme as Ada Lovelace, profile Work [0 Close]',
+      'ᚠ fylgjawrote this down' +
+        '✓ Recorded 3' +
+        '  Use A. · src/queue/lock.ts [1 Fix] [2 Remove]' +
+        '  Use B. · src/queue/lock.ts [3 Fix] [4 Remove]' +
+        '  Use C. · src/queue/lock.ts [5 Fix] [6 Remove]' +
+        '  Recorded to Acme as Ada Lovelace, profile Work' +
+        NOTES.told +
+        ' [0 Close]',
     )
 
     await ui.press('remove:1')
@@ -300,7 +311,13 @@ describe('Scribe records', () => {
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(102), op: 'remove' }])
     expect(await ui.text()).toBe(
-      '✓ Recorded 2Use A. · src/queue/lock.ts [1 Fix] [2 Remove]Use C. · src/queue/lock.ts [3 Fix] [4 Remove]Recorded to Acme as Ada Lovelace, profile Work [0 Close]',
+      'ᚠ fylgjawrote this down' +
+        '✓ Recorded 2' +
+        '  Use A. · src/queue/lock.ts [1 Fix] [2 Remove]' +
+        '  Use C. · src/queue/lock.ts [3 Fix] [4 Remove]' +
+        '  Recorded to Acme as Ada Lovelace, profile Work' +
+        NOTES.told +
+        ' [0 Close]',
     )
   })
 
@@ -427,7 +444,7 @@ describe('Scribe records', () => {
     await turn($, set, ...TALK)
 
     expect(await shown($)).toBe(
-      '✓ Restored · Use Postgres advisory locks for the job queue, not Redis. [1 Fix] [2 Remove] [9 What is this] [0 OK]',
+      carded('✓ Restored · Use Postgres advisory locks for the job queue, not Redis. [1 Fix] [2 Remove] [9 What is this] [0 OK]'),
     )
 
     await pressTwice($, 'remove:0')

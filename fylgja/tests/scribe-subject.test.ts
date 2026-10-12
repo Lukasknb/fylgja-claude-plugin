@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { restates, wholeSentences } from '../hooks/scribe/loop'
 import { answer, idOf } from './fixtures'
 import {
+  carded,
   claude,
   decision,
   dev,
@@ -71,7 +72,7 @@ describe('a new decision is held against what is already recorded on its subject
 
     expect(set.of('remember').length).toBe(1)
     expect(set.of('remember')[0]?.supersedes).toBeUndefined()
-    expect(await shown($)).toMatch(/^✓ Recorded/)
+    expect(await shown($)).toMatch('✓ Recorded · ')
   })
 
   test('one that has nothing to do with what is recorded is written with no question', async ($, on) => {
@@ -385,7 +386,7 @@ describe('what the developer chose through a question', () => {
       'Use helper 3 for the build.',
       'Part 4 is built way A4, not way B4.',
     ])
-    expect(await shown($)).toMatch(/^✓ Recorded 7 /)
+    expect(await shown($)).toBe(carded('✓ Recorded 7 [1 Review] [9 What is this] [0 OK]'))
   })
 
   test('a record cannot claim to be a choice where the developer answered nothing, and no more choices count than were made', async ($, on) => {

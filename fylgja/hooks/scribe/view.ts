@@ -12,8 +12,12 @@ import type { Fact, Written } from './types'
 
 export type Part = { text: string; tone?: 'dim' | 'strong' | 'good' | 'mark' } | { link: string; label: string }
 
-/** A key of the band: the element's address, the digit that presses it, and its words. */
-export type Key = { key: string; hotkey: string; label: string }
+/**
+ * A key of the band: the element's address, the digit that presses it, and
+ * its words. A quiet key only puts the card away. An armed key was pressed
+ * once and acts when it is pressed again in time.
+ */
+export type Key = { key: string; hotkey: string; label: string; tone?: 'quiet'; isArmed?: true }
 
 /** The band's one-line field. */
 export type Field = {
@@ -26,7 +30,50 @@ export type Field = {
 
 export type Row = { parts: Part[]; keys?: Key[]; field?: Field }
 
-export type View = { rows: Row[]; keys: Key[] }
+/**
+ * What the card above the prompt holds, and which of two registers it is
+ * drawn in. One that asks is waiting for the person; one that tells is not,
+ * and must not look as if it were.
+ */
+export type View = {
+  rows: Row[]
+  keys: Key[]
+  register: 'asks' | 'tells'
+  /** What the card is, in a few words after Fylgja's name. */
+  head: string
+  /** What happens when the person does nothing, or how the card leaves. */
+  note?: string
+}
+
+/** What a card says while one of its keys waits for its second press. */
+export const ARMED_NOTE = 'again within five seconds and it is done. Nothing is changed until then.'
+
+/** The key of `view` that waits for its second press, if one does. */
+export function armedIn(view: View): Key | undefined {
+  return [...view.keys, ...view.rows.flatMap(row => row.keys ?? [])].find(key => key.isArmed === true)
+}
+
+const QUIET_KEYS: ReadonlySet<string> = new Set(['about', 'about-ok', 'cancel', 'dismiss', 'ok', 'skip'])
+
+/** Marks the keys that only put the card away, so they are drawn as the lesser ones. */
+function toned(view: View): View {
+  const quiet = (key: Key): Key => (QUIET_KEYS.has(key.key) ? { ...key, tone: 'quiet' } : key)
+
+  return {
+    ...view,
+    keys: view.keys.map(quiet),
+    rows: view.rows.map(row => (row.keys === undefined ? row : { ...row, keys: row.keys.map(quiet) })),
+  }
+}
+
+/** What each card says about being left alone: how it leaves, and what doing nothing comes to. */
+export const NOTES = {
+  receipt: 'Nothing to do. It goes by itself in a moment, or with your next prompt.',
+  told: 'Nothing to do. It goes with your next prompt.',
+  reason: 'Leave it and it goes with your next prompt. The decision stays recorded, without a reason.',
+  reversal: 'Leave it and it goes with your next prompt. The new decision is then recorded beside the old one.',
+  field: 'Enter saves it. Cancel leaves everything as it is.',
+} as const
 
 const MAX_CONTENT = 220
 const MAX_DETAIL = 600
@@ -116,6 +163,9 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
 
   if (!item.isOpen) {
     return {
+      register: 'tells',
+      head: 'has a note on this code',
+      note: NOTES.told,
       rows: [{ parts: headline(fact) }],
       keys: withAbout(band, [{ key: 'open', hotkey: '1', label: 'Open' }, ...rest]),
     }
@@ -130,6 +180,9 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
   )
 
   return {
+    register: 'tells',
+    head: 'has a note on this code',
+    note: NOTES.told,
     rows: [
       { parts: headline(fact) },
       ...why(fact),
@@ -158,6 +211,9 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
 function question(band: Band, item: Item & { kind: 'question' }): View {
   if (item.form === 'reversal') {
     return {
+      register: 'asks',
+      head: 'does this replace an earlier decision?',
+      note: NOTES.reversal,
       rows: [
         {
           parts: [
@@ -191,6 +247,9 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
   const options = item.options.map(option => drawn(option, MAX_OPTION)).filter(text => text !== '')
 
   return {
+    register: 'asks',
+    head: 'why was this decided?',
+    note: NOTES.reason,
     rows: [
       {
         parts: [mark('?'), { text: 'Why: ', tone: 'strong' }, { text: drawn(item.content, MAX_CONTENT) }],
@@ -216,9 +275,19 @@ const HEADS = {
   withdrawn: 'Withdrawn · ',
 } as const
 
+/** What a receipt's card says it is, after Fylgja's name. */
+export const HEADLINES = {
+  created: 'wrote this down',
+  restored: 'put this back',
+  reasoned: 'saved the reason',
+  held: 'found this already recorded',
+  updated: 'brought this up to date',
+  withdrawn: 'took this back',
+} as const
+
 /** A key that acts only when pressed twice: what it says before, and once it is waiting for the second press. */
 function twice(band: Band, key: string, hotkey: string, label: string, again: string): Key {
-  return { key, hotkey, label: band.armed?.key === armOf(band, key) ? again : label }
+  return band.armed?.key === armOf(band, key) ? { key, hotkey, label: again, isArmed: true } : { key, hotkey, label }
 }
 
 /** What one written record's line says: that it is new or back, its sentence, and what it replaced. */
@@ -238,6 +307,9 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
 
   if (shown.records.length === 1 && only !== undefined) {
     return {
+      register: 'tells',
+      head: HEADLINES[only.outcome],
+      note: NOTES.receipt,
       rows: [
         {
           parts: [mark('✓'), { text: HEADS[only.outcome], tone: 'good' }, ...written(only)],
@@ -262,6 +334,9 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
 
   if (!shown.isOpen) {
     return {
+      register: 'tells',
+      head: HEADLINES.created,
+      note: NOTES.receipt,
       rows: [head],
       keys: withAbout(band, [
         { key: 'review', hotkey: '1', label: 'Review' },
@@ -271,6 +346,9 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
   }
 
   return {
+    register: 'tells',
+    head: HEADLINES.created,
+    note: NOTES.told,
     rows: [
       head,
       ...shown.records.map((record, index) => ({
@@ -340,8 +418,16 @@ const ABOUT_ROWS: Row[] = [
  * @param destination the team, person and profile records go to, when known
  */
 export function viewOf(band: Band, isWorking: boolean, destination?: string): View | undefined {
+  const view = untoned(band, isWorking, destination)
+
+  return view === undefined ? undefined : toned(view)
+}
+
+function untoned(band: Band, isWorking: boolean, destination?: string): View | undefined {
   if (band.isAboutOpen) {
     return {
+      register: 'tells',
+      head: 'what Scribe is',
       rows: [
         ...ABOUT_ROWS,
         ...(destination === undefined ? [] : [{ parts: [{ text: `Records go to ${drawn(destination, MAX_OPTION)}.` }] }]),
@@ -372,6 +458,9 @@ export function viewOf(band: Band, isWorking: boolean, destination?: string): Vi
           }
 
     return {
+      register: 'asks',
+      head: band.editing.what === 'fix' ? 'the record, as it should read' : 'the reason, in your words',
+      note: NOTES.field,
       rows: [{ parts: [], field }],
       keys: [{ key: 'cancel', hotkey: '0', label: 'Cancel' }],
     }

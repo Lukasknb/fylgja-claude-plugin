@@ -1,6 +1,7 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
 import { destinationOf } from './account'
+import { cardOf } from './card'
 import { withGlyphs } from './citations'
 import * as Draft from './draft'
 import { restored } from './known'
@@ -16,7 +17,6 @@ import { drawn } from './plain'
 import { REFUSED, verdictFor } from './scribe/grant'
 import * as Scribe from './scribe/scribe'
 import type { ScribeHost } from './scribe/scribe'
-import type { Part } from './scribe/view'
 import * as Session from './session'
 import { referencesIn, rowTextOf } from './user-row'
 
@@ -143,17 +143,6 @@ function remark($: EngineInterface, session: Session.Session): void {
 // error may say "connection refused" or "access denied" and is not that.
 // Only whether it is one is read; the words go no further.
 const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
-
-const TONES: Readonly<Record<string, { color?: 'success' | 'inactive'; dimColor?: boolean; bold?: boolean }>> = {
-  dim: { dimColor: true },
-  strong: { bold: true },
-  good: { color: 'success' },
-  mark: { color: 'success' },
-}
-
-function toneOf(part: Part): { color?: 'success' | 'inactive'; dimColor?: boolean; bold?: boolean } {
-  return 'tone' in part && part.tone !== undefined ? (TONES[part.tone] ?? {}) : {}
-}
 
 /**
  * Fylgja inside Claude Code, quietly: it says when Fylgja needs sign-in, and
@@ -457,7 +446,8 @@ export function register(on: On, options: PluginOptions = {}): void {
       return next(e)
     }
 
-    const { Box, Button, Input, Link, Text } = $.ui.resolve(e)
+    const table = $.ui.resolve(e)
+    const { Box, Text } = table
 
     // One dim line under whatever is drawn beneath, which is passed on as
     // it came. It is text alone: no key, no field, nothing to focus, so a
@@ -465,48 +455,10 @@ export function register(on: On, options: PluginOptions = {}): void {
     if (shown === undefined) {
       return Box({ flexDirection: 'column', children: [await next(e), Text({ dimColor: true, children: [mark ?? ''] })] })
     }
-    const keys = (list: readonly { key: string; hotkey: string; label: string }[]) =>
-      list.map(key =>
-        Button({ key: key.key, label: key.label, hotkey: key.hotkey, plain: true, onPress: () => void presses.push(key.key) }),
-      )
 
-    return Box({
-      flexDirection: 'column',
-      children: [
-        ...shown.rows.map(row =>
-          Box({
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            columnGap: 2,
-            children: [
-              ...(row.field === undefined
-                ? [
-                    Text({
-                      children: row.parts.map(part =>
-                        'link' in part
-                          ? Link({ href: part.link, label: part.label })
-                          : Text({ ...toneOf(part), children: [part.text] }),
-                      ),
-                    }),
-                  ]
-                : [
-                    Input({
-                      key: row.field.key,
-                      label: row.field.label,
-                      value: row.field.value,
-                      placeholder: row.field.placeholder,
-                      submitLabel: row.field.submitLabel,
-                      // The person pressed the key that opens the field; typing goes there.
-                      autoFocus: true,
-                      onSubmit: value => void entries.push({ key: row.field?.key ?? '', value }),
-                    }),
-                  ]),
-              ...keys(row.keys ?? []),
-            ],
-          }),
-        ),
-        Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: keys(shown.keys) }),
-      ],
+    return cardOf(table, shown, e.props.bodyColumns, {
+      press: key => void presses.push(key),
+      submit: (key, value) => void entries.push({ key, value }),
     })
   })
 

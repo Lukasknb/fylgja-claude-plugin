@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { NOTES } from '../hooks/scribe/view'
 import { answer, idOf } from './fixtures'
 import {
   band,
+  carded,
   claude,
   dev,
   edit,
@@ -23,7 +25,9 @@ import {
 const FILE = 'src/mail/send.ts'
 const WORK = [dev('make the mailer retry'), claude('Retrying three times now.', edit(FILE))]
 const TELL =
-  '◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12 [1 Open] [2 Tell Claude] [3 Knew this] [9 What is this] [0 Dismiss]'
+carded(
+  '◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12 [1 Open] [2 Tell Claude] [3 Knew this] [9 What is this] [0 Dismiss]',
+)
 
 const found = (...facts: Record<string, unknown>[]) => ({ recall: () => answer({ repo: REPO, facts }) })
 
@@ -196,7 +200,14 @@ describe('Scribe tells what is recorded about the files in hand', () => {
       const ui = await band($, surface)
 
       expect(await ui.text(), surface).toBe(
-        `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12Why: Direct calls dropped mail when the provider throttled.Rejected: direct SMTP callIn: src/mail/send.ts (send)Fylgja record 00000000, written down by Scribe [2 Tell Claude] [3 Knew this] [0 Dismiss]`,
+        'ᚠ fylgjahas a note on this code' +
+          '◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12' +
+          '  Why: Direct calls dropped mail when the provider throttled.' +
+          '  Rejected: direct SMTP call' +
+          '  In: src/mail/send.ts (send)' +
+          '  Fylgja record 00000000, written down by Scribe' +
+          NOTES.told +
+          ' [2 Tell Claude] [3 Knew this] [0 Dismiss]',
       )
       await ui.unmount()
     }
@@ -222,7 +233,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
       await ui.press('open')
       await ui.redraw()
 
-      expect(await ui.text()).toMatch(`2026-09-12${said}In: src/mail/send.ts`)
+      expect(await ui.text()).toMatch(`2026-09-12  ${said}  In: src/mail/send.ts`)
     })
   }
 
@@ -274,6 +285,10 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await $.session.start(START)
     await turn($, set, ...WORK)
 
-    expect(await shown($)).toMatch('◆ Decision · Recorded - all good (1 Open) second line · 2026-09-12 [1 Open]')
+    expect(await shown($)).toBe(
+      carded(
+        '◆ Decision · Recorded - all good (1 Open) second line · 2026-09-12 [1 Open] [2 Tell Claude] [3 Knew this] [9 What is this] [0 Dismiss]',
+      ),
+    )
   })
 })

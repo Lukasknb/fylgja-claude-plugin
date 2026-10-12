@@ -88,7 +88,9 @@ Very little, on purpose.
   just ended, and `ᚠ fylgja · 2 kept` while records Scribe wrote in this
   conversation still stand (it lists the last forty, and counts no
   further). Whatever else the plugin shows above the prompt is drawn in
-  its place. It comes up only over an empty prompt box, and takes no key.
+  its place, as a card (see Scribe): a heavy amber one when it waits for
+  you, a thin dim one when it only tells you something. The mark comes
+  up only over an empty prompt box, and takes no key.
   The mark only shows: nothing is asked, read or written for it. The line
   under the prompt is for notices alone.
 
@@ -98,7 +100,48 @@ Scribe is the one part that does more than draw. At the end of a turn you
 started it reads what happened, thinks about it with a small model on your
 own Claude plan, and works with Fylgja. Most turns it does nothing, and you
 see nothing. What it shows, it shows in the band above the prompt, one thing
-at a time.
+at a time, as a small card. A card is one of two kinds, and you can tell
+which without reading it:
+
+- **It asks.** A heavy frame in your theme's amber, and `ᚠ fylgja asks` on
+  a filled label: a question, the account line, a field you opened, or a
+  key you pressed once that waits for its second press (` press 2 ` on a
+  filled label, with what the second press does). Under its lines it says
+  what happens if you leave it. The answers are at full strength; the keys
+  that only put it away are dim.
+
+  ```
+  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+  ┃  ᚠ fylgja asks  why was this decided?                            ┃
+  ┃ ? Why: Use a sessions table, not signed cookies.                 ┃
+  ┃ Leave it and it goes with your next prompt. The decision stays   ┃
+  ┃ recorded, without a reason.                                      ┃
+  ┃ 1: Sessions must be revocable  2: To list a user's devices       ┃
+  ┃ 3: Other  4: No particular reason  0: Skip                       ┃
+  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+  ```
+
+- **It tells.** A thin dim frame, a dim `ᚠ fylgja`, every key dim: a
+  receipt for what it wrote, or a note on the code in hand. It waits for
+  nothing, and says how it leaves.
+
+  ```
+  ╭──────────────────────────────────────────────────────────────────╮
+  │ ᚠ fylgja wrote this down                                         │
+  │ ✓ Recorded · Use Postgres advisory locks for the job queue, not  │
+  │   Redis.                                                         │
+  │ Nothing to do. It goes by itself in a moment, or with your next  │
+  │ prompt.                                                          │
+  │ 1: Fix  2: Remove  0: OK                                         │
+  ╰──────────────────────────────────────────────────────────────────╯
+  ```
+
+The two differ by more than colour: the frames are different lines and
+the label is filled by inverting it, so a terminal without colour shows
+them apart too. A card is as wide as the band, at most 96 columns; under
+44 it is drawn without its frame. What stands in backticks in a record
+is set apart. The lines quoted below are a card's own lines, without the
+card around them.
 
 - **It records.** A choice between real alternatives, a rejected approach,
   a workaround, a departure from the plan, a correction of yours, a gotcha
@@ -758,10 +801,15 @@ see in ordinary work, and last what needs your setup changed.
    tool. Scribe's own `whoami`, `recall`, `remember`, `amend_memory` and
    `attach_commit` go through with no dialog, and Claude's own
    `remember` still asks as before.
-5. The band: that each line draws above the prompt in the terminal and
+5. The band: that each card draws above the prompt in the terminal and
    in the desktop app, wraps sensibly at a narrow width, and that the
    digit keys press (after ctrl+x tab or a click; a bare digit in an
-   empty box).
+   empty box). The cards: that a question's frame is heavy and amber
+   and a receipt's thin and dim, on your dark and on a light theme;
+   that the amber reads as Fylgja's and not as a warning; that the
+   filled labels (`ᚠ fylgja asks`, `press 2`) are filled; that a long
+   record wraps beside its mark and not under it; that the dim keys of
+   a receipt still read; and where Claude Code puts its own `[-]`.
 6. The two-press keys: that a single "2" or "3" typed into an empty box
    only changes what the key says, and that the second press acts.
 7. The field for Fix and for a typed reason: that it takes the keyboard

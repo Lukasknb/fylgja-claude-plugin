@@ -338,7 +338,7 @@ describe('before anybody is asked why, the reason is looked for in what the deve
       detail: 'support has to be able to jump straight to page 40 of the audit log',
       reason_status: 'stated',
     })
-    expect(await shown($), 'a receipt, and no question').toMatch(/^✓ Recorded/)
+    expect(await shown($), 'a receipt, and no question').toMatch('✓ Recorded · ')
     expect(await shown($)).not.toMatch('? Why')
   })
 
