@@ -35,7 +35,7 @@ export const MAX_CARD = 96
 /** Below this width a frame costs more than it gives: the card is drawn without one. */
 export const MIN_FRAMED = 44
 
-type Table = Pick<Elements['terminal'], 'Box' | 'Button' | 'Input' | 'Link' | 'Text'>
+export type Table = Pick<Elements['terminal'], 'Box' | 'Button' | 'Input' | 'Link' | 'Text'>
 
 /** What the card's controls do: each only notes what was pressed or entered. */
 export type Acts = {
@@ -75,7 +75,7 @@ function spans(t: Table, text: string): (RenderElement | string)[] {
     .map(piece => (piece.startsWith('`') && piece.length > 2 ? t.Text({ color: 'suggestion', children: [piece] }) : piece))
 }
 
-function partOf(t: Table, part: Part, isAsking: boolean): RenderElement {
+export function partOf(t: Table, part: Part, isAsking: boolean): RenderElement {
   if ('link' in part) {
     return t.Link({ href: part.link, label: part.label })
   }

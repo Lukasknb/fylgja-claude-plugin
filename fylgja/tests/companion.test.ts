@@ -86,7 +86,7 @@ describe('the mark as it reads', () => {
 })
 
 describe('the mark above the prompt', () => {
-  test('it rests there once the account is the pinned one: one dim line under what is drawn beneath, and no key', async ($, on) => {
+  test('it rests there once the account is the pinned one: one dim line under what is drawn beneath, with no hotkey and no focus of its own', async ($, on) => {
     const set = stage(on)
 
     await $.session.start(START)
@@ -95,9 +95,13 @@ describe('the mark above the prompt', () => {
     const drawing = JSON.stringify(await ui.drawn())
 
     expect(await ui.find({ type: 'Text', text: 'engine: AbovePrompt' }), 'what is beneath is passed on as it came').toBeDefined()
-    expect((await ui.find({ type: 'Text', text: MARK }))?.props).toEqual({ dimColor: true })
-    expect(drawing, 'nothing to press, type into or follow').not.toMatch(/"type":"(?:Button|Input|Link)"/)
-    expect(drawing).not.toMatch(/onPress|hotkey|autoFocus|color"/)
+    // Drawn without chrome and dim, it reads as the line of text it was; a press on it is the one thing it takes.
+    const marks = await ui.findAll({ type: 'Button' })
+
+    expect(marks.map(mark => [mark.props?.key, mark.text])).toEqual([['kept', MARK]])
+    expect(marks[0]?.props).toMatchObject({ plain: true, dimColor: true })
+    expect(drawing, 'nothing to type into or follow').not.toMatch(/"type":"(?:Input|Link)"/)
+    expect(drawing, 'no digit or letter presses it, and it never takes the focus by itself').not.toMatch(/hotkey|autoFocus|color"/)
 
     await ui.unmount()
     await set.clock.advance(60_000)
@@ -114,7 +118,7 @@ describe('the mark above the prompt', () => {
 
     const desktop = await $.ui.mount({ ...BAND, surface: 'desktop' } as never)
 
-    expect((await desktop.find({ type: 'Text', text: MARK }))?.props).toEqual({ dimColor: true })
+    expect((await desktop.find({ type: 'Button', text: MARK }))?.props).toMatchObject({ key: 'kept', plain: true, dimColor: true })
 
     await desktop.unmount()
   })

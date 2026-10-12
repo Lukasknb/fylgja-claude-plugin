@@ -244,24 +244,31 @@ export function armOf(band: Band, key: string): string {
   return record === undefined ? key : `remove:${record.id}`
 }
 
-/**
- * Whether `key`, one that writes to Fylgja or settles something for good,
- * may act now: only on its second press in a row, within `ARM_MS` of the
- * first. The first press changes nothing but what the key says. A digit
- * typed alone into an empty prompt box presses a key of the band, and a
- * question comes up just when a developer may be answering Claude with
- * "1": so no single press may ever write, replace, remove or silence.
- */
-export function confirmed(band: Band, key: string, now: number): boolean {
-  const arm = armOf(band, key)
-  const isSecond = band.armed?.key === arm && now <= band.armed.until
+/** What holds a key that waits for its second press: the band, or the window of what was kept. */
+export type Arming = { armed: Armed | null }
 
-  band.armed = isSecond ? null : { key: arm, until: now + ARM_MS }
+/**
+ * Whether the key armed as `arm`, one that writes to Fylgja or settles
+ * something for good, may act now: only on its second press in a row, within
+ * `ARM_MS` of the first. The first press changes nothing but what the key
+ * says. A digit typed alone into an empty prompt box presses a key of the
+ * band, and a question comes up just when a developer may be answering
+ * Claude with "1": so no single press may ever write, replace, remove or
+ * silence.
+ */
+export function confirmedIn(holder: Arming, arm: string, now: number): boolean {
+  const isSecond = holder.armed?.key === arm && now <= holder.armed.until
+
+  holder.armed = isSecond ? null : { key: arm, until: now + ARM_MS }
 
   return isSecond
 }
 
-/** The counts that belong to a session, to carry over a conversation that started over within it. */
+/** Whether `key` of the band may act now; see `confirmedIn`. */
+export function confirmed(band: Band, key: string, now: number): boolean {
+  return confirmedIn(band, armOf(band, key), now)
+}
+
 export type Tally = Pick<Band, 'told' | 'asked' | 'questions' | 'unanswered'>
 
 export function tallyOf(band: Band): Tally {

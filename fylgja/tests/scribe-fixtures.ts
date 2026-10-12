@@ -501,10 +501,16 @@ function words(node: unknown, into: string[]): void {
   if (typeof node === 'string') {
     into.push(node)
   } else if (typeof node === 'object' && node !== null) {
-    const { props, children } = node as { props?: { label?: unknown; hotkey?: unknown; value?: unknown }; children?: unknown }
+    const { props, children } = node as {
+      props?: { label?: unknown; hotkey?: unknown; value?: unknown; plain?: unknown; key?: unknown }
+      children?: unknown
+    }
 
     if (typeof props?.label === 'string') {
-      into.push(typeof props.hotkey === 'string' ? ` [${props.hotkey} ${props.label}]` : ` [${props.label}]`)
+      // The mark is a key drawn without chrome and without a hotkey: on screen it is its words alone.
+      const isBare = props.plain === true && props.hotkey === undefined && props.key === 'kept'
+
+      into.push(typeof props.hotkey === 'string' ? ` [${props.hotkey} ${props.label}]` : isBare ? props.label : ` [${props.label}]`)
     }
 
     if (typeof props?.value === 'string') {

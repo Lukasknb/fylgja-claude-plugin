@@ -21,6 +21,7 @@ import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain
 import type { Offer, Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
+import * as Ledger from './ledger'
 import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
 import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
 import type { LoopHost, Proposal } from './loop'
@@ -124,6 +125,8 @@ export type Scribe = {
   /** Undefined until asked for; null when Scribe is off for this session. */
   identity: Identity | null | undefined
   band: Band.Band
+  /** The window of what was kept: whether it is open, what is selected in it, and what was removed and can be put back. */
+  ledger: Ledger.Ledger
   /** The counts of the session a conversation started over in, to pick up again if it is the same session. */
   carry: { sessionId: string; tally: Band.Tally } | undefined
   plans: Plans.Plans
@@ -357,6 +360,7 @@ export function create(options: Options): Scribe {
     isInteractive: false,
     identity: undefined,
     band: Band.create(),
+    ledger: Ledger.create(),
     carry: undefined,
     plans: Plans.create(),
     prompts: new Set(),
@@ -433,6 +437,8 @@ export function startOver(scribe: Scribe): void {
   scribe.epoch += 1
   scribe.identity = undefined
   scribe.band = { ...Band.create(), kept }
+  // The records it listed were the conversation's before. Whether it is open is Claude Code's to say, and is not changed here.
+  scribe.ledger = { ...Ledger.create(), isOpen: scribe.ledger.isOpen }
   scribe.plans = Plans.create()
   scribe.prompts.clear()
   scribe.hasPrompt = false
@@ -480,6 +486,11 @@ export function doing(scribe: Scribe): Doing | undefined {
   return scribe.identity === null || scribe.identity === undefined
     ? undefined
     : { isReading: scribe.wakingSince !== 0, kept: scribe.written.length }
+}
+
+/** Whether Scribe is known not to run in this conversation: switched off, or its session not one it works in. */
+export function isOff(scribe: Scribe): boolean {
+  return scribe.identity === null || !scribe.options.isOn
 }
 
 /** A session began: whether a person is at it, and whether it draws where the band is. */
@@ -1259,11 +1270,14 @@ async function written(
  * decision as it now stands. What the receipt shows, or undefined when
  * Fylgja did not take the change. A question still waiting about that
  * record's reason goes once the reason is there.
+ *
+ * @param isByHand the developer asked for the change with a key: any record
+ *   of the session that stands may be rewritten then, and is theirs after
  */
-async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<Written | undefined> {
+async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft, isByHand = false): Promise<Written | undefined> {
   const own = scribe.written.find(one => one.id === draft.updates)
 
-  if (own === undefined || !scribe.mine.has(own.id)) {
+  if (own === undefined || (!isByHand && !scribe.mine.has(own.id))) {
     return undefined
   }
 
@@ -1308,18 +1322,26 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft): Promise<
     Band.withdrawQuestion(scribe.band, own.id)
   }
 
+  if (isByHand) {
+    touched(scribe, own.id)
+  }
+
   return now
 }
 
 /**
  * Takes back one of Scribe's own records of this session, because the
  * decision it held was dropped. What the receipt shows, or undefined when
- * it is not Scribe's or Fylgja did not remove it.
+ * it is not Scribe's or Fylgja did not remove it. A record taken back is
+ * noted for the window of what was kept, where it can be put back.
+ *
+ * @param isByHand the developer asked for it with a key: any record of the
+ *   session that stands may be taken back then
  */
-async function takeBack(host: ScribeHost, scribe: Scribe, id: string): Promise<Written | undefined> {
+async function takeBack(host: ScribeHost, scribe: Scribe, id: string, isByHand = false): Promise<Written | undefined> {
   const own = scribe.written.find(one => one.id === id)
 
-  if (own === undefined || !scribe.mine.has(id)) {
+  if (own === undefined || (!isByHand && !scribe.mine.has(id))) {
     return undefined
   }
 
@@ -1342,7 +1364,11 @@ async function takeBack(host: ScribeHost, scribe: Scribe, id: string): Promise<W
   scribe.recorded = scribe.recorded.filter(one => one.id !== id)
   Band.withdrawQuestion(scribe.band, id)
 
-  return { ...own, outcome: 'withdrawn', replaced: null }
+  const gone: Written = { ...own, outcome: 'withdrawn', replaced: null }
+
+  Ledger.shelve(scribe.ledger, gone)
+
+  return gone
 }
 
 /**
@@ -2701,22 +2727,33 @@ async function pressedReceipt(host: ScribeHost, scribe: Scribe, key: string): Pr
     scribe.written = scribe.written.filter(one => one.id !== written.id)
     touched(scribe, written.id)
     band.receipt = shown.records.length === 0 ? null : shown
-    await amend(host, scribe, { atom_id: written.id, op: 'remove' })
+
+    // Only a record Fylgja took out can be put back: one whose removal failed, or waits to be tried again, is not offered.
+    if (await amend(host, scribe, { atom_id: written.id, op: 'remove' })) {
+      Ledger.shelve(scribe.ledger, { ...written, outcome: 'withdrawn', replaced: null })
+    }
   } else if (action === 'putback' && written?.outcome === 'withdrawn') {
-    await putBack(host, scribe, shown, written)
+    const back = await putBack(host, scribe, written)
+
+    if (back === undefined) {
+      host.toast('The record could not be put back.')
+    } else {
+      shown.records = shown.records.map(one => (one === written ? back : one))
+    }
   }
 }
 
 /**
- * Puts back a record Scribe took back: it is sent again as it was, and
+ * Puts back a record that was taken out: it is sent again as it was, and
  * Fylgja restores the one it removed. From then on it is the developer's:
- * Scribe does not take it back a second time.
+ * Scribe does not take it back a second time. The record as it stands
+ * again, or undefined when Fylgja did not take it.
  */
-async function putBack(host: ScribeHost, scribe: Scribe, shown: Band.Receipt, gone: Written): Promise<void> {
+async function putBack(host: ScribeHost, scribe: Scribe, gone: Written): Promise<Written | undefined> {
   const who = scribe.identity
 
   if (who === null || who === undefined) {
-    return
+    return undefined
   }
 
   const sent = await send(host, scribe, who, {
@@ -2734,16 +2771,23 @@ async function putBack(host: ScribeHost, scribe: Scribe, shown: Band.Receipt, go
   })
 
   if (sent.written === undefined) {
-    host.toast('The record could not be put back.')
-
-    return
+    return undefined
   }
 
   touched(scribe, sent.written.id)
-  // Back as it was; where another member holds the same record, theirs is shown as theirs.
-  const back: Written = sent.written.outcome === 'held' ? sent.written : { ...sent.written, outcome: 'restored' }
+  scribe.ledger.gone = scribe.ledger.gone.filter(one => one.id !== gone.id)
 
-  shown.records = shown.records.map(one => (one === gone ? back : one))
+  // Back as it was; where another member holds the same record, theirs is shown as theirs.
+  if (sent.written.outcome === 'held') {
+    return sent.written
+  }
+
+  const back: Written = { ...sent.written, outcome: 'restored' }
+
+  // Among the session's records it reads as put back too, whatever id Fylgja gave it.
+  scribe.written = scribe.written.map(one => (one.id === back.id ? back : one))
+
+  return back
 }
 
 async function pressedTell(host: ScribeHost, scribe: Scribe, item: Band.Tell, key: string): Promise<void> {
@@ -2774,6 +2818,10 @@ async function reasoned(
   touched(scribe, item.id)
 
   if (await amend(host, scribe, { atom_id: item.id, op: 'fix', ...answer })) {
+    // The record as the session holds it has the reason from here on: what the window shows, and what is put back.
+    scribe.written = scribe.written.map(one =>
+      one.id === item.id ? { ...one, reasonStatus: answer.reason_status, detail: answer.detail ?? one.detail } : one,
+    )
     Band.receive(scribe.band, [
       {
         id: item.id,
@@ -2864,6 +2912,33 @@ function needsSecondPress(key: string): boolean {
   return key === 'knew' || key === 'off' || key === 'replaces' || key === 'no-reason' || /^(?:remove|reason|putback):/.test(key)
 }
 
+/**
+ * Whether the key armed as `arm` is on its second press and may act. The
+ * first press only makes the key say what a second will do, for a few
+ * seconds. It is no sign of attention either: a stray digit is exactly what
+ * it guards against.
+ *
+ * @param holder the band or the window of what was kept, whichever the key is in
+ */
+async function isSecondPress(host: ScribeHost, scribe: Scribe, holder: Band.Arming, arm: string): Promise<boolean> {
+  if (Band.confirmedIn(holder, arm, await host.now())) {
+    return true
+  }
+
+  const { armed } = holder
+
+  host.after(Band.ARM_MS, () => {
+    // A band or a window of a conversation that has since started over is not this timer's.
+    if ((scribe.band === holder || scribe.ledger === holder) && holder.armed === armed) {
+      holder.armed = null
+      host.redraw()
+    }
+  })
+  host.redraw()
+
+  return false
+}
+
 /** A key of the band was pressed. */
 export async function pressed(host: ScribeHost, scribe: Scribe, key: string): Promise<void> {
   const { band } = scribe
@@ -2874,20 +2949,7 @@ export async function pressed(host: ScribeHost, scribe: Scribe, key: string): Pr
   }
 
   if (needsSecondPress(key)) {
-    if (!Band.confirmed(band, key, await host.now())) {
-      const { armed } = band
-
-      // The first press only makes the key say what a second will do, for a
-      // few seconds. It is no sign of attention either: a stray digit is
-      // exactly what it guards against.
-      host.after(Band.ARM_MS, () => {
-        if (scribe.band === band && band.armed === armed) {
-          band.armed = null
-          host.redraw()
-        }
-      })
-      host.redraw()
-
+    if (!(await isSecondPress(host, scribe, band, Band.armOf(band, key)))) {
       return
     }
   } else {
@@ -2978,4 +3040,208 @@ export async function entered(host: ScribeHost, scribe: Scribe, key: string, val
 /** What the band shows now; undefined for nothing, and always while Scribe is off. */
 export function view(scribe: Scribe, isWorking: boolean, destination?: string): View | undefined {
   return scribe.identity === null || scribe.identity === undefined ? undefined : viewOf(scribe.band, isWorking, destination)
+}
+
+/**
+ * What the window of what was kept shows now, laid out for `columns` cells.
+ *
+ * @param rows how many rows the window has room for
+ * @param isFocused whether the window has the keys
+ * @param isHere whether Fylgja is here for the account this machine is set up for
+ */
+export function ledger(scribe: Scribe, columns: number, rows: number, isFocused: boolean, isHere: boolean): Ledger.View {
+  Ledger.tidy(scribe.written, scribe.ledger)
+
+  return Ledger.viewOf(
+    scribe.written,
+    scribe.ledger,
+    columns,
+    isFocused,
+    !isHere ? 'signed-out' : isOff(scribe) ? 'off' : undefined,
+    rows,
+  )
+}
+
+/** The rows of the window of what was kept, in the order they are listed. */
+export function ledgerEntries(scribe: Scribe): Ledger.Entry[] {
+  Ledger.tidy(scribe.written, scribe.ledger)
+
+  return Ledger.entriesOf(scribe.written, scribe.ledger)
+}
+
+/** A record a receipt on the band holds is brought up to what it has become, so the band and the window say the same. */
+function shownAs(band: Band.Band, now: Written): void {
+  const same = (one: Written): Written => (one.id === now.id ? now : one)
+
+  band.held = band.held.map(same)
+
+  if (band.receipt !== null) {
+    band.receipt.records = band.receipt.records.map(same)
+  }
+}
+
+/**
+ * One change to the record `id`, made for the window: no second one is
+ * started for that record while this one is on its way to Fylgja, so a key
+ * held down, or pressed again before the answer, asks once. Whether it ran.
+ */
+async function alone(host: ScribeHost, ledger: Ledger.Ledger, id: string, change: () => Promise<void>): Promise<boolean> {
+  if (ledger.busy.has(id)) {
+    return false
+  }
+
+  ledger.busy.add(id)
+  host.redraw()
+
+  try {
+    await change()
+  } finally {
+    ledger.busy.delete(id)
+  }
+
+  return true
+}
+
+/**
+ * A key of the window of what was kept was pressed: a row, which selects
+ * its record and brings up what can be done with it, or one of those keys.
+ * Removing a record and putting one back act on their second press, as the
+ * band's keys that settle something for good do. Each change is made by the
+ * one way Scribe has to make it, and waited for: a change Fylgja did not
+ * take is said in the record's row, and the row stays as it was.
+ */
+export async function ledgerPressed(host: ScribeHost, scribe: Scribe, key: string): Promise<void> {
+  const { ledger } = scribe
+  const at = key.indexOf(':')
+  const action = at === -1 ? key : key.slice(0, at)
+  const id = at === -1 ? '' : key.slice(at + 1)
+
+  if (action === 'row' || action === 'cancel') {
+    if (action === 'row') {
+      Ledger.rest(ledger, id)
+      ledger.acting = id
+    }
+
+    ledger.editing = undefined
+    ledger.armed = null
+    host.redraw()
+
+    return
+  }
+
+  // A change to this record is on its way: the key does nothing until it is answered, and arms nothing.
+  if (scribe.identity === null || scribe.identity === undefined || ledger.busy.has(id)) {
+    return
+  }
+
+  if (needsSecondPress(key)) {
+    if (!(await isSecondPress(host, scribe, ledger, key))) {
+      return
+    }
+  } else {
+    ledger.armed = null
+  }
+
+  // The record a key belongs to is the selected one, and stays it whatever becomes of it.
+  ledger.selected = id
+  ledger.acting = id
+  ledger.trouble.delete(id)
+
+  if (action === 'reword' && scribe.written.some(one => one.id === id)) {
+    ledger.editing = id
+  } else if (action === 'remove') {
+    await alone(host, ledger, id, async () => {
+      const gone = await takeBack(host, scribe, id, true)
+
+      if (gone === undefined) {
+        ledger.trouble.set(id, Ledger.TROUBLE.remove)
+      } else {
+        shownAs(scribe.band, gone)
+      }
+    })
+  } else if (action === 'putback') {
+    await alone(host, ledger, id, async () => {
+      const gone = ledger.gone.find(one => one.id === id)
+      const back = gone === undefined ? undefined : await putBack(host, scribe, gone)
+
+      if (back === undefined) {
+        ledger.trouble.set(id, Ledger.TROUBLE.putback)
+      } else {
+        // Fylgja may give it back under another id; the selection follows the record.
+        ledger.selected = back.id
+        ledger.acting = back.id
+        shownAs(scribe.band, back)
+      }
+    })
+  }
+
+  // The count the mark shows follows what stands.
+  host.mark()
+  host.redraw()
+}
+
+/**
+ * The window's field was left without Enter: the sentence stays as it is.
+ * Whether a field was open.
+ */
+export function ledgerLeftField(scribe: Scribe): boolean {
+  const wasOpen = scribe.ledger.editing !== undefined
+
+  scribe.ledger.editing = undefined
+
+  return wasOpen
+}
+
+/**
+ * Enter was pressed in the window's field: the selected record's sentence
+ * as it should read. It is rewritten in place, the way Scribe rewrites a
+ * record of its own, with nothing but the sentence changed.
+ */
+export async function ledgerEntered(host: ScribeHost, scribe: Scribe, value: string): Promise<void> {
+  const { ledger } = scribe
+  const id = ledger.editing
+  const own = scribe.written.find(one => one.id === id)
+  const text = value.replace(/\s+/g, ' ').trim()
+
+  if (scribe.identity === null || scribe.identity === undefined || id === undefined || ledger.busy.has(id)) {
+    return
+  }
+
+  ledger.editing = undefined
+
+  if (text === '' || text.length > MAX_CONTENT) {
+    ledger.trouble.set(id, Ledger.TROUBLE.length)
+  } else if (own === undefined) {
+    ledger.trouble.set(id, Ledger.TROUBLE.reword)
+  } else if (text !== own.content) {
+    await alone(host, ledger, id, async () => {
+      const now = await rewrite(
+        host,
+        scribe,
+        {
+          kind: own.kind,
+          content: text,
+          // Only the sentence is sent: a part the change does not send stays as it was.
+          detail: '',
+          alternatives: [],
+          anchors: own.anchors ?? [],
+          triggers: own.triggers ?? [],
+          reasonStatus: own.reasonStatus,
+          supersedes: null,
+          repo: own.repo ?? null,
+          updates: own.id,
+        },
+        true,
+      )
+
+      if (now === undefined) {
+        ledger.trouble.set(id, Ledger.TROUBLE.reword)
+      } else {
+        ledger.trouble.delete(id)
+        shownAs(scribe.band, now)
+      }
+    })
+  }
+
+  host.redraw()
 }

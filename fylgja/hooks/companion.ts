@@ -5,10 +5,11 @@ import { drawn } from './plain'
  * is here, and that it is working for the account this machine is set up
  * for. The line under the prompt is for notices, and the mark is none.
  *
- * It only shows. Nothing is asked of Fylgja or of a model for it, nothing is
- * read or written, it takes no key and runs no timer: it is worked out from
- * what the plugin already holds, when something the plugin already handles
- * happens.
+ * Nothing is asked of Fylgja or of a model for it, nothing is read or
+ * written, and it runs no timer: it is worked out from what the plugin
+ * already holds, when something the plugin already handles happens. It can
+ * be pressed, which opens the window of what was kept, and no digit or
+ * letter presses it: what is typed is the person's text.
  */
 
 /** What Scribe is at, as far as the mark says it. */

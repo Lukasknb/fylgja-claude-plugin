@@ -244,11 +244,12 @@ describe('what the plugin hooks', () => {
   const READS = ['search', 'open', 'get_meeting', 'get_project', 'get_timeline', 'get_commitments', 'recall', 'resolve']
   const WRITES = ['remember', 'save_knowledge', 'restructure', 'review_suggestion', 'define_term', 'amend_memory', 'attach_commit']
 
-  test('it draws in the transcript at three places only, at a tool row only for a write’s result, and above the prompt', () => {
+  test('it draws in the transcript at three places only, at a tool row only for a write’s result, above the prompt, and in its one window', () => {
     const drawing = hooked().filter(hook => hook.event === 'ui.render')
     const components = drawing.map(hook => (hook.matcher as { component?: unknown } | undefined)?.component)
 
-    expect(components).toEqual(['UserMessage', 'AssistantMessage', 'ToolResult', 'AbovePrompt'])
+    expect(components).toEqual(['UserMessage', 'AssistantMessage', 'ToolResult', 'AbovePrompt', 'Pane'])
+    expect(drawing[4]?.matcher, 'the one pane it draws is its own').toEqual({ component: 'Pane', requestId: 'fylgja-kept' })
 
     const tool = (drawing[2]?.matcher as { props: { tool: RegExp } }).props.tool
 
@@ -267,11 +268,37 @@ describe('what the plugin hooks', () => {
     }
   })
 
-  test('it hooks the prompt box, the prompt as sent, the permission check, a turn’s steps and end and its own keys: no tool call, and nothing that rewrites the conversation', () => {
+  test('it hooks the prompt box, the prompt as sent, the permission check, a turn’s steps and end, its own command, its own keys and its own window: no tool call, and nothing that rewrites the conversation', () => {
     expect(
       hooked()
         .map(hook => hook.event)
         .filter(event => event !== 'ui.render'),
-    ).toEqual(['session.start', 'classic.SessionStart', 'prompt.edit', 'prompt.submit', 'tool.check', 'turn.step', 'turn.complete', 'ui.press', 'ui.input'])
+    ).toEqual([
+      'session.start',
+      'command.run',
+      'classic.SessionStart',
+      'prompt.edit',
+      'prompt.submit',
+      'tool.check',
+      'turn.step',
+      'turn.complete',
+      'ui.press',
+      'ui.input',
+      'ui.press',
+      'ui.input',
+      'ui.focus',
+      'ui.scroll',
+      'ui.close',
+    ])
+
+    // Everything hooked for the window names that window, and the command hooked is the plugin's own.
+    const own = hooked().filter(hook => ['command.run', 'ui.focus', 'ui.scroll', 'ui.close'].includes(hook.event))
+
+    expect(own.map(hook => hook.matcher)).toEqual([
+      { command: 'fylgja-kept' },
+      { component: 'Pane', requestId: 'fylgja-kept' },
+      { component: 'Pane', requestId: 'fylgja-kept' },
+      { id: 'fylgja-kept' },
+    ])
   })
 })

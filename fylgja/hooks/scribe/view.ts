@@ -75,9 +75,9 @@ export const NOTES = {
   field: 'Enter saves it. Cancel leaves everything as it is.',
 } as const
 
-const MAX_CONTENT = 220
+export const MAX_CONTENT = 220
 const MAX_DETAIL = 600
-const MAX_OPTION = 80
+export const MAX_OPTION = 80
 
 const ABOUT: Key = { key: 'about', hotkey: '9', label: 'What is this' }
 
@@ -99,18 +99,22 @@ function withAbout(band: Band, keys: Key[]): Key[] {
   return band.offersAbout ? [...keys.slice(0, -1), ABOUT, ...keys.slice(-1)] : keys
 }
 
-function headline(fact: Fact): Part[] {
-  const kind = Object.hasOwn(KINDS, fact.kind) ? (KINDS[fact.kind] ?? 'Record') : 'Record'
+/** What a kind of record is called where one is drawn; `Record` for a kind this build does not know. */
+export function kindName(kind: string): string {
+  return Object.hasOwn(KINDS, kind) ? (KINDS[kind] ?? 'Record') : 'Record'
+}
 
+function headline(fact: Fact): Part[] {
   return [
     mark(glyphOf('decision')),
-    { text: `${kind} · `, tone: 'strong' },
+    { text: `${kindName(fact.kind)} · `, tone: 'strong' },
     { text: drawn(fact.content, MAX_CONTENT) },
     ...(fact.date === null ? [] : [{ text: ` · ${fact.date}`, tone: 'dim' } as const]),
   ]
 }
 
-function why(fact: Fact): Row[] {
+/** A record's reason as it is said where the record is opened: the reason, or that there is none and whether anybody was asked. */
+export function why(fact: Pick<Fact, 'kind' | 'detail' | 'reasonStatus'>): Row[] {
   const detail = drawn(fact.detail, MAX_DETAIL)
 
   // A decision nobody could give a reason for says so; it is a finding, and

@@ -6,6 +6,7 @@ import { withGlyphs } from './citations'
 import * as Draft from './draft'
 import { restored } from './known'
 import type { Host } from './host'
+import { ledgerOf, PANE, rowKey, TITLE } from './ledger'
 import { briefly, called, close, line, LINE_WAIT_MS, open, passed, serve, SHORT_WAIT_MS } from './live'
 import type { Line, Live } from './live'
 import { flush, want } from './lookups'
@@ -15,6 +16,7 @@ import { isLeftToPlugin } from './project'
 import { receiptOf } from './receipts'
 import { drawn } from './plain'
 import { REFUSED, verdictFor } from './scribe/grant'
+import * as Ledger from './scribe/ledger'
 import * as Scribe from './scribe/scribe'
 import type { ScribeHost } from './scribe/scribe'
 import * as Session from './session'
@@ -167,6 +169,87 @@ function remark($: EngineInterface, session: Session.Session): void {
   Session.remark(hostOf($, session), session)
 }
 
+/** The mark's own key: pressing the mark opens the window of what was kept. */
+const MARK_KEY = 'kept'
+
+/** How long after the mark opened the window the keys are asked for again: long enough for the band to be drawn without the mark. */
+const HANDOVER_MS = 60
+
+/** The window is asked to open no shorter and no taller than this, above the prompt. */
+const MIN_ROWS = 6
+const MAX_ROWS = 18
+
+/** What the window holds beside one row a record: its title, the selected record opened, and the line of keys. */
+const ROWS_AROUND = 8
+
+/**
+ * Opens the window of what was kept, or brings it the keys when it is open.
+ * The keys are asked for, not taken: where the prompt box holds text or a
+ * dialog is up, Claude Code keeps them and the window is shown all the same.
+ * Escape closes it. It holds back nobody's toasts.
+ */
+async function openLedger($: EngineInterface, scribe: Scribe.Scribe): Promise<void> {
+  const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, Scribe.ledgerEntries(scribe).length + ROWS_AROUND))
+
+  scribe.ledger.isOpen = true
+
+  try {
+    const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true, closeOnEscape: true, rows })
+
+    // Open, and no surface draws it: the person asked for it and sees nothing, so they are told why,
+    // and it is not left waiting to come up later by itself.
+    if (!opened.isPlaced) {
+      $.ui.toast(drawn(`Fylgja: the window cannot be shown here. ${opened.reason}`, MAX_LINE))
+      await closeLedger($, scribe)
+    }
+  } catch {
+    // Not opened: nothing is drawn, and the next press asks again.
+    scribe.ledger.isOpen = false
+    $.ui.toast('Fylgja: the window could not be opened here.')
+  }
+
+  // While it is open the mark is text, and a key again when it is not.
+  $.ui.invalidate('ui.render')
+}
+
+/** Closes the window of what was kept. */
+async function closeLedger($: EngineInterface, scribe: Scribe.Scribe): Promise<void> {
+  Ledger.closed(scribe.ledger)
+  // The mark is a key again.
+  $.ui.invalidate('ui.render')
+
+  try {
+    await $.ui.close({ id: PANE })
+  } catch {
+    // Kept open by another plugin's hook: it is theirs to say, and the next press closes it.
+    scribe.ledger.isOpen = true
+  }
+}
+
+/**
+ * Puts the window's focus ring where the window now is, once it has been
+ * drawn again: on the selected record's row, or, while that record's keys
+ * are up, on the key that waits for its second press or else the first of
+ * them. The row is brought into view. Only a window that holds the keys has
+ * a ring to move; any other is left as it is.
+ */
+function ring($: EngineInterface, scribe: Scribe.Scribe): void {
+  const selected = Ledger.selectedIn(Scribe.ledgerEntries(scribe), scribe.ledger)
+  const { acting, armed, editing } = scribe.ledger
+
+  if (selected === undefined || editing !== undefined) {
+    return
+  }
+
+  const id = selected.record.id
+  const key = acting === id ? (armed?.key ?? Ledger.actionKeys(id, selected.isGone)[0] ?? rowKey(id)) : rowKey(id)
+
+  $.clock.after(0, () => {
+    void $.ui.focus({ requestId: PANE, key }).catch(() => undefined)
+    void $.ui.scroll({ in: PANE, to: { key } }).catch(() => undefined)
+  })
+}
+
 // How the engine words a call of a plugin's that it did not let through:
 // `<plugin>: $.mcp.call(<server>, <tool>) refused: <why>`. A server's own
 // error may say "connection refused" or "access denied" and is not that.
@@ -197,6 +280,10 @@ const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
  * reads what happened, asks its own model, and writes to Fylgja. It runs
  * beside the conversation and never in it: nothing it reads, asks or writes
  * is added to what Claude reads, and no prompt waits for it.
+ *
+ * What Scribe kept in the session is listed in a window the developer
+ * opens, by pressing the mark above the prompt or with `/fylgja-kept`. It
+ * never opens by itself, and it draws from what the plugin already holds.
  */
 export function register(on: On, options: PluginOptions = {}): void {
   const session = Session.create()
@@ -209,6 +296,9 @@ export function register(on: On, options: PluginOptions = {}): void {
   // own handlers took them; the hook on the press does the work.
   const presses: string[] = []
   const entries: { key: string; value: string }[] = []
+  // The same for the window of what was kept.
+  const picks: string[] = []
+  const lines: string[] = []
   // The calls to Fylgja of a look that outlived the hook it began in.
   const calls = line<Caller>()
 
@@ -235,8 +325,23 @@ export function register(on: On, options: PluginOptions = {}): void {
       remark($, session)
     }
 
+    // The way to the window of what was kept for a terminal that reports no clicks.
+    try {
+      await $.command.register({ name: 'fylgja-kept', description: 'Show what Fylgja kept in this session', immediate: true })
+    } catch {
+      // The mark still opens it.
+    }
+
     return started
   }).catch(($, e, next) => next(e))
+
+  // Typed by the developer, so the window opens. It answers with no line of
+  // its own: a command's line is read by Claude, and the window says it all.
+  on('command.run', { command: 'fylgja-kept' }, async $ => {
+    await openLedger($, scribe)
+
+    return {}
+  })
 
   // A cleared, resumed or branched conversation starts over without a fresh
   // session start: what was known is dropped, and the rows that are still
@@ -246,6 +351,12 @@ export function register(on: On, options: PluginOptions = {}): void {
     Session.revet(session)
     Draft.startOver(draft)
     Scribe.startOver(scribe)
+
+    // What the window listed was the conversation's before.
+    if (scribe.ledger.isOpen) {
+      await closeLedger($, scribe)
+    }
+
     $.ui.invalidate('ui.render')
 
     const started = await next(e)
@@ -509,13 +620,26 @@ export function register(on: On, options: PluginOptions = {}): void {
     }
 
     const table = $.ui.resolve(e)
-    const { Box, Text } = table
+    const { Box, Button, Text } = table
 
     // One dim line under whatever is drawn beneath, which is passed on as
-    // it came. It is text alone: no key, no field, nothing to focus, so a
-    // digit typed into an empty prompt box is the person's text as ever.
+    // it came. It reads as text and can be pressed, with a click or from
+    // the band's own focus: that opens the window of what was kept. It has
+    // no hotkey and asks for no focus, so a digit or a letter typed into an
+    // empty prompt box is the person's text as ever. While Scribe is off
+    // there is nothing to open, and it is text alone. So it is while the
+    // window is open: the window has its own way out, and with no key in
+    // the band the keys go to the window and ctrl+x tab finds it first.
     if (shown === undefined) {
-      return Box({ flexDirection: 'column', children: [await next(e), Text({ dimColor: true, children: [mark ?? ''] })] })
+      return Box({
+        flexDirection: 'column',
+        children: [
+          await next(e),
+          Scribe.isOff(scribe) || scribe.ledger.isOpen
+            ? Text({ dimColor: true, children: [mark ?? ''] })
+            : Button({ key: MARK_KEY, plain: true, dimColor: true, onPress: () => void presses.push(MARK_KEY), children: [mark ?? ''] }),
+        ],
+      })
     }
 
     return cardOf(table, shown, e.props.bodyColumns, {
@@ -530,7 +654,25 @@ export function register(on: On, options: PluginOptions = {}): void {
     const pressed = await next(e)
     const key = presses.shift()
 
-    if (key !== undefined) {
+    if (key === MARK_KEY && scribe.ledger.isOpen) {
+      await closeLedger($, scribe)
+    } else if (key === MARK_KEY) {
+      // Opened here, where the person's press is being answered, so it is
+      // placed at any width. The press left the keys with the band, and a
+      // window is not given them while an element of the band holds them.
+      // With the window open the mark is drawn as text, so the band has
+      // nothing left to hold them with: once it has been drawn so, the
+      // window is asked again, and gets them.
+      await openLedger($, scribe)
+
+      if (scribe.ledger.isOpen) {
+        $.clock.after(HANDOVER_MS, () => {
+          if (scribe.ledger.isOpen) {
+            void openLedger($, scribe).finally(() => ring($, scribe))
+          }
+        })
+      }
+    } else if (key !== undefined) {
       const live = open()
 
       try {
@@ -544,6 +686,11 @@ export function register(on: On, options: PluginOptions = {}): void {
       } finally {
         close(live)
         remark($, session)
+      }
+
+      // Scribe was turned off with a key: the window has nothing left to list.
+      if (scribe.ledger.isOpen && Scribe.isOff(scribe)) {
+        await closeLedger($, scribe)
       }
     }
 
@@ -568,5 +715,138 @@ export function register(on: On, options: PluginOptions = {}): void {
     }
 
     return entered
+  }).catch(($, e, next) => next(e))
+
+  // The window of what was kept, in the pane Claude Code frames and places.
+  // It is drawn from what the plugin holds, so it follows Scribe: a record
+  // kept while it is open is listed when the band is next asked to draw.
+  on('ui.render', { component: 'Pane', requestId: PANE }, ($, e, next) => {
+    if (e.surface !== 'terminal' && e.surface !== 'desktop') {
+      return next(e)
+    }
+
+    const { bodyColumns, isFocused } = e.props
+    const shown = Scribe.ledger(scribe, bodyColumns, e.props.scroll.bodyRows, isFocused, session.isHere)
+
+    return ledgerOf($.ui.resolve(e), shown, bodyColumns, isFocused, {
+      press: key => void picks.push(key),
+      submit: (key, value) => void lines.push(value),
+    })
+  })
+
+  // A key of the window. As in the band, the element's own handler only
+  // notes which; the work is done here, where a call to Fylgja is this
+  // plugin's own to make. The window's keys are its own: a key of the band
+  // is the band's, whether the window is open or not.
+  on('ui.press', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const pressed = await next(e)
+    const key = picks.shift()
+
+    if (key !== undefined) {
+      const live = open()
+
+      try {
+        await Scribe.ledgerPressed(scribeHostOf($, session, live), scribe, key)
+      } catch {
+        // The press is done with.
+      } finally {
+        close(live)
+        remark($, session)
+      }
+
+      ring($, scribe)
+    }
+
+    return pressed
+  }).catch(($, e, next) => next(e))
+
+  on('ui.input', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const entered = await next(e)
+    const value = lines.shift()
+
+    if (value !== undefined) {
+      const live = open()
+
+      try {
+        await Scribe.ledgerEntered(scribeHostOf($, session, live), scribe, value)
+      } catch {
+        // The line is done with.
+      } finally {
+        close(live)
+        remark($, session)
+      }
+
+      ring($, scribe)
+    }
+
+    return entered
+  }).catch(($, e, next) => next(e))
+
+  // The arrows move the ring from row to row, and the record under it is the
+  // selected one: a move the person makes onto a row lets go of whatever was
+  // half done. The ring on anything but a key that waits for its second
+  // press ends that wait.
+  on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const moved = await next(e)
+
+    if (moved.deny === undefined) {
+      const isOntoRow = e.origin.kind === 'person' && e.element?.startsWith('row:') === true
+      const isChanged = isOntoRow ? Ledger.rest(scribe.ledger, (e.element ?? '').slice(4)) : Ledger.ringed(scribe.ledger, e.element)
+
+      if (isChanged) {
+        $.ui.invalidate('ui.render')
+
+        // What was under the ring may be gone from the drawing now: the ring is seated on the row again.
+        if (isOntoRow) {
+          ring($, scribe)
+        }
+      }
+    }
+
+    return moved
+  }).catch(($, e, next) => next(e))
+
+  // A scroll key in a window taller than its room moves the selection, and
+  // the window follows it: an arrow a row, a page key a page of rows, Home
+  // and End to the ends. The wheel moves the window alone, as does a key
+  // once the selection is at its end, so what lies past the rows is reached.
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, ($, e, next) => {
+    if (e.origin.kind !== 'person' || e.pointer !== undefined || scribe.ledger.editing !== undefined || e.by === 0) {
+      return next(e)
+    }
+
+    const far = Math.abs(e.by)
+    const rows = far >= e.contentRows ? Number.MAX_SAFE_INTEGER : far > 1 ? Math.max(1, e.bodyRows - 1) : 1
+
+    if (Ledger.step(Scribe.ledgerEntries(scribe), scribe.ledger, Math.sign(e.by) * rows) === undefined) {
+      return next(e)
+    }
+
+    $.ui.invalidate('ui.render')
+    ring($, scribe)
+
+    return {}
+  }).catch(($, e, next) => next(e))
+
+  // Closed by the person, with Escape or Claude Code's own mark, or by the
+  // plugin: either way the window is no longer open, and the next press of
+  // the mark opens it. With the field open, the person's close only leaves
+  // the field: the window stays, and is asked the keys again, which Escape
+  // handed back to the prompt.
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    if (e.origin.kind === 'person' && Scribe.ledgerLeftField(scribe)) {
+      $.ui.invalidate('ui.render')
+      $.clock.after(0, () => void openLedger($, scribe).then(() => ring($, scribe)))
+
+      return { value: undefined }
+    }
+
+    const closed = await next(e)
+
+    Ledger.closed(scribe.ledger)
+    // The mark is a key again.
+    $.ui.invalidate('ui.render')
+
+    return closed
   }).catch(($, e, next) => next(e))
 }

@@ -90,9 +90,27 @@ Very little, on purpose.
   further). Whatever else the plugin shows above the prompt is drawn in
   its place, as a card (see Scribe): a heavy amber one when it waits for
   you, a thin dim one when it only tells you something. The mark comes
-  up only over an empty prompt box, and takes no key.
-  The mark only shows: nothing is asked, read or written for it. The line
-  under the prompt is for notices alone.
+  up only over an empty prompt box, and no digit or letter presses it.
+  Nothing is asked, read or written for it. The line under the prompt is
+  for notices alone.
+- A window that lists what Scribe kept in this conversation, when you ask
+  for it: click the mark, or type `/fylgja-kept` where the terminal reports
+  no clicks. It never opens by itself. One row a record, newest first; the
+  selected one is opened to its reason, what was ruled out and the files
+  it concerns. It takes keys only while it is open and has them, and none
+  of its keys is a letter or a digit: what you type is a prompt and goes
+  to the prompt box. The arrows go from record to record. Enter on a
+  record brings up what can be done with it, `[ Reword ]` and
+  `[ Remove ]`, or `[ Put back ]` on a removed one; the arrows move
+  between them and Enter presses. Remove and Put back act on a second
+  Enter, and a move away ends the wait. Everything can be clicked too. A
+  change Fylgja did not take is said in the record's row, which stays as
+  it was. Escape leaves the field, then closes the window; so do Claude
+  Code's own `✕` on the frame and `/clear`. While it is open the mark is
+  plain text, so the keys have nowhere to go but the window. Without the
+  keys the window says how it is given them (ctrl+x tab). The band's cards
+  and their digit keys are as they are without it. With Scribe off the
+  mark is plain text and the command's window says so in one line.
 
 ## Scribe
 
