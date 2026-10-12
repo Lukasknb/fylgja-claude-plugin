@@ -15,6 +15,7 @@ import { decorationsOf } from './paint'
 import { isLeftToPlugin } from './project'
 import { receiptOf } from './receipts'
 import { drawn } from './plain'
+import { BLOCK } from './scribe/carry'
 import { REFUSED, verdictFor } from './scribe/grant'
 import * as Ledger from './scribe/ledger'
 import * as Scribe from './scribe/scribe'
@@ -169,6 +170,20 @@ function remark($: EngineInterface, session: Session.Session): void {
   Session.remark(hostOf($, session), session)
 }
 
+/**
+ * Brings the mark up to date, and with it the context of a compacted
+ * conversation when a record it lists was removed or reads differently now:
+ * the context is asked for again, and lists the records as they stand.
+ */
+function refresh($: EngineInterface, session: Session.Session, scribe: Scribe.Scribe): void {
+  remark($, session)
+
+  if (Scribe.isStale(scribe, session.isHere)) {
+    scribe.noted = undefined
+    $.ui.invalidate('prompt.context')
+  }
+}
+
 /** The mark's own key: pressing the mark opens the window of what was kept. */
 const MARK_KEY = 'kept'
 
@@ -263,7 +278,7 @@ const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
  * draws pasted references, links to records and the rare write as what they
  * are.
  *
- * Nothing is added to what Claude reads and no prompt is made to wait. A
+ * Nothing is added to the conversation and no prompt is made to wait. A
  * reference pasted into the prompt box is shown there as a short chip, and
  * the one hook that sees a prompt on its way to Claude puts the reference
  * back exactly as it was pasted. That hook only works on the text in hand:
@@ -282,6 +297,13 @@ const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
  * reads what happened, asks its own model, and writes to Fylgja. It runs
  * beside the conversation and never in it: nothing it reads, asks or writes
  * is added to what Claude reads, and no prompt waits for it.
+ *
+ * The one exception is a conversation that was compacted. The summary that
+ * takes its place may or may not hold what was decided in it, so from then
+ * on the records Scribe kept in the session are listed in the context
+ * Claude Code gives Claude with the conversation, as one block of the
+ * plugin's own (see `scribe/carry.ts`). Nothing is added to the
+ * conversation for it, and the summary is left as Claude Code made it.
  *
  * What Scribe kept in the session is listed in a window the developer
  * opens, by pressing the mark above the prompt or with `/fylgja-kept`. It
@@ -324,7 +346,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       await briefly(host.after, flush(host, session, true), SHORT_WAIT_MS)
     } finally {
       close(live)
-      remark($, session)
+      refresh($, session, scribe)
     }
 
     // The way to the window of what was kept for a terminal that reports no clicks.
@@ -352,6 +374,13 @@ export function register(on: On, options: PluginOptions = {}): void {
     Session.startOver(session)
     Session.revet(session)
     Draft.startOver(draft)
+
+    // The context of a compacted conversation listed its records; the one that begins now lists none.
+    if (scribe.noted !== undefined) {
+      scribe.noted = undefined
+      $.ui.invalidate('prompt.context')
+    }
+
     Scribe.startOver(scribe)
 
     // What the window listed was the conversation's before.
@@ -370,10 +399,85 @@ export function register(on: On, options: PluginOptions = {}): void {
       await briefly(host.after, flush(host, session), SHORT_WAIT_MS)
     } finally {
       close(live)
-      remark($, session)
+      refresh($, session, scribe)
     }
 
     return started
+  }).catch(($, e, next) => next(e))
+
+  // The main conversation is compacted: by the developer, by Claude Code at
+  // its threshold, or by another plugin. What comes of it is handed on
+  // exactly as it came, summary and rows, whatever happens here.
+  //
+  // Scribe's records, their count on the mark and the window stay: they are
+  // the session's. The rows Scribe has not looked at yet are held and read
+  // by its next look. They are not looked at here, because a look asks a
+  // model and the compaction would wait for the answer. From here on the
+  // context of the conversation lists what the session kept, and it is
+  // asked for again so that the first request after the compaction has it.
+  // No toast, no line and no change to the band says any of this.
+  //
+  // A summary made ahead of time puts nothing in the conversation yet: the
+  // compaction that uses it comes through here again. A subagent compacting
+  // its own conversation is not the session's.
+  //
+  // The hook is for a conversation that holds a message. One that holds none
+  // (commands alone) has nothing to hold back, and Claude Code refuses an
+  // empty list handed down the chain, so such a compaction is not taken up
+  // at all: a list is matched when one of its items is.
+  on('session.compact', { trigger: ['manual', 'auto', 'plugin'], messages: { role: /^(?:user|assistant)$/ } }, async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      return next(e)
+    }
+
+    const live = open()
+    let before: Scribe.Compacting | undefined
+
+    try {
+      before = await Scribe.compacting(scribeHostOf($, session, live), scribe, e.messages)
+    } catch {
+      // Compacted as it would have been without the plugin.
+    }
+
+    try {
+      const done = await next(e)
+
+      try {
+        // Called off, the conversation is as it was, and so is everything held of it.
+        if (before !== undefined && done.skip === undefined) {
+          Scribe.compacted(scribeHostOf($, session, live), scribe, before, done.messages)
+          $.ui.invalidate('prompt.context')
+        }
+      } catch {
+        // The compaction stands as it came; the next look begins at the developer's last prompt.
+      }
+
+      return done
+    } finally {
+      close(live)
+    }
+  }).catch(($, e, next) => next(e))
+
+  // The context Claude Code gives Claude with a conversation, asked for once
+  // per conversation and again after a compaction or a `/clear`. In a
+  // conversation that was compacted it gains one block, the records Scribe
+  // kept in the session, after everything that is already there. Claude
+  // Code frames it as it frames its own blocks. Before the first compaction,
+  // signed out, with Scribe off and in a session that kept nothing there is
+  // no such block, and whatever comes from beneath is handed on as it came.
+  on('prompt.context', async ($, e, next) => {
+    const below = await next(e)
+    const live = open()
+
+    try {
+      const text = await Scribe.context(scribeHostOf($, session, live), scribe)
+
+      return text === undefined ? below : { ...below, blocks: [...below.blocks.filter(block => block.name !== BLOCK), { name: BLOCK, text }] }
+    } catch {
+      return below
+    } finally {
+      close(live)
+    }
   }).catch(($, e, next) => next(e))
 
   on('prompt.edit', async ($, e, next) => {
@@ -537,7 +641,7 @@ export function register(on: On, options: PluginOptions = {}): void {
           .catch(() => undefined)
           .then(() => Scribe.stepping(scribeHostOf($, session, live, calls), scribe))
           .catch(() => undefined)
-          .finally(() => remark($, session))
+          .finally(() => refresh($, session, scribe))
       }
 
       const stepped = yield* next(e)
@@ -594,7 +698,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     } finally {
       close(live)
       // The look at the turn's end has ended by here, however it ended.
-      remark($, session)
+      refresh($, session, scribe)
     }
 
     return done
@@ -687,7 +791,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         // The press is done with.
       } finally {
         close(live)
-        remark($, session)
+        refresh($, session, scribe)
       }
 
       // Scribe was turned off with a key: the window has nothing left to list.
@@ -712,7 +816,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         // The line is done with.
       } finally {
         close(live)
-        remark($, session)
+        refresh($, session, scribe)
       }
     }
 
@@ -759,7 +863,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         // The press is done with.
       } finally {
         close(live)
-        remark($, session)
+        refresh($, session, scribe)
       }
 
       ring($, scribe)
@@ -781,7 +885,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         // The line is done with.
       } finally {
         close(live)
-        remark($, session)
+        refresh($, session, scribe)
       }
 
       ring($, scribe)

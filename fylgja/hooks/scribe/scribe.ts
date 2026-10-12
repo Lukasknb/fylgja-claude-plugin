@@ -17,6 +17,7 @@ import type { Doing } from '../companion'
 import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
 import * as Band from './band'
+import { carried, listedOf, saidOf } from './carry'
 import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain } from './delta'
 import type { Offer, Row } from './delta'
 import { factsOf, isAnchoredTo, knownReposIn } from './facts'
@@ -138,6 +139,24 @@ export type Scribe = {
   consumed: number
   /** The last row a wake went through, so rows that were rewritten under it are noticed. */
   mark: string | undefined
+  /**
+   * The rows a compaction took out of the conversation before any look had
+   * been through them, oldest first: the next look reads them ahead of the
+   * rows it finds. At most `MAX_HELD`, the newest.
+   */
+  held: readonly Row[]
+  /** How many times the conversation was compacted: a look that was under way across one knows by it. */
+  compactions: number
+  /** Whether this conversation has been compacted: only then is there anything to carry over. */
+  hasCompacted: boolean
+  /**
+   * The rows the last compaction left, each as its mark, in order, until a
+   * look has been through them: what the rows that came after are told
+   * from, however many rows the engine has put among them.
+   */
+  seam: readonly string[] | undefined
+  /** The records the context last listed for Claude, each with the words it was quoted in; undefined when it listed none. */
+  noted: readonly [string, string][] | undefined
   /** When the wake under way began; 0 with none under way. */
   wakingSince: number
   /** When each wake of the last hour began. */
@@ -350,6 +369,10 @@ const MAX_LOOKUP_PATHS = 30
 const MAX_DEFERRED = 10
 const MAX_LISTED = 40
 const MAX_PROMPTS = 100
+/** How many rows a compaction took away unread are held for the next look: far more than a turn has. */
+export const MAX_HELD = 600
+/** Said in the debug log when rows held for the next look were let go for their number; the count follows. */
+export const HELD_DROPPED = 'Scribe: rows compacted away before it looked at them were let go for their number, none of them written or chosen by the developer:'
 const FLUSH_BUDGET_MS = 20_000
 const PROBE = 'README.md'
 
@@ -367,6 +390,11 @@ export function create(options: Options): Scribe {
     hasPrompt: false,
     consumed: -1,
     mark: undefined,
+    held: [],
+    compactions: 0,
+    hasCompacted: false,
+    seam: undefined,
+    noted: undefined,
     wakingSince: 0,
     wakeTimes: [],
     past: [],
@@ -426,6 +454,12 @@ export function create(options: Options): Scribe {
  * one before is held, and who the session is, is asked again, because its id
  * may be another now. What is kept on the machine stays, and so do the
  * session's counts if it turns out to be the same session.
+ *
+ * The records Scribe kept go with the rest. A developer who cleared the
+ * conversation meant to, and the records of a session that is resumed or
+ * branched are not on this machine to be picked up again: no word of a
+ * record is ever stored. They are in Fylgja all the same. A compaction is
+ * not such a start; see `compacted`.
  */
 export function startOver(scribe: Scribe): void {
   const { kept } = scribe.band
@@ -444,6 +478,9 @@ export function startOver(scribe: Scribe): void {
   scribe.hasPrompt = false
   scribe.consumed = -1
   scribe.mark = undefined
+  scribe.held = []
+  scribe.hasCompacted = false
+  scribe.seam = undefined
   scribe.wakingSince = 0
   scribe.past = []
   scribe.folded = { wakes: 0, block: undefined }
@@ -1819,7 +1856,9 @@ function markOf(row: Row | undefined): string | undefined {
 
 /**
  * Where the rows not yet seen begin: after the ones a wake went through. A
- * compaction, or anything else that rewrites the conversation, leaves that
+ * compaction sets that count itself, and keeps the rows it left to tell the
+ * later ones from where the engine's list is not the one it was handed (see
+ * `compacted`). Anything else that rewrites the conversation leaves the
  * count pointing into another list; then, and when nothing is known yet,
  * they begin at the developer's last prompt.
  */
@@ -1828,6 +1867,26 @@ function startOf(scribe: Scribe, rows: readonly Row[]): number {
 
   if (consumed >= 0 && consumed <= rows.length && (consumed === 0 || markOf(rows[consumed - 1]) === scribe.mark)) {
     return consumed
+  }
+
+  // The rows a compaction left are looked for in their order, whatever stands among them and whichever of them
+  // the engine no longer has: what follows the last one found is new.
+  if (scribe.seam !== undefined) {
+    let next = 0
+    let after = -1
+
+    for (let at = 0; at < rows.length && next < scribe.seam.length; at += 1) {
+      const hit = scribe.seam.indexOf(markOf(rows[at]) ?? '', next)
+
+      if (hit !== -1) {
+        next = hit + 1
+        after = at + 1
+      }
+    }
+
+    if (after !== -1) {
+      return after
+    }
   }
 
   for (let at = rows.length - 1; at >= 0; at -= 1) {
@@ -1839,6 +1898,143 @@ function startOf(scribe: Scribe, rows: readonly Row[]): number {
   }
 
   return rows.length
+}
+
+/** What Scribe has in hand of a conversation that is about to be compacted. */
+export type Compacting = {
+  /** The rows no look has been through, oldest first. */
+  unseen: readonly Row[]
+  /** The working tree's root: what a row's files are named from. */
+  root: string
+  epoch: number
+}
+
+/**
+ * The conversation is about to be compacted: `rows` is what the summary is
+ * made of. The rows no look has been through yet are picked out, so that
+ * they can be held when the compaction stands; a look made here instead
+ * would hold the compaction up for as long as a model takes to answer.
+ * Nothing is changed yet, because a compaction may still be called off.
+ *
+ * Undefined where Scribe does not run: such a conversation has nothing of
+ * Scribe's to carry over.
+ */
+export async function compacting(host: ScribeHost, scribe: Scribe, rows: readonly Row[]): Promise<Compacting | undefined> {
+  const who = await identityOf(host, scribe)
+
+  if (who === null) {
+    return undefined
+  }
+
+  // Read last, with nothing awaited after it: a look that ends meanwhile has moved the count by then.
+  return { unseen: rows.slice(startOf(scribe, rows)), root: who.root, epoch: scribe.epoch }
+}
+
+/**
+ * `rows` cut to `MAX_HELD`, oldest first. What the developer wrote, chose
+ * or turned down is never what goes: without it the next look could not
+ * tell whose turn it reads. The oldest of the other rows go first.
+ */
+function heldOf(rows: readonly Row[], root: string, prompts: ReadonlySet<string>): readonly Row[] {
+  let over = rows.length - MAX_HELD
+
+  return over <= 0
+    ? rows
+    : rows.filter(row => {
+        if (over <= 0) {
+          return true
+        }
+
+        const seen = observe([row], root, prompts)
+
+        if (seen.developer.length > 0 || seen.acts.length > 0) {
+          return true
+        }
+
+        over -= 1
+
+        return false
+      })
+}
+
+/**
+ * The conversation was compacted and now reads `rows`. What Scribe holds of
+ * the session stays as it is: its records, their count above the prompt and
+ * the window that lists them are the session's, not the conversation's.
+ *
+ * The rows no look had been through are held for the next one, and every
+ * row the conversation holds now counts as gone through: what is in the
+ * summary and in the rows kept beside it was either looked at or is held.
+ * The engine may hold the compacted conversation with rows of its own
+ * among these (the command that asked for it, what it reads again), so the
+ * rows are kept as marks too, and the next look finds the last of them.
+ */
+export function compacted(host: ScribeHost, scribe: Scribe, before: Compacting, rows: readonly Row[]): void {
+  // The conversation started over while it was being compacted: nothing of the one before is held.
+  if (before.epoch !== scribe.epoch) {
+    return
+  }
+
+  const all = [...scribe.held, ...before.unseen]
+  const held = heldOf(all, before.root, scribe.prompts)
+
+  scribe.held = held
+  scribe.compactions += 1
+  scribe.hasCompacted = true
+  scribe.consumed = rows.length
+  scribe.mark = markOf(rows.at(-1))
+  scribe.seam = rows.flatMap(row => markOf(row) ?? [])
+
+  if (held.length < all.length) {
+    host.debug(`${HELD_DROPPED} ${all.length - held.length}`)
+  }
+}
+
+/**
+ * What the context of the conversation says of the session's records, or
+ * undefined when it says nothing: before the first compaction Claude has
+ * the conversation itself, a session that kept nothing has nothing to
+ * list, and one that is signed out or has Scribe off is not spoken for.
+ * What it lists is noted, so that a later change to it is noticed.
+ */
+export async function context(host: ScribeHost, scribe: Scribe): Promise<string | undefined> {
+  scribe.noted = undefined
+
+  if (!scribe.hasCompacted || (await reader(host, scribe)) === null) {
+    return undefined
+  }
+
+  const text = carried(scribe.written)
+
+  scribe.noted = text === undefined ? undefined : listedOf(scribe.written)
+
+  return text
+}
+
+/**
+ * Whether what the context lists is no longer so: a record it quotes was
+ * removed, or its sentence or its reason reads differently now. A record
+ * kept since is no such change, and neither is a file added to one. The
+ * context says what the session had saved when it was compacted, the new
+ * record and the new file are in the conversation Claude has, and
+ * computing the context again costs the conversation its place in the
+ * prompt cache; the next compaction lists them.
+ *
+ * @param isHere whether the session is signed in to Fylgja as the account this machine is set up for
+ */
+export function isStale(scribe: Scribe, isHere: boolean): boolean {
+  if (scribe.noted === undefined) {
+    return false
+  }
+
+  // Signed out, or Scribe switched off, since: the session is not spoken for any more.
+  if (!isHere || !scribe.hasCompacted || isOff(scribe)) {
+    return true
+  }
+
+  const now = new Map(scribe.written.map(record => [record.id, record.outcome === 'withdrawn' ? '' : saidOf(record)]))
+
+  return scribe.noted.some(([id, entry]) => now.get(id) !== entry)
 }
 
 function summaryOf(verdict: Verdict, written: readonly Written[]): string {
@@ -2093,6 +2289,9 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     const who = await reader(host, scribe)
 
     if (who === null) {
+      // No look is made of this turn, so none will take the rows held for one.
+      scribe.held = []
+
       return
     }
 
@@ -2146,12 +2345,15 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: Abort
 
   const rows = await host.rows()
   const from = startOf(scribe, rows)
-  const seen = observe(rows.slice(from), who.root, scribe.prompts)
+  const { held, compactions } = scribe
+  // What a compaction took away unread comes first: it is older than every row that is there now.
+  const unseen = held.length === 0 ? rows.slice(from) : [...held, ...rows.slice(from)]
+  const seen = observe(unseen, who.root, scribe.prompts)
   // An answer to a question of Claude's that no look has been begun for.
   const isAnswered = seen.acts.some(act => isAnswer(act) && !scribe.acted.has(act.key))
 
   if (isInside) {
-    scribe.isAsking = hasOpenQuestion(rows.slice(from))
+    scribe.isAsking = hasOpenQuestion(unseen)
 
     if (!isAnswered) {
       return
@@ -2164,6 +2366,7 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: Abort
   const found: Found = {
     consumed: scribe.consumed,
     mark: scribe.mark,
+    seam: scribe.seam,
     hasActed: scribe.hasActed,
     hasPrompt: scribe.hasPrompt,
     hasAnsweredInTurn: scribe.hasAnsweredInTurn,
@@ -2171,15 +2374,24 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: Abort
     earlier: scribe.earlier,
     anchored: new Map(),
     acts: [],
+    taken: undefined,
   }
   let isWhole = false
 
   try {
-    isWhole = await looked(host, scribe, who, { rows, from, seen, isAnswered, found, cut })
+    isWhole = await looked(host, scribe, who, { rows, from, unseen, compactions, seen, isAnswered, found, cut })
   } finally {
     if (isInside && !isWhole && epoch === scribe.epoch) {
-      scribe.consumed = found.consumed
-      scribe.mark = found.mark
+      if (compactions === scribe.compactions) {
+        scribe.consumed = found.consumed
+        scribe.mark = found.mark
+        scribe.seam = found.seam
+        scribe.held = held
+      } else if (found.taken !== undefined) {
+        // Compacted meanwhile: the count is the compaction's, and the rows this look read are in no conversation any more.
+        scribe.held = [...found.taken, ...scribe.held]
+      }
+
       scribe.hasActed = found.hasActed
       scribe.hasPrompt = found.hasPrompt
       scribe.hasAnsweredInTurn = found.hasAnsweredInTurn
@@ -2232,17 +2444,23 @@ function wordsOf(act: { words: string }): string {
 }
 
 /** What a look changes before it has gone all the way, as it was found: a look inside a turn may have to put it back. */
-type Found = Pick<Scribe, 'consumed' | 'mark' | 'hasActed' | 'hasPrompt' | 'hasAnsweredInTurn' | 'commitsToPair' | 'earlier'> & {
+type Found = Pick<Scribe, 'consumed' | 'mark' | 'seam' | 'hasActed' | 'hasPrompt' | 'hasAnsweredInTurn' | 'commitsToPair' | 'earlier'> & {
   /** The records the lookups had found when the verdict came. */
   anchored: Map<string, Fact>
   /** What the developer decided that this look was the first to see. */
   acts: { key: string; words: string }[]
+  /** The rows this look read, once its verdict counted them as gone through. */
+  taken: readonly Row[] | undefined
 }
 
 /** What a look has in hand once it has read the rows. */
 type Sight = {
   rows: readonly Row[]
   from: number
+  /** The rows this look reads: what a compaction took away unread, then the rows from `from` on. */
+  unseen: readonly Row[]
+  /** How many times the conversation had been compacted when the rows were read. */
+  compactions: number
   seen: ReturnType<typeof observe>
   isAnswered: boolean
   found: Found
@@ -2255,7 +2473,7 @@ type Sight = {
  * what the verdict held with every call to Fylgja getting through.
  */
 async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Sight): Promise<boolean> {
-  const { rows, from, seen, isAnswered, found, cut } = sight
+  const { rows, from, unseen, compactions, seen, isAnswered, found, cut } = sight
   const isInside = cut !== undefined
   // Whether the turn has ended since: read anew each time, as it changes while this waits.
   const isStopped = (): boolean => cut?.aborted === true
@@ -2264,6 +2482,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
   // Held from here on: a wake that comes to nothing leaves these rows for the next.
   scribe.consumed = from
   scribe.mark = markOf(rows[from - 1])
+  scribe.seam = undefined
 
   for (const plan of seen.plans) {
     if ('text' in plan) {
@@ -2502,8 +2721,17 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
           found.anchored.set(id, fact)
         }
 
-        scribe.consumed = rows.length
-        scribe.mark = markOf(rows.at(-1))
+        found.taken = unseen
+
+        if (compactions === scribe.compactions) {
+          scribe.consumed = rows.length
+          scribe.mark = markOf(rows.at(-1))
+          scribe.held = []
+        } else {
+          // Compacted under this look: the rows it read were held with the rest, and the count is the compaction's.
+          scribe.held = scribe.held.slice(unseen.length)
+        }
+
         scribe.hasPrompt = false
         // What comes after the answer is the developer's turn too: its end is looked at as theirs.
         scribe.hasAnsweredInTurn = isInside

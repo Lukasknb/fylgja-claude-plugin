@@ -611,6 +611,29 @@ describe('the window lists what Scribe kept', () => {
 
     await ui.unmount()
   })
+
+  test('a compaction of the conversation takes nothing from it: the records are the session’s', async ($, on) => {
+    on('session.compact', () => ({ messages: [{ role: 'user', text: 'This session is being continued from a previous conversation.', toolUses: [] }] }) as never)
+
+    const { set } = await opened($, on)
+    const done = await $.session.compact({ trigger: 'auto', messages: set.rows.map(row => ({ ...row, toolUses: [] })) } as never)
+
+    expect(done.messages, 'the summary, as Claude Code made it').toHaveLength(1)
+
+    const ui = await pane($)
+
+    expect(await ui.lines()).toEqual([
+      ' ᚠ fylgja  | kept in this session | 2 kept',
+      CAP_ROW,
+      'Why: A sixth never succeeded.',
+      'Rejected: retry forever',
+      `In: ${FILE}`,
+      LOCK_ROW,
+      Ledger.LEGENDS.list,
+    ])
+
+    await ui.unmount()
+  })
 })
 
 describe('what is typed never acts on a record', () => {
