@@ -73,7 +73,7 @@ const LATER = 'The queue takes its lock from Postgres now.'
 const WHY = { form: 'reason', record: 0, options: ['One less service to run', 'Redis was flaky in CI'] }
 const UNEXPLAINED = verdict({ records: [decision({ detail: '', reason_status: 'not_stated' })], question: WHY })
 const WHY_CARD = carded(
-  '? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Redis was flaky in CI] [3 Other] [4 No particular reason] [9 What is this] [0 Skip]',
+  '? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Redis was flaky in CI] [3 Write my own] [4 No particular reason] [9 What is this] [0 Skip]',
 )
 // Another, as a later look might come to.
 const UNEXPLAINED_TOO = verdict({

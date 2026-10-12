@@ -8,6 +8,7 @@ import { MAX_RESULT_CHARS } from '../hooks/scribe/loop'
 import { MAX_PLANS_CHARS } from '../hooks/scribe/prompt'
 import * as Band from '../hooks/scribe/band'
 import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS } from '../hooks/scribe/scribe'
+import { ARMED_NOTE } from '../hooks/scribe/view'
 import { TWIN_STATUS } from '../hooks/session'
 import { ACCOUNT, answer, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
@@ -481,12 +482,12 @@ describe('a single press writes nothing', () => {
     await press($, 'reason:0')
 
     expect(set.of('amend_memory')).toEqual([])
-    expect(await shown($)).toMatch('[1 Press again to save this reason] [2 Redis was flaky in CI]')
+    expect(await shown($)).toMatch(`press 1 ${ARMED_NOTE} [1 One less service to run] [2 Redis was flaky in CI]`)
 
     await press($, 'no-reason')
 
     expect(set.of('amend_memory'), 'another key is a first press of its own').toEqual([])
-    expect(await shown($)).toMatch('[4 Press again to save “no reason”]')
+    expect(await shown($)).toMatch(`press 4 ${ARMED_NOTE} [1 One less service to run]`)
 
     await press($, 'no-reason')
 
@@ -506,7 +507,7 @@ describe('a single press writes nothing', () => {
     await press($, 'replaces')
 
     expect(set.of('remember')).toEqual([])
-    expect(await shown($)).toMatch('[1 Press again to replace it]')
+    expect(await shown($)).toMatch(`press 1 ${ARMED_NOTE} [1 Yes, it replaces it]`)
 
     await press($, 'replaces')
 

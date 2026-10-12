@@ -15,7 +15,8 @@ export type Part = { text: string; tone?: 'dim' | 'strong' | 'good' | 'mark' } |
 /**
  * A key of the band: the element's address, the digit that presses it, and
  * its words. A quiet key only puts the card away. An armed key was pressed
- * once and acts when it is pressed again in time.
+ * once and acts when it is pressed again in time: it keeps its words and its
+ * place, and is only marked.
  */
 export type Key = { key: string; hotkey: string; label: string; tone?: 'quiet'; isArmed?: true }
 
@@ -161,7 +162,7 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
   const { fact } = item
   const rest: Key[] = [
     { key: 'tell-claude', hotkey: '2', label: 'Tell Claude' },
-    twice(band, 'knew', '3', 'Knew this', 'Press again: never show this'),
+    twice(band, 'knew', '3', 'Knew this'),
     { key: 'dismiss', hotkey: '0', label: 'Dismiss' },
   ]
 
@@ -240,7 +241,7 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
         },
       ],
       keys: withAbout(band, [
-        twice(band, 'replaces', '1', 'Yes, it replaces it', 'Press again to replace it'),
+        twice(band, 'replaces', '1', 'Yes, it replaces it'),
         { key: 'tell-claude', hotkey: '2', label: 'No, tell Claude' },
         { key: 'different', hotkey: '3', label: 'Different case' },
         { key: 'skip', hotkey: '0', label: 'Skip' },
@@ -261,10 +262,10 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
     ],
     keys: withAbout(band, [
       ...options.map((label, index) =>
-        twice(band, `reason:${index}`, String(index + 1), label, 'Press again to save this reason'),
+        twice(band, `reason:${index}`, String(index + 1), label),
       ),
-      { key: 'other', hotkey: String(options.length + 1), label: 'Other' },
-      twice(band, 'no-reason', String(options.length + 2), 'No particular reason', 'Press again to save “no reason”'),
+      { key: 'other', hotkey: String(options.length + 1), label: 'Write my own' },
+      twice(band, 'no-reason', String(options.length + 2), 'No particular reason'),
       { key: 'skip', hotkey: '0', label: 'Skip' },
     ]),
   }
@@ -289,9 +290,13 @@ export const HEADLINES = {
   withdrawn: 'took this back',
 } as const
 
-/** A key that acts only when pressed twice: what it says before, and once it is waiting for the second press. */
-function twice(band: Band, key: string, hotkey: string, label: string, again: string): Key {
-  return band.armed?.key === armOf(band, key) ? { key, hotkey, label: again, isArmed: true } : { key, hotkey, label }
+/**
+ * A key that acts only when pressed twice. While it waits for the second
+ * press it says what it said before: the keys of a card are read by their
+ * place and their words, and neither may move under a finger.
+ */
+function twice(band: Band, key: string, hotkey: string, label: string): Key {
+  return band.armed?.key === armOf(band, key) ? { key, hotkey, label, isArmed: true } : { key, hotkey, label }
 }
 
 /** What one written record's line says: that it is new or back, its sentence, and what it replaced. */
@@ -325,8 +330,8 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
         ...(only.outcome === 'held'
           ? []
           : only.outcome === 'withdrawn'
-            ? [twice(band, 'putback:0', '1', 'Put back', 'Press again to put back')]
-            : [{ key: 'fix:0', hotkey: '1', label: 'Fix' }, twice(band, 'remove:0', '2', 'Remove', 'Press again to remove')]),
+            ? [twice(band, 'putback:0', '1', 'Put back')]
+            : [{ key: 'fix:0', hotkey: '1', label: 'Fix' }, twice(band, 'remove:0', '2', 'Remove')]),
         { key: 'ok', hotkey: '0', label: 'OK' },
       ]),
     }
@@ -376,10 +381,10 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
           record.outcome === 'held'
             ? []
             : record.outcome === 'withdrawn'
-              ? [twice(band, `putback:${index}`, String(index * 2 + 1), 'Put back', 'Press again to put back')]
+              ? [twice(band, `putback:${index}`, String(index * 2 + 1), 'Put back')]
               : [
                   { key: `fix:${index}`, hotkey: String(index * 2 + 1), label: 'Fix' },
-                  twice(band, `remove:${index}`, String(index * 2 + 2), 'Remove', 'Press again to remove'),
+                  twice(band, `remove:${index}`, String(index * 2 + 2), 'Remove'),
                 ],
       })),
       ...(destination === undefined
@@ -437,7 +442,7 @@ function untoned(band: Band, isWorking: boolean, destination?: string): View | u
         ...(destination === undefined ? [] : [{ parts: [{ text: `Records go to ${drawn(destination, MAX_OPTION)}.` }] }]),
       ],
       keys: [
-        twice(band, 'off', '1', 'Turn Scribe off', 'Press again to turn Scribe off'),
+        twice(band, 'off', '1', 'Turn Scribe off'),
         { key: 'about-ok', hotkey: '0', label: 'OK' },
       ],
     }

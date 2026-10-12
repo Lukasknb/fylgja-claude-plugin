@@ -501,7 +501,8 @@ function words(node: unknown, into: string[]): void {
   if (typeof node === 'string') {
     into.push(node)
   } else if (typeof node === 'object' && node !== null) {
-    const { props, children } = node as {
+    const { type, props, children } = node as {
+      type?: unknown
       props?: { label?: unknown; hotkey?: unknown; value?: unknown; plain?: unknown; key?: unknown }
       children?: unknown
     }
@@ -517,7 +518,8 @@ function words(node: unknown, into: string[]): void {
       into.push(`<${props.value}>`)
     }
 
-    if (Array.isArray(children)) {
+    // A key's children are its label, drawn another way: its words were said once already.
+    if (Array.isArray(children) && !(type === 'Button' && typeof props?.label === 'string')) {
       children.forEach(child => words(child, into))
     }
   }

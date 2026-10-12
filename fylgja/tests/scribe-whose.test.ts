@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { choicesOf, observe, rejectionOf } from '../hooks/scribe/delta'
 import { PLACE_WAIT_MS } from '../hooks/scribe/scribe'
 import { OFFERED_SHARE, statesNoReason, verdictOf } from '../hooks/scribe/verdict'
+import { ARMED_NOTE } from '../hooks/scribe/view'
 import { OFFERED_MARK } from '../hooks/scribe/words'
 import { answer, idOf } from './fixtures'
 import {
@@ -327,7 +328,7 @@ describe('a record the developer has taken in hand is theirs', () => {
     await press($, 'putback:0')
 
     expect(set.of('remember').length, 'one press writes nothing').toBe(1)
-    expect(await shown($)).toMatch('[1 Press again to put back]')
+    expect(await shown($)).toMatch(`press 1 ${ARMED_NOTE} [1 Put back]`)
 
     await press($, 'putback:0')
 

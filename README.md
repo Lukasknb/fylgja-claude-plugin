@@ -185,7 +185,7 @@ at a time.
   prompt. It never waits for you.
 - **It asks why**, when a decision that matters came without a reason:
 
-  `? Why: Use a sessions table, not signed cookies.   1 Sessions must be revocable  2 To list a user's devices  3 Other  4 No particular reason  0 Skip`
+  `? Why: Use a sessions table, not signed cookies.   1 Sessions must be revocable  2 To list a user's devices  3 Write my own  4 No particular reason  0 Skip`
 
   Pick one (press its key twice), type your own, or say there was none.
   Then one line says the reason was saved, with Fix and Remove like any
@@ -305,7 +305,8 @@ Staying out of the way is the point, and the limits are in the code:
 - Every key that writes to Fylgja or settles something for good acts on
   the second press of the same key within five seconds: Remove, Knew this,
   Turn Scribe off, "Yes, it replaces it", Put back, a proposed reason and
-  "No particular reason". The first press only makes the key say so. A digit
+  "No particular reason". The first press only fills the key where it stands, and a line
+  above the keys says so. A digit
   typed alone into an empty prompt box presses a key of the band, and a
   question comes up just when you may be answering Claude with "1": so no
   single press ever writes, replaces, removes or silences. Keys that only
@@ -754,7 +755,8 @@ see in ordinary work, and last what needs your setup changed.
    digit keys press (after ctrl+x tab or a click; a bare digit in an
    empty box).
 6. The two-press keys: that a single "2" or "3" typed into an empty box
-   only changes what the key says, and that the second press acts.
+   only fills that key and says so on a line above, every key keeping
+   its words and its place, and that the second press acts.
 7. The field for Fix and for a typed reason: that it takes the keyboard
    when its key is pressed, that Enter saves and Esc leaves.
 8. Keys pressed in the band: that Fix, Remove, Put back and an answer

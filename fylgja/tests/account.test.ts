@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { ARMED_NOTE } from '../hooks/scribe/view'
 import { UNSAID_STATUS } from '../hooks/session'
 import { ACCOUNT, answer, MEETING_ID, meetingRecord, token } from './fixtures'
 import {
@@ -133,7 +134,7 @@ describe('the account this machine is set up for', () => {
     await press($, 'account-accept')
 
     expect(set.kept.get('fylgja.account')).toEqual(PIN)
-    expect(await shown($)).toMatch('[1 Press again to use this account]')
+    expect(await shown($)).toMatch(`press 1 ${ARMED_NOTE} [1 Use this account from now on] [0 Not now]`)
 
     await set.clock.advance(5000)
 

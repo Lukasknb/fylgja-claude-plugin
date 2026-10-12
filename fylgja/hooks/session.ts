@@ -334,7 +334,7 @@ export function accountView(session: Session): View | undefined {
           {
             key: 'account-accept',
             hotkey: '1',
-            label: isArmed ? 'Press again to use this account' : 'Use this account from now on',
+            label: 'Use this account from now on',
             ...(isArmed ? { isArmed: true as const } : {}),
           },
           { key: 'account-later', hotkey: '0', label: 'Not now', tone: 'quiet' as const },

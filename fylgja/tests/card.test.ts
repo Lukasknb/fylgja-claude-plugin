@@ -3,8 +3,8 @@ import type { Engine } from 'claude-code/testing'
 
 import { ACCENT, MAX_CARD, MIN_FRAMED } from '../hooks/card'
 import { ARMED_NOTE, NOTES } from '../hooks/scribe/view'
-import { ACCOUNT, answer } from './fixtures'
-import { claude, decision, dev, edit, fact, press, stage, START, turn, verdict } from './scribe-fixtures'
+import { ACCOUNT, answer, idOf } from './fixtures'
+import { band, claude, decision, dev, edit, fact, press, stage, START, turn, verdict } from './scribe-fixtures'
 
 const FILE = 'src/queue/lock.ts'
 const WORK = [dev('lock the retry queue with redis'), claude('Done.', edit(FILE))]
@@ -157,7 +157,7 @@ describe('a card that asks', () => {
     ).toEqual([
       ['1', 'One less service to run', false],
       ['2', 'Redis was flaky in CI', false],
-      ['3', 'Other', false],
+      ['3', 'Write my own', false],
       ['4', 'No particular reason', false],
       ['9', 'What is this', true],
       ['0', 'Skip', true],
@@ -200,7 +200,7 @@ describe('a card that asks', () => {
     expect(all(tree, 'Text').some(text => wordsOf(text) === NOTES.receipt), 'in place of how it leaves').toBe(false)
     expect(all(tree, 'Button').map(key => [key.props.label, key.props.dimColor === true])).toEqual([
       ['Fix', false],
-      ['Press again to remove', false],
+      ['Remove', false],
       ['What is this', true],
       ['OK', true],
     ])
@@ -243,6 +243,107 @@ describe('a card that asks', () => {
     expect(tree.props).toMatchObject({ borderStyle: 'bold', borderColor: ACCENT })
     expect(all(tree, 'Input').map(field => [field.props.key, field.props.autoFocus])).toEqual([['fix-text', true]])
     expect(all(tree, 'Text').some(text => wordsOf(text) === NOTES.field)).toBe(true)
+  })
+})
+
+/** The keys of a card as a person reads them: the digit and the words, in the order drawn. */
+function keysOf(tree: Node): unknown[] {
+  return all(tree, 'Button').map(key => [key.props.hotkey, key.props.label])
+}
+
+/** The keys of a card that are filled: the digit of each. */
+function filledKeys(tree: Node): unknown[] {
+  return all(tree, 'Button')
+    .filter(key => all(key, 'Text').some(text => text.props.inverse === true))
+    .map(key => key.props.hotkey)
+}
+
+describe('a key that waits for its second press', () => {
+  for (const [name, options, key, hotkey] of [
+    ['a question', { replies: [ASKING] }, 'reason:1', '2'],
+    ['a receipt', { replies: [RECORDING] }, 'remove:0', '2'],
+    ['a tell', { tools: TOLD }, 'knew', '3'],
+  ] as const) {
+    test(`on ${name}, every key keeps its words and its place, the pressed one is filled, and what a second press does is a line of its own`, async ($, on) => {
+      const set = stage(on, options)
+
+      await $.session.start(START)
+      await turn($, set, ...WORK)
+
+      const before = await card($)
+
+      await press($, key)
+
+      const during = await card($)
+      const lines = during.children as Node[]
+      const hint = lines.at(-2) as Node
+      const row = lines.at(-1) as Node
+
+      expect(keysOf(during)).toEqual(keysOf(before))
+      expect(lines.length, 'as many lines as before').toBe((before.children ?? []).length)
+      expect(row.props, 'the row of keys is laid out as it was').toEqual((before.children as Node[]).at(-1)?.props)
+      expect(filledKeys(before)).toEqual([])
+      expect(filledKeys(during), 'the one that was pressed, and no other').toEqual([hotkey])
+      expect(all(all(during, 'Button').find(one => one.props.key === key) as Node, 'Text').map(text => text.props)).toEqual([
+        { color: ACCENT, bold: true, inverse: true },
+      ])
+      expect(wordsOf(hint)).toBe(` press ${hotkey} ${ARMED_NOTE}`)
+      expect(all(hint, 'Button'), 'no key stands in that line').toEqual([])
+      expect(wordsOf(row), 'and it says nothing among the keys').not.toMatch('again')
+
+      await set.clock.advance(5000)
+
+      expect(JSON.stringify(await card($)), 'left alone, the card is what it was').toBe(JSON.stringify(before))
+    })
+  }
+
+  test('another key that waits takes the mark and the line with it, and nothing else changes', async ($, on) => {
+    const set = stage(on, { replies: [ASKING] })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+
+    const before = await card($)
+
+    await press($, 'reason:0')
+    await press($, 'no-reason')
+
+    const during = await card($)
+
+    expect(keysOf(during)).toEqual(keysOf(before))
+    expect(filledKeys(during)).toEqual(['4'])
+    expect(all(during, 'Text').filter(text => /^ press \d $/.test(wordsOf(text))).map(wordsOf)).toEqual([' press 4 '])
+    expect(set.of('amend_memory')).toEqual([])
+  })
+
+  test('“Write my own” opens the field at once, and Enter saves what was typed, once', async ($, on) => {
+    const set = stage(on, { replies: [ASKING] })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'reason:0')
+
+    const own = all(await card($), 'Button').find(key => key.props.label === 'Write my own')
+
+    expect(own?.props).toMatchObject({ key: 'other', hotkey: '3' })
+
+    const ui = await band($)
+
+    await ui.press('other')
+    await ui.redraw()
+
+    const tree = await card($)
+
+    expect(all(tree, 'Input').map(field => field.props.key)).toEqual(['reason-text'])
+    expect(filledKeys(tree), 'the key that waited waits no longer').toEqual([])
+
+    await ui.enter('reason-text', 'Redis kept dropping connections under load')
+    await ui.unmount()
+
+    expect(set.of('amend_memory')).toEqual([
+      { atom_id: idOf(101), op: 'fix', detail: 'Redis kept dropping connections under load', reason_status: 'stated' },
+    ])
+    expect(all(await card($), 'Input'), 'and the field is gone').toEqual([])
   })
 })
 

@@ -28,7 +28,7 @@ const WHY = { form: 'reason', record: 0, options: ['One less service to run', 'R
 const ASKING = verdict({ records: [UNEXPLAINED], question: WHY })
 
 const QUESTION =
-  carded('? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Redis was flaky in CI] [3 Other] [4 No particular reason] [9 What is this] [0 Skip]')
+  carded('? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Redis was flaky in CI] [3 Write my own] [4 No particular reason] [9 What is this] [0 Skip]')
 
 const PRIOR = fact(5, { content: 'Use Redis with Redlock for the job queue.', anchors: [{ path: 'src/queue/lock.ts' }] })
 const REVERSAL = { form: 'reversal', record: 0, prior: idOf(5), options: ['One less service to run'] }
@@ -254,7 +254,7 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
 
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5), reason_status: 'not_stated' }])
     expect(await shown($)).toBe(
-      carded('? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Other] [3 No particular reason] [0 Skip]'),
+      carded('? Why: Use Postgres advisory locks for the job queue, not Redis. [1 One less service to run] [2 Write my own] [3 No particular reason] [0 Skip]'),
     )
 
     await pressTwice($, 'no-reason')

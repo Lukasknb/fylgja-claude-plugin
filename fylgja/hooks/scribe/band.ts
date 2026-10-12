@@ -250,8 +250,8 @@ export type Arming = { armed: Armed | null }
 /**
  * Whether the key armed as `arm`, one that writes to Fylgja or settles
  * something for good, may act now: only on its second press in a row, within
- * `ARM_MS` of the first. The first press changes nothing but what the key
- * says. A digit typed alone into an empty prompt box presses a key of the
+ * `ARM_MS` of the first. The first press changes nothing but how the key
+ * is drawn. A digit typed alone into an empty prompt box presses a key of the
  * band, and a question comes up just when a developer may be answering
  * Claude with "1": so no single press may ever write, replace, remove or
  * silence.

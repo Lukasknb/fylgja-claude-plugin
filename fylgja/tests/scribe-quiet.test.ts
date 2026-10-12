@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { isOwnCall, verdictFor } from '../hooks/scribe/grant'
+import { ARMED_NOTE } from '../hooks/scribe/view'
 import { answer, idOf, MEETING_ID, meetingRecord, NEEDS_SIGN_IN, token } from './fixtures'
 import {
   EMPTY,
@@ -208,7 +209,7 @@ describe('Scribe stays quiet', () => {
     await ui.press('off')
     await ui.redraw()
 
-    expect(await ui.text(), 'one press turns nothing off').toMatch('[1 Press again to turn Scribe off] [0 OK]')
+    expect(await ui.text(), 'one press turns nothing off').toMatch(`press 1 ${ARMED_NOTE} [1 Turn Scribe off] [0 OK]`)
     expect(set.kept.get('scribe.off')).toBeUndefined()
 
     await ui.press('off')
@@ -239,7 +240,7 @@ describe('Scribe stays quiet', () => {
 
     await press($, 'knew')
 
-    expect(await shown($)).toMatch('[3 Press again: never show this]')
+    expect(await shown($)).toMatch(`press 3 ${ARMED_NOTE} [1 Open] [2 Tell Claude] [3 Knew this]`)
 
     // Another key in between, and the first press counts for nothing.
     await press($, 'open')
@@ -247,7 +248,7 @@ describe('Scribe stays quiet', () => {
     await set.clock.settle()
 
     expect(set.kept.get('scribe.known') ?? []).toEqual([])
-    expect(await shown($)).toMatch('[3 Press again: never show this]')
+    expect(await shown($)).toMatch(`press 3 ${ARMED_NOTE} [2 Tell Claude] [3 Knew this]`)
   })
 
   test('two sessions on one machine each add to the records marked as known; neither writes over the other', async ($, on) => {

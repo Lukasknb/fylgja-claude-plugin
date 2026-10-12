@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { NOTES } from '../hooks/scribe/view'
+import { ARMED_NOTE, NOTES } from '../hooks/scribe/view'
 import { answer, idOf } from './fixtures'
 import {
   band,
@@ -67,7 +67,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await press($, 'knew')
 
     expect(set.kept.get('scribe.known') ?? [], 'one press settles nothing for good').toEqual([])
-    expect(await shown($)).toMatch('[3 Press again: never show this]')
+    expect(await shown($)).toMatch(`press 3 ${ARMED_NOTE} [1 Open] [2 Tell Claude] [3 Knew this]`)
 
     await press($, 'knew')
     await set.clock.settle()

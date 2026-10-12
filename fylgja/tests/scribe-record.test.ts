@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { NOTES } from '../hooks/scribe/view'
+import { ARMED_NOTE, NOTES } from '../hooks/scribe/view'
 import { answer, idOf } from './fixtures'
 import {
   band,
@@ -188,7 +188,7 @@ describe('Scribe records', () => {
     await press($, 'remove:0')
 
     expect(set.of('amend_memory'), 'one press removes nothing').toEqual([])
-    expect(await shown($)).toMatch('[1 Fix] [2 Press again to remove]')
+    expect(await shown($)).toMatch(`press 2 ${ARMED_NOTE} [1 Fix] [2 Remove]`)
 
     await press($, 'remove:0')
 

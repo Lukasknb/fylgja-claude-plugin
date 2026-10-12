@@ -6,6 +6,7 @@ import { PANE, RINGLESS } from '../hooks/ledger'
 import { ARM_MS } from '../hooks/scribe/band'
 import * as Ledger from '../hooks/scribe/ledger'
 import type { Written } from '../hooks/scribe/types'
+import { ARMED_NOTE } from '../hooks/scribe/view'
 import { answer, idOf, NEEDS_SIGN_IN } from './fixtures'
 import { claude, decision, dev, edit, EMPTY, MARK, NOTHING, press, pressTwice, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
 
@@ -1136,7 +1137,7 @@ describe('the window and the band', () => {
 
     await press($, 'reason:0')
 
-    expect(await shown($)).toMatch('[1 Press again to save this reason]')
+    expect(await shown($)).toMatch(`press 1 ${ARMED_NOTE} [1 One less service to run]`)
     expect(await ui.actions(), 'a key armed in the band arms none in the window').toEqual(['Reword', 'Remove'])
 
     await press($, 'reason:0')

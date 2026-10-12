@@ -12,7 +12,9 @@ import type { Key, Part, Row, View } from './scribe/view'
  * amber, its name on a filled label, and a line that says what happens if
  * they do nothing. A card that tells is not waiting: a thin dim frame, a dim
  * name, every key dim, and a line that says how it leaves. A key that was
- * pressed once and waits for its second press makes any card one that asks.
+ * pressed once and waits for its second press makes any card one that asks,
+ * and is the one key of it that is filled; every key keeps its words and its
+ * place.
  *
  * Nothing here depends on colour alone. The two frames are different lines,
  * the label is filled by inverting it, and both say in words which they
@@ -44,6 +46,9 @@ export type Acts = {
 }
 
 type Style = { color?: string; dimColor?: boolean; bold?: boolean; italic?: boolean }
+
+/** How the card fills a label: by inverting it, so it stands out without colour too. */
+const FILLED = { color: ACCENT, bold: true, inverse: true } as const
 
 function styleOf(part: Part, isAsking: boolean): Style {
   if ('link' in part) {
@@ -83,6 +88,12 @@ export function partOf(t: Table, part: Part, isAsking: boolean): RenderElement {
   return t.Text({ ...styleOf(part, isAsking), children: part.tone === undefined ? spans(t, part.text) : [part.text] })
 }
 
+/**
+ * The keys of a card or of one of its rows. A key that waits for its second
+ * press is drawn where it stood, with the words it had, filled as the label
+ * of the line that says what the second press does: the same cells, so no
+ * key beside it moves.
+ */
 function keysOf(t: Table, keys: readonly Key[], isAsking: boolean, act: Acts): RenderElement[] {
   return keys.map(key =>
     t.Button({
@@ -90,8 +101,12 @@ function keysOf(t: Table, keys: readonly Key[], isAsking: boolean, act: Acts): R
       label: key.label,
       hotkey: key.hotkey,
       plain: true,
-      // In a card that only tells, every key is an offer; in one that asks, the keys that put it away are the lesser ones.
-      ...((!isAsking || key.tone === 'quiet') && key.isArmed !== true ? { dimColor: true } : {}),
+      ...(key.isArmed === true
+        ? { children: [t.Text({ ...FILLED, children: [key.label] })] }
+        : // In a card that only tells, every key is an offer; in one that asks, the keys that put it away are the lesser ones.
+          !isAsking || key.tone === 'quiet'
+          ? { dimColor: true }
+          : {}),
       onPress: () => act.press(key.key),
     }),
   )
@@ -161,12 +176,12 @@ export function cardOf(t: Table, shown: View, columns: number, act: Acts): Rende
     columnGap: 1,
     children: [
       isAsking
-        ? t.Text({ color: ACCENT, bold: true, inverse: true, children: [` ${RUNE} fylgja asks `] })
+        ? t.Text({ ...FILLED, children: [` ${RUNE} fylgja asks `] })
         : t.Text({ dimColor: true, bold: true, children: [`${RUNE} fylgja`] }),
       t.Text({ italic: true, ...(isAsking ? {} : { dimColor: true }), children: [shown.head] }),
     ],
   })
-  // What happens next, in words: the second press that is waited for, or what doing nothing comes to.
+  // What happens next, in words, on a line of its own: the second press that is waited for, or what doing nothing comes to.
   const note =
     armed !== undefined
       ? t.Box({
@@ -174,7 +189,7 @@ export function cardOf(t: Table, shown: View, columns: number, act: Acts): Rende
           flexWrap: 'wrap',
           columnGap: 1,
           children: [
-            t.Text({ color: ACCENT, bold: true, inverse: true, children: [` press ${armed.hotkey} `] }),
+            t.Text({ ...FILLED, children: [` press ${armed.hotkey} `] }),
             t.Text({ wrap: 'wrap', children: [ARMED_NOTE] }),
           ],
         })
