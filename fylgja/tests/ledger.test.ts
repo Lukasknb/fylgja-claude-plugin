@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { PANE } from '../hooks/ledger'
+import { PANE, RINGLESS } from '../hooks/ledger'
 import { ARM_MS } from '../hooks/scribe/band'
 import * as Ledger from '../hooks/scribe/ledger'
 import type { Written } from '../hooks/scribe/types'
@@ -154,8 +154,22 @@ async function pane($: Engine, isFocused = true, columns = 100, rows = 20, surfa
         .filter(key => !String(key.props?.key).startsWith('row:'))
         .map(wordsOf),
     press: (key: string) => ui.press({ key } as never),
-    enter: (value: string) =>
-      (ui as unknown as { input: (act: { key: string; text: string }) => Promise<unknown> }).input({ key: 'reword-text', text: value }),
+    /** Enter in the field that is open, with `value` in it. */
+    enter: async (value: string) => {
+      const key = String(all(await tree(), 'Input')[0]?.props?.key)
+
+      return (ui as unknown as { input: (act: { key: string; text: string }) => Promise<unknown> }).input({ key, text: value })
+    },
+    /** The window is drawn again, with or without the keys. */
+    keyed: (isHeld: boolean) =>
+      ui.redraw({
+        title: 'Fylgja · kept',
+        isFocused: isHeld,
+        bodyColumns: columns,
+        placement: 'inline',
+        scroll: { offset: 0, bodyRows: rows },
+        view: {},
+      } as never),
     unmount: () => ui.unmount(),
   }
 }
@@ -651,7 +665,7 @@ describe('a record is changed from the window', () => {
 
     const [field] = all(await ui.tree(), 'Input')
 
-    expect(field?.props).toMatchObject({ key: 'reword-text', label: 'Reword', value: 'Cap retries at five.', autoFocus: true })
+    expect(field?.props).toMatchObject({ key: `reword-text:${SECOND}:1`, label: 'Reword', value: 'Cap retries at five.', autoFocus: true })
     expect(await ui.actions()).toEqual(['Cancel'])
     expect((await ui.lines()).at(-1)).toBe(Ledger.LEGENDS.field)
     expect(set.of('amend_memory'), 'nothing is changed by opening the field').toEqual([])
@@ -664,6 +678,7 @@ describe('a record is changed from the window', () => {
     expect(await ui.lines(), 'what the change did not send is as it was').toContain('Rejected: retry forever')
 
     // It is the developer's from here on, and can be put right again.
+    await ui.press(`row:${SECOND}`)
     await ui.press(`reword:${SECOND}`)
     await ui.enter('Cap retries at three.')
 
@@ -687,6 +702,7 @@ describe('a record is changed from the window', () => {
 
     await ui.press(`reword:${SECOND}`)
     await ui.enter('Cap retries at five.')
+    await ui.press(`row:${SECOND}`)
     await ui.press(`reword:${SECOND}`)
     await ui.enter(`Cap ${'x'.repeat(230)}`)
 
@@ -717,7 +733,7 @@ describe('a record is changed from the window', () => {
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: SECOND, op: 'remove' }])
     expect(await ui.rows()).toEqual(['  ◆ Decision · Use a Redis lock for the retry queue.', '▸ ◆ Decision · Cap retries at five. · removed'])
-    expect(await ui.actions()).toEqual(['Put back'])
+    expect(await ui.actions(), 'its keys are put away: Put back is one more Enter on the row away').toEqual([])
     expect((await ui.lines())[0]).toMatch('1 kept')
     expect(await shown($), 'the mark counts what stands').toBe(`${QUIET} · 1 kept`)
 
@@ -759,6 +775,7 @@ describe('a record is changed from the window', () => {
     await ui.press(`row:${SECOND}`)
     await ui.press(`remove:${SECOND}`)
     await ui.press(`remove:${SECOND}`)
+    await ui.press(`row:${SECOND}`)
 
     const before = set.of('remember').length
 
@@ -780,7 +797,7 @@ describe('a record is changed from the window', () => {
     ])
     // The stand-in gives it a new id, as Fylgja may: the selection follows the record.
     expect(await ui.rows()).toEqual(['▸ ◆ Decision · Cap retries at five. · put back', LOCK_ROW])
-    expect(await ui.actions()).toEqual(['Reword', 'Remove'])
+    expect(await ui.actions()).toEqual([])
     expect(await shown($)).toBe(`${QUIET} · 2 kept`)
 
     await ui.unmount()
@@ -810,7 +827,7 @@ describe('a record is changed from the window', () => {
     await Promise.all(presses)
 
     expect(set.of('amend_memory')).toEqual([{ atom_id: SECOND, op: 'remove' }])
-    expect(await ui.actions()).toEqual(['Put back'])
+    expect((await ui.rows())[1]).toBe('▸ ◆ Decision · Cap retries at five. · removed')
 
     await ui.unmount()
   })
@@ -907,9 +924,9 @@ describe('a record is changed from the window', () => {
     expect(set.of('amend_memory'), 'asked once').toHaveLength(1)
     expect(await ui.rows()).toEqual([CAP_ROW, LOCK_ROW])
     expect(await ui.lines()).toContain(`! ${Ledger.TROUBLE.remove}`)
-    expect(await ui.actions()).toEqual(['Reword', 'Remove'])
     expect(await shown($), 'it still counts').toBe(`${QUIET} · 2 kept`)
 
+    await ui.press(`row:${SECOND}`)
     await ui.press(`reword:${SECOND}`)
 
     expect(await ui.lines(), 'the next change to it takes the line down').not.toContain(`! ${Ledger.TROUBLE.remove}`)
@@ -948,12 +965,12 @@ describe('a record is changed from the window', () => {
 
     isAway = true
 
+    await ui.press(`row:${SECOND}`)
     await ui.press(`putback:${SECOND}`)
     await ui.press(`putback:${SECOND}`)
 
     expect((await ui.rows())[1]).toBe('▸ ◆ Decision · Cap retries at five. · removed')
     expect(await ui.lines()).toContain(`! ${Ledger.TROUBLE.putback}`)
-    expect(await ui.actions()).toEqual(['Put back'])
     expect(await shown($)).toBe(`${QUIET} · 1 kept`)
     expect(set.toasts).toEqual([])
 
@@ -974,6 +991,125 @@ describe('a record is changed from the window', () => {
     await scrolled($, -1)
 
     expect((await ui.rows())[0], 'the selection moves').toMatch(/^▸/)
+
+    await ui.unmount()
+  })
+})
+
+describe('the window after a change, after Escape in its field, and when it is given the keys', () => {
+  test('every opening of the field is a field of its own, holding the sentence as it stands: what was typed into one that was left is in none after it', async ($, on) => {
+    const { set } = await opened($, on)
+    const ui = await pane($)
+    const field = async (): Promise<Record<string, unknown> | undefined> => all(await ui.tree(), 'Input')[0]?.props
+
+    await ui.press(`row:${SECOND}`)
+    await ui.press(`reword:${SECOND}`)
+
+    const first = await field()
+
+    // Left without Enter, as Escape and Cancel leave it.
+    await ui.press('cancel')
+    await ui.press(`reword:${SECOND}`)
+
+    const second = await field()
+
+    expect([first?.value, second?.value]).toEqual(['Cap retries at five.', 'Cap retries at five.'])
+    expect(second?.key, 'a surface keeps what is typed by the field’s key: a new key is an empty hand').not.toBe(first?.key)
+
+    await ui.enter('Cap retries at three.')
+    await ui.press(`row:${SECOND}`)
+    await ui.press(`reword:${SECOND}`)
+
+    expect((await field())?.value, 'and after a change it holds the new sentence').toBe('Cap retries at three.')
+    expect(new Set([first?.key, second?.key, (await field())?.key]).size).toBe(3)
+    expect(set.of('amend_memory')).toHaveLength(1)
+
+    await ui.unmount()
+  })
+
+  test('after a change, done or not, the record’s keys are put away and the ring belongs on its row: Enter held down undoes nothing', async ($, on) => {
+    let isAway = true
+    const { set } = await opened($, on, {
+      tools: {
+        amend_memory: args =>
+          isAway ? { ...answer('not_found: no such record'), isError: true } : answer({ atom_id: args.atom_id, outcome: 'removed' }),
+      },
+    })
+    const ui = await pane($)
+    const stops = async (): Promise<unknown[]> => (await ui.keys()).map(key => key.props?.key)
+
+    await ui.press(`row:${SECOND}`)
+    await ui.press(`remove:${SECOND}`)
+    await ui.press(`remove:${SECOND}`)
+
+    expect(await ui.lines()).toContain(`! ${Ledger.TROUBLE.remove}`)
+    expect(await stops(), 'a removal that failed leaves no key up to press next').toEqual([`row:${SECOND}`, `row:${FIRST}`])
+
+    isAway = false
+    await ui.press(`row:${SECOND}`)
+    await ui.press(`remove:${SECOND}`)
+    await ui.press(`remove:${SECOND}`)
+
+    expect(await ui.rows()).toEqual(['  ◆ Decision · Use a Redis lock for the retry queue.', '▸ ◆ Decision · Cap retries at five. · removed'])
+    expect(await stops(), 'removed: Put back is not up, so no further Enter reaches it').toEqual([`row:${FIRST}`, `row:${SECOND}`])
+
+    // Enter again, and again: the row, which only brings the keys up.
+    await ui.press(`row:${SECOND}`)
+    await ui.press(`row:${SECOND}`)
+
+    expect(await ui.actions()).toEqual(['Put back'])
+    expect(set.of('remember'), 'nothing was put back').toHaveLength(2)
+
+    await ui.press(`putback:${SECOND}`)
+    await ui.press(`putback:${SECOND}`)
+
+    expect(await ui.actions(), 'put back: its keys are put away too').toEqual([])
+    expect(set.of('amend_memory')).toHaveLength(2)
+
+    await ui.unmount()
+  })
+
+  test('where the ring belongs: on the selected row, on a record’s first key while its keys are up, on the key that waits, and nowhere while the field is open', () => {
+    const ledger = Ledger.create()
+    const entries = Ledger.entriesOf([record('a', 'First.'), record('b', 'Second.')], ledger)
+
+    expect(Ledger.ringKey(entries, ledger)).toBe('row:b')
+
+    ledger.acting = 'b'
+
+    expect(Ledger.ringKey(entries, ledger)).toBe('reword:b')
+
+    ledger.armed = { key: 'remove:b', until: 10 }
+
+    expect(Ledger.ringKey(entries, ledger)).toBe('remove:b')
+
+    Ledger.settled(ledger)
+
+    expect(Ledger.ringKey(entries, ledger), 'after a change').toBe('row:b')
+
+    Ledger.edit(ledger, 'b')
+
+    expect(Ledger.ringKey(entries, ledger)).toBeUndefined()
+    expect(Ledger.ringKey([], Ledger.create())).toBeUndefined()
+  })
+
+  test('given the keys, the window seats its ring: once as they come, not while it keeps them, and again when they come back', async ($, on) => {
+    const { set } = await opened($, on)
+    const ui = await pane($, false)
+    // The stand-in for Claude Code has no ring to move, which the plugin notes once: that it tried is what is read here.
+    const tried = (): number => set.logged.filter(line => line === RINGLESS).length
+
+    await set.clock.advance(1)
+
+    expect(tried(), 'without the keys there is no ring to seat').toBe(0)
+    expect(Ledger.keyed({ ...Ledger.create(), hadKeys: false }, true)).toBe(true)
+    expect(Ledger.keyed({ ...Ledger.create(), hadKeys: true }, true), 'kept, not given').toBe(false)
+    expect(Ledger.keyed({ ...Ledger.create(), hadKeys: true }, false)).toBe(false)
+
+    await ui.keyed(true)
+    await set.clock.advance(1)
+
+    expect(tried(), 'ctrl+x tab: Enter is on the selected record from the first press').toBe(1)
 
     await ui.unmount()
   })

@@ -3148,7 +3148,7 @@ export async function ledgerPressed(host: ScribeHost, scribe: Scribe, key: strin
   ledger.trouble.delete(id)
 
   if (action === 'reword' && scribe.written.some(one => one.id === id)) {
-    ledger.editing = id
+    Ledger.edit(ledger, id)
   } else if (action === 'remove') {
     await alone(host, ledger, id, async () => {
       const gone = await takeBack(host, scribe, id, true)
@@ -3169,10 +3169,13 @@ export async function ledgerPressed(host: ScribeHost, scribe: Scribe, key: strin
       } else {
         // Fylgja may give it back under another id; the selection follows the record.
         ledger.selected = back.id
-        ledger.acting = back.id
         shownAs(scribe.band, back)
       }
     })
+  }
+
+  if (action !== 'reword') {
+    Ledger.settled(ledger)
   }
 
   // The count the mark shows follows what stands.
@@ -3243,5 +3246,6 @@ export async function ledgerEntered(host: ScribeHost, scribe: Scribe, value: str
     })
   }
 
+  Ledger.settled(ledger)
   host.redraw()
 }

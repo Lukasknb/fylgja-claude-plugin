@@ -759,7 +759,8 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   Fylgja does not know the repository under this spelling, that a record
   was not written because the session has touched no file of any
   repository, and that a prompt was sent which no row of the
-  conversation holds.
+  conversation holds. The window of what was kept writes one more, once
+  a session and in fixed words: that its focus ring could not be moved.
 
 ## Working on it
 

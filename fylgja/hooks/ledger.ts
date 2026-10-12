@@ -29,6 +29,9 @@ export const PANE = 'fylgja-kept'
 /** The window's title where Claude Code shows one: on its tab, while several panes are open. */
 export const TITLE = 'Fylgja · kept'
 
+/** What the debug log holds, once a session, when the window's focus ring could not be moved at all. */
+export const RINGLESS = 'Fylgja: the focus ring of the window of what was kept could not be moved here'
+
 /** The mark in front of the selected row, and what stands there on every other. */
 const POINTER = '▸ '
 const NO_POINTER = '  '

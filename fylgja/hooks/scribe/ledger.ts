@@ -33,6 +33,10 @@ export type Ledger = {
   gone: Written[]
   /** The id of the record whose sentence is being put right in the window's field. */
   editing: string | undefined
+  /** Counts the times the field was opened: each opening is a field of its own, so what was typed into one and left is in none after it. */
+  openings: number
+  /** Whether the window had the keys when it was last drawn. */
+  hadKeys: boolean
   /** A key of the window pressed once, waiting for its second press. */
   armed: Armed | null
   /** The ids of the records a change is on its way to Fylgja for: no second one is started for them meanwhile. */
@@ -60,6 +64,8 @@ export function create(): Ledger {
     acting: undefined,
     gone: [],
     editing: undefined,
+    openings: 0,
+    hadKeys: false,
     armed: null,
     busy: new Set(),
     trouble: new Map(),
@@ -162,9 +168,58 @@ export function ringed(ledger: Ledger, key: string | undefined): boolean {
   return true
 }
 
+/** The record `id` has its sentence put right: a field is opened for it, holding the sentence as it stands. */
+export function edit(ledger: Ledger, id: string): void {
+  ledger.editing = id
+  ledger.openings += 1
+}
+
+/**
+ * A change to a record was asked of Fylgja and answered, done or not: its
+ * keys are put away. Whatever the record has become, the next Enter is on
+ * its row and only brings its keys up again; a key held down changes
+ * nothing twice, and never undoes what it just did.
+ */
+export function settled(ledger: Ledger): void {
+  ledger.acting = undefined
+  ledger.armed = null
+  ledger.editing = undefined
+}
+
+/**
+ * Notes whether the window has the keys as it is drawn. Whether it was just
+ * given them: its focus ring is then on nothing, and is to be seated.
+ */
+export function keyed(ledger: Ledger, isFocused: boolean): boolean {
+  const isGiven = isFocused && !ledger.hadKeys
+
+  ledger.hadKeys = isFocused
+
+  return isGiven
+}
+
+/**
+ * The element the focus ring belongs on: the selected record's row, or,
+ * while that record's keys are up, the key that waits for its second press
+ * or else the first of them. Undefined with no record, and while the field
+ * is open, which holds the ring itself.
+ */
+export function ringKey(entries: readonly Entry[], ledger: Ledger): string | undefined {
+  const selected = selectedIn(entries, ledger)
+
+  if (selected === undefined || ledger.editing !== undefined) {
+    return undefined
+  }
+
+  const id = selected.record.id
+
+  return ledger.acting === id ? (ledger.armed?.key ?? actionKeys(id, selected.isGone)[0] ?? `row:${id}`) : `row:${id}`
+}
+
 /** The window was closed: what was half done in it is let go. What was removed can still be put back when it opens again. */
 export function closed(ledger: Ledger): void {
   ledger.isOpen = false
+  ledger.hadKeys = false
   ledger.acting = undefined
   ledger.armed = null
   ledger.editing = undefined
@@ -340,7 +395,8 @@ export function viewOf(
       ...(isEditing
         ? {
             field: {
-              key: 'reword-text',
+              // A field of its own for each opening: one left with Escape takes what was typed into it with it.
+              key: `reword-text:${id}:${ledger.openings}`,
               label: 'Reword',
               value: whole,
               placeholder: 'one sentence',

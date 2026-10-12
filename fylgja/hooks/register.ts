@@ -6,7 +6,7 @@ import { withGlyphs } from './citations'
 import * as Draft from './draft'
 import { restored } from './known'
 import type { Host } from './host'
-import { ledgerOf, PANE, rowKey, TITLE } from './ledger'
+import { ledgerOf, PANE, RINGLESS, TITLE } from './ledger'
 import { briefly, called, close, line, LINE_WAIT_MS, open, passed, serve, SHORT_WAIT_MS } from './live'
 import type { Line, Live } from './live'
 import { flush, want } from './lookups'
@@ -234,18 +234,20 @@ async function closeLedger($: EngineInterface, scribe: Scribe.Scribe): Promise<v
  * a ring to move; any other is left as it is.
  */
 function ring($: EngineInterface, scribe: Scribe.Scribe): void {
-  const selected = Ledger.selectedIn(Scribe.ledgerEntries(scribe), scribe.ledger)
-  const { acting, armed, editing } = scribe.ledger
+  const key = Ledger.ringKey(Scribe.ledgerEntries(scribe), scribe.ledger)
 
-  if (selected === undefined || editing !== undefined) {
+  if (key === undefined) {
     return
   }
 
-  const id = selected.record.id
-  const key = acting === id ? (armed?.key ?? Ledger.actionKeys(id, selected.isGone)[0] ?? rowKey(id)) : rowKey(id)
-
   $.clock.after(0, () => {
-    void $.ui.focus({ requestId: PANE, key }).catch(() => undefined)
+    void $.ui.focus({ requestId: PANE, key }).catch(() => {
+      // A surface with no ring to move: said once, in fixed words, where only someone looking for it reads it.
+      if (!scribe.said.has(RINGLESS)) {
+        scribe.said.add(RINGLESS)
+        $.ui.log(RINGLESS, { to: 'debug' })
+      }
+    })
     void $.ui.scroll({ in: PANE, to: { key } }).catch(() => undefined)
   })
 }
@@ -727,6 +729,12 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     const { bodyColumns, isFocused } = e.props
     const shown = Scribe.ledger(scribe, bodyColumns, e.props.scroll.bodyRows, isFocused, session.isHere)
+
+    // Given the keys with ctrl+x tab, the window's ring is on nothing, and Enter would press nothing:
+    // it is seated on the selected record, so Enter and the arrows start from what is shown as selected.
+    if (Ledger.keyed(scribe.ledger, isFocused)) {
+      ring($, scribe)
+    }
 
     return ledgerOf($.ui.resolve(e), shown, bodyColumns, isFocused, {
       press: key => void picks.push(key),
