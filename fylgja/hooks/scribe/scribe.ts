@@ -3142,9 +3142,10 @@ function needsSecondPress(key: string): boolean {
 
 /**
  * Whether the key armed as `arm` is on its second press and may act. The
- * first press only makes the key say what a second will do, for a few
- * seconds. It is no sign of attention either: a stray digit is exactly what
- * it guards against.
+ * first press only marks the key where it stands, for a few seconds, and a
+ * line of its own says what a second will do; the key keeps its words. It
+ * is no sign of attention either: a stray digit is exactly what it guards
+ * against.
  *
  * @param holder the band or the window of what was kept, whichever the key is in
  */

@@ -225,7 +225,12 @@ export function closed(ledger: Ledger): void {
   ledger.editing = undefined
 }
 
-/** A key of the window: its address and its words. It is pressed with Enter while the ring is on it, or with a click. */
+/**
+ * A key of the window: its address and its words. It is pressed with Enter
+ * while the ring is on it, or with a click. An armed key was pressed once
+ * and acts when it is pressed again in time: it keeps its words and its
+ * place, and is only marked.
+ */
 export type Action = { key: string; label: string; isArmed?: true }
 
 export type Line = {
@@ -295,7 +300,7 @@ export const LEGENDS = {
   awayQuiet: 'ctrl+x tab gives this window the keys',
 } as const
 
-/** What a card says while one of its keys waits for its second press. */
+/** What the selected record says, on a line of its own above its keys, while one of them waits for its second press. */
 export const ARMED_NOTE = 'Enter again within five seconds and it is done. Nothing is changed until then.'
 
 const OUTCOMES: Readonly<Record<Written['outcome'], string>> = {
@@ -307,9 +312,13 @@ const OUTCOMES: Readonly<Record<Written['outcome'], string>> = {
   withdrawn: 'removed',
 }
 
-/** A key that acts only when pressed twice: what it says before, and once it waits for the second press. */
-function twice(ledger: Ledger, key: string, label: string, again: string): Action {
-  return ledger.armed?.key === key ? { key, label: again, isArmed: true } : { key, label }
+/**
+ * A key that acts only when pressed twice. While it waits for the second
+ * press it says what it said before, as a key of a card does: neither its
+ * words nor its place move under a finger.
+ */
+function twice(ledger: Ledger, key: string, label: string): Action {
+  return ledger.armed?.key === key ? { key, label, isArmed: true } : { key, label }
 }
 
 /** The keys of the record `id` in the order they are drawn: the first is the one the ring goes to when they come up. */
@@ -409,8 +418,8 @@ export function viewOf(
         : !isActing
           ? []
           : isGone
-            ? [twice(ledger, `putback:${id}`, 'Put back', 'Again to put back')]
-            : [{ key: `reword:${id}`, label: 'Reword' }, twice(ledger, `remove:${id}`, 'Remove', 'Again to remove')],
+            ? [twice(ledger, `putback:${id}`, 'Put back')]
+            : [{ key: `reword:${id}`, label: 'Reword' }, twice(ledger, `remove:${id}`, 'Remove')],
     }
   })
   const open = lines.find(line => line.isSelected)

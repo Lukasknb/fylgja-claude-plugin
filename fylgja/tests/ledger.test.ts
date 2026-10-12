@@ -2,6 +2,7 @@ import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { ACCENT } from '../hooks/card'
 import { PANE, RINGLESS } from '../hooks/ledger'
 import { ARM_MS } from '../hooks/scribe/band'
 import * as Ledger from '../hooks/scribe/ledger'
@@ -153,6 +154,11 @@ async function pane($: Engine, isFocused = true, columns = 100, rows = 20, surfa
     actions: async () =>
       (await keys())
         .filter(key => !String(key.props?.key).startsWith('row:'))
+        .map(wordsOf),
+    /** The keys that wait for their second press, each as its words: the ones that are filled. */
+    waiting: async () =>
+      (await keys())
+        .filter(key => all(key, 'Text').some(text => text.props?.inverse === true))
         .map(wordsOf),
     press: (key: string) => ui.press({ key } as never),
     /** Enter in the field that is open, with `value` in it. */
@@ -652,7 +658,7 @@ describe('what is typed never acts on a record', () => {
 
     await ui.press(`remove:${SECOND}`)
 
-    expect([await typed(), await fields(), await ui.actions()], 'a key that waits').toEqual([[], 0, ['Reword', 'Again to remove']])
+    expect([await typed(), await fields(), await ui.actions(), await ui.waiting()], 'a key that waits').toEqual([[], 0, ['Reword', 'Remove'], ['Remove']])
 
     await ui.press(`reword:${SECOND}`)
 
@@ -742,15 +748,30 @@ describe('a record is changed from the window', () => {
     const ui = await pane($)
 
     await ui.press(`row:${SECOND}`)
+
+    const before = await ui.lines()
+    const row = all(await ui.tree(), 'Box').find(box => box.props?.columnGap === 2)
+
     await ui.press(`remove:${SECOND}`)
 
+    const during = await ui.lines()
+    const armed = (await ui.keys()).find(key => key.props?.key === `remove:${SECOND}`) as Node
+
     expect(set.of('amend_memory'), 'one press removes nothing').toEqual([])
-    expect(await ui.actions()).toEqual(['Reword', 'Again to remove'])
-    expect(await ui.lines()).toContain(Ledger.ARMED_NOTE)
+    expect(await ui.actions(), 'every key keeps its words and its place').toEqual(['Reword', 'Remove'])
+    expect(await ui.waiting(), 'the one that was pressed is filled, and no other').toEqual(['Remove'])
+    expect(all(armed, 'Text').map(text => text.props), 'as the armed key of a card is').toEqual([{ color: ACCENT, bold: true, inverse: true }])
+    expect(all(await ui.tree(), 'Box').find(box => box.props?.columnGap === 2)?.props, 'the row of keys is laid out as it was').toEqual(row?.props)
+    expect(during, 'what a second press does is a line of its own, above the keys').toEqual([
+      ...before.slice(0, before.indexOf('Reword | Remove')),
+      Ledger.ARMED_NOTE,
+      ...before.slice(before.indexOf('Reword | Remove')),
+    ])
 
     await set.clock.advance(ARM_MS + 1)
 
     expect(await ui.actions(), 'left alone it stops waiting').toEqual(['Reword', 'Remove'])
+    expect([await ui.waiting(), await ui.lines()], 'and the mark and the line go with the wait').toEqual([[], before])
 
     await ui.press(`remove:${SECOND}`)
     await ui.press(`remove:${SECOND}`)
@@ -773,12 +794,12 @@ describe('a record is changed from the window', () => {
       await ui.press(`remove:${SECOND}`)
       await ringOn($, `remove:${SECOND}`)
 
-      expect(await ui.actions(), 'the ring on the key itself leaves it waiting').toEqual(['Reword', 'Again to remove'])
+      expect(await ui.waiting(), 'the ring on the key itself leaves it waiting').toEqual(['Remove'])
 
       await ringOn($, away)
       await ui.press(`row:${SECOND}`)
 
-      expect(await ui.actions(), `after the ring went to ${away ?? 'Claude Code’s own mark'}`).toEqual(['Reword', 'Remove'])
+      expect([await ui.actions(), await ui.waiting()], `after the ring went to ${away ?? 'Claude Code’s own mark'}`).toEqual([['Reword', 'Remove'], []])
     }
 
     await ui.press(`remove:${SECOND}`)
@@ -786,7 +807,7 @@ describe('a record is changed from the window', () => {
     await ui.press(`row:${SECOND}`)
     await ui.press(`remove:${SECOND}`)
 
-    expect(await ui.actions(), 'and after a scroll key moved the selection').toEqual(['Reword', 'Again to remove'])
+    expect(await ui.waiting(), 'and after a scroll key moved the selection').toEqual(['Remove'])
     expect(set.of('amend_memory'), 'none of it removed anything').toEqual([])
 
     await ui.unmount()
@@ -806,7 +827,7 @@ describe('a record is changed from the window', () => {
     await ui.press(`putback:${SECOND}`)
 
     expect(set.of('remember')).toHaveLength(before)
-    expect(await ui.actions()).toEqual(['Again to put back'])
+    expect([await ui.actions(), await ui.waiting()]).toEqual([['Put back'], ['Put back']])
 
     await ui.press(`putback:${SECOND}`)
 

@@ -48,7 +48,7 @@ export type Acts = {
 type Style = { color?: string; dimColor?: boolean; bold?: boolean; italic?: boolean }
 
 /** How the card fills a label: by inverting it, so it stands out without colour too. */
-const FILLED = { color: ACCENT, bold: true, inverse: true } as const
+export const FILLED = { color: ACCENT, bold: true, inverse: true } as const
 
 function styleOf(part: Part, isAsking: boolean): Style {
   if ('link' in part) {

@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 
-import { ACCENT, partOf } from './card'
+import { ACCENT, FILLED, partOf } from './card'
 import type { Acts, Table } from './card'
 import { RUNE } from './companion'
 import { ARMED_NOTE } from './scribe/ledger'
@@ -15,9 +15,10 @@ import type { Action, Line, View } from './scribe/ledger'
  * Fylgja's name is filled while it has them and dim while it has not. The
  * selected row has a mark in front and is the one at full strength. Nothing
  * depends on colour alone: the name is filled by inverting it, a removed
- * row says that it is, and a key that waits for its second press says so
- * in words. The window's close mark is the one Claude Code draws on the
- * frame; a second one is not drawn under it.
+ * row says that it is, and a key that waits for its second press is filled
+ * where it stands, as a card's is, with a line above the keys saying what
+ * the second press does. The window's close mark is the one Claude Code
+ * draws on the frame; a second one is not drawn under it.
  *
  * Only the look is decided here. Which rows and keys there are is the
  * ledger's, and what a key does is Scribe's.
@@ -41,12 +42,16 @@ export function rowKey(id: string): string {
   return `row:${id}`
 }
 
+/**
+ * A key of a record. One that waits for its second press is drawn where it
+ * stood, with the words it had, filled as the armed key of a card is: the
+ * same cells, so no key beside it moves.
+ */
 function actionOf(t: Table, action: Action, act: Acts): RenderElement {
   return t.Button({
     key: action.key,
     label: action.label,
-    // The key that waits for its second press is the one to look at.
-    ...(action.isArmed === true ? { variant: 'primary' as const } : {}),
+    ...(action.isArmed === true ? { children: [t.Text({ ...FILLED, children: [action.label] })] } : {}),
     onPress: () => act.press(action.key),
   })
 }
@@ -97,6 +102,8 @@ function lineOf(t: Table, line: Line, act: Acts): RenderElement[] {
                 onSubmit: value => act.submit(field.key, value),
               }),
             ]),
+        // What the second press does, on a line of its own above the keys, which stay as they were.
+        ...(line.actions.some(action => action.isArmed === true) ? [t.Text({ color: ACCENT, wrap: 'wrap', children: [ARMED_NOTE] })] : []),
         ...(keys.length === 0 ? [] : [t.Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: keys })]),
       ],
     }),
@@ -136,7 +143,6 @@ export function ledgerOf(t: Table, shown: View, columns: number, isFocused: bool
       ...(shown.hasRule ? [t.Text({ dimColor: true, wrap: 'truncate-end', children: ['─'.repeat(Math.max(1, columns))] })] : []),
       ...(shown.quiet === undefined ? [] : [t.Text({ dimColor: true, wrap: 'wrap', children: [shown.quiet] })]),
       ...shown.lines.flatMap(line => lineOf(t, line, act)),
-      ...(shown.isArmed ? [t.Text({ color: ACCENT, wrap: 'wrap', children: [ARMED_NOTE] })] : []),
       t.Text({ dimColor: true, italic: true, wrap: 'wrap', children: [shown.legend] }),
     ],
   })

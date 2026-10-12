@@ -107,7 +107,9 @@ Very little, on purpose.
   record brings up what can be done with it, `[ Reword ]` and
   `[ Remove ]`, or `[ Put back ]` on a removed one; the arrows move
   between them and Enter presses. Remove and Put back act on a second
-  Enter, and a move away ends the wait. Everything can be clicked too. A
+  Enter: the first only fills the key where it stands, with its words and
+  its place as they were, and a line above the keys says what the second
+  does. A move away ends the wait. Everything can be clicked too. A
   change Fylgja did not take is said in the record's row, which stays as
   it was. Escape leaves the field, then closes the window; so do Claude
   Code's own `✕` on the frame and `/clear`. A compaction leaves it, and
