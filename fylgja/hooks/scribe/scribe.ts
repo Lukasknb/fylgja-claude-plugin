@@ -13,6 +13,7 @@
  * alone. What it keeps on the machine is ids, counters and two switches.
  */
 
+import type { Doing } from '../companion'
 import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
 import * as Band from './band'
@@ -50,6 +51,8 @@ export type ScribeHost = LoopHost & {
   toast: (text: string) => void
   /** `$.ui.status`: the plugin's one line under the prompt; undefined removes it. */
   status: (text: string | undefined) => void
+  /** The mark under the prompt is brought up to date with what Scribe is at. It only shows, and never fails. */
+  mark: () => void
   /** A line for the debug log alone. Counts and fixed words; never anything a person or a record wrote. */
   debug: (text: string) => void
   /** `$.prompt.read`: the text in the prompt box. */
@@ -429,6 +432,17 @@ export function startOver(scribe: Scribe): void {
   scribe.earlier = []
   scribe.anchored.clear()
   scribe.deferred = []
+}
+
+/**
+ * What the mark under the prompt may say of Scribe: whether a look is under
+ * way, and how many records it wrote in this session still stand. Undefined
+ * while Scribe does not run in this conversation.
+ */
+export function doing(scribe: Scribe): Doing | undefined {
+  return scribe.identity === null || scribe.identity === undefined
+    ? undefined
+    : { isReading: scribe.wakingSince !== 0, kept: scribe.written.length }
 }
 
 /** A session began: whether a person is at it, and whether it draws where the band is. */
@@ -1072,6 +1086,8 @@ function settle(host: ScribeHost, scribe: Scribe): void {
     keep(host, band)
   }
 
+  // A record written, removed or put back has been through here by now.
+  host.mark()
   host.redraw()
 }
 
@@ -2024,6 +2040,10 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
 
     try {
       const { epoch } = scribe
+
+      // The look is under way from here: the mark says it is reading.
+      host.mark()
+
       const shown = [...scribe.anchored.values()].slice(0, MAX_SHOWN)
       const plans = planBlock(scribe.plans.docs, scribe.wakes)
       const past = scribe.past.map((block, at) => (at === scribe.past.length - 1 ? { ...block, cache: true as const } : block))
@@ -2133,7 +2153,9 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
         }
       }
     } finally {
+      // Every look ends here, whatever it came to: the mark stops saying it is reading.
       scribe.wakingSince = 0
+      host.mark()
     }
   }
 

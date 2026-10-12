@@ -286,6 +286,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     },
     redraw: () => undefined,
     toast: () => undefined,
+    // The mark is the hook wiring's to draw, which this run does not go through.
+    mark: () => undefined,
     status: text => {
       if (text !== undefined) {
         outcome.counters.statusLines = (outcome.counters.statusLines ?? 0) + 1

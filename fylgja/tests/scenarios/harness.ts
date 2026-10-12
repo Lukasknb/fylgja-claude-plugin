@@ -109,6 +109,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     after: (ms, fn) => $.clock.after(ms, fn),
     redraw: () => undefined,
     toast: () => undefined,
+    // The mark is the hook wiring's to draw, which this run does not go through.
+    mark: () => undefined,
     status: text => {
       outcome.statuses += text === undefined ? 0 : 1
     },

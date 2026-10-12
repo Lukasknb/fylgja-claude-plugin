@@ -22,6 +22,8 @@ export type Checked = {
   server: string | undefined
   /** Whether this answer put the line up or took it down. */
   change: 'shown' | 'cleared' | undefined
+  /** Whether no later ask was answered before this one. An answer that came too late says nothing of the server now. */
+  isLatest: boolean
 }
 
 /**
@@ -47,7 +49,7 @@ export async function check(host: Host, signIn: SignIn, isFirst: boolean): Promi
   const connection = await host.connect()
 
   if (turn < signIn.applied) {
-    return { server: undefined, change: undefined }
+    return { server: undefined, change: undefined, isLatest: false }
   }
 
   signIn.applied = turn
@@ -60,5 +62,5 @@ export async function check(host: Host, signIn: SignIn, isFirst: boolean): Promi
     host.status(needsSignIn ? SIGN_IN_TEXT : undefined)
   }
 
-  return { server: connection.isConnected ? connection.server : undefined, change }
+  return { server: connection.isConnected ? connection.server : undefined, change, isLatest: true }
 }

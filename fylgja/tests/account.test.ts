@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { UNSAID_STATUS } from '../hooks/session'
-import { ACCOUNT, answer, MEETING_ID, meetingRecord, token } from './fixtures'
+import { ACCOUNT, answer, MARK, MEETING_ID, meetingRecord, token } from './fixtures'
 import { band, claude, decision, dev, edit, press, shown, stage, START, step, turn, typing, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 
@@ -124,7 +124,7 @@ describe('the account this machine is set up for', () => {
     await press($, 'account-accept')
 
     expect(set.kept.get('fylgja.account')).toEqual({ user: OTHER_ID, team: OTHER_ID, profile: ACCOUNT.profile.id })
-    expect(set.statuses.at(-1), 'the line goes').toBeUndefined()
+    expect(set.statuses.at(-1), 'the line goes, and the mark stands for the account now pinned').toBe(MARK)
     expect(await shown($)).toBe('engine: AbovePrompt')
 
     await turn($, set, ...WORK)
@@ -229,7 +229,7 @@ describe('the account this machine is set up for', () => {
     expect(await chip($, set), 'the next step asks once more, and then looks the reference up').toMatch(
       'Engineering Retrospective',
     )
-    expect(set.statuses.at(-1), 'the line that said otherwise goes').toBeUndefined()
+    expect(set.statuses.at(-1), 'the line that said otherwise goes, and the mark comes').toBe(MARK)
     expect(set.kept.get('fylgja.account')).toEqual(PIN)
 
     await turn($, set, ...WORK)

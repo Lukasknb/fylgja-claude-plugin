@@ -41,6 +41,9 @@ export const ACCOUNT = {
   profile: { id: '33333333-0000-4000-8000-000000000003', name: 'Work' },
 }
 
+/** The mark at rest: what the line under the prompt shows while the plugin works for the pinned account and has nothing else to say. */
+export const MARK = 'ᚠ fylgja'
+
 export const CONNECTED = { isConnected: true, server: 'plugin:fylgja:fylgja' }
 export const NEEDS_SIGN_IN = { isConnected: false, reason: 'auth', message: 'fylgja needs sign-in' }
 

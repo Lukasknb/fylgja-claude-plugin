@@ -4,6 +4,7 @@ import {
   answer,
   CONNECTED,
   idOf,
+  MARK,
   MEETING_ID,
   meetingRecord,
   NEEDS_SIGN_IN,
@@ -218,7 +219,7 @@ describe('how often Fylgja is asked', () => {
 
     expect(await ui.find({ text: `engine: ${UNCONFIRMED}` })).toBeDefined()
     expect(started.calls.length).toBe(2)
-    expect(started.statuses).toEqual([])
+    expect(started.statuses).toEqual([MARK])
   })
 
   test('a lookup that failed once is confirmed when the second try answers', async ($, on) => {
@@ -473,7 +474,7 @@ describe('what is known, and for how long', () => {
     const other = await $.ui.mount({ ...userMessage(NOTE), surface: 'terminal' })
     await asked($, started)
 
-    expect(started.statuses).toEqual(['sign in with /mcp'])
+    expect(started.statuses).toEqual([MARK, 'sign in with /mcp'])
     expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'the earlier row too').toBeDefined()
     expect(await other.find({ text: 'engine: [✎ note · 0b1f6c1e]' })).toBeDefined()
 
@@ -481,7 +482,7 @@ describe('what is known, and for how long', () => {
     isSignedIn = true
     await started.clock.advance(5000)
 
-    expect(started.statuses).toEqual(['sign in with /mcp', undefined])
+    expect(started.statuses).toEqual([MARK, 'sign in with /mcp', undefined])
     expect(started.calls.length, 'the timer that takes the line down calls nothing on Fylgja').toBe(2)
 
     await asked($, started)

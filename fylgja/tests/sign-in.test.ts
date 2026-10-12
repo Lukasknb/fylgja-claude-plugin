@@ -4,6 +4,7 @@ import {
   answer,
   asked,
   CONNECTED,
+  MARK,
   MEETING_ID,
   meetingRecord,
   NEEDS_SIGN_IN,
@@ -79,7 +80,7 @@ describe('sign-in', () => {
     await $.session.start(SESSION)
     await started.clock.advance(60_000)
 
-    expect(started.statuses).toEqual([undefined])
+    expect(started.statuses, 'the line is cleared, and then it is the mark’s').toEqual([undefined, MARK])
     expect(started.connects()).toBe(1)
   })
 
@@ -95,7 +96,7 @@ describe('sign-in', () => {
     })
 
     expect(await rowOf($, started, MEETING)).toBe('[◉ meeting · 45ada8aa]')
-    expect(started.statuses).toEqual(['sign in with /mcp'])
+    expect(started.statuses).toEqual([MARK, 'sign in with /mcp'])
   })
 
   for (const reason of ['disabled', 'failed', 'unapproved', 'policy', 'unlisted']) {
@@ -155,7 +156,7 @@ describe('sign-in', () => {
     expect(
       started.statuses.filter(status => status !== undefined),
       'the late answer raises no line',
-    ).toEqual([])
+    ).toEqual([MARK])
     expect(await ui.find({ text: 'engine: [◉ "Engineering Retrospective" · 2026-09-30]' }), 'and wipes no chip').toBeDefined()
 
     await starting

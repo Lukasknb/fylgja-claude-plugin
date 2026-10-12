@@ -1,5 +1,7 @@
 import { accountOf, isPinned, keptPin, nameOf, PIN_KEY, pinOf, tailOf } from './account'
 import type { Account } from './account'
+import { markOf } from './companion'
+import type { Doing } from './companion'
 import type { Host } from './host'
 import { isLeftToPlugin } from './project'
 import { payloadOf } from './payload'
@@ -47,6 +49,16 @@ export type Session = {
   notice: string | undefined
   /** Whether the engine last answered an entry other than the plugin's own for its server. */
   isOutside: boolean
+  /**
+   * Whether Fylgja is here for the pinned account, as far as the latest
+   * answers say: connected through the plugin's own entry, and signed in as
+   * the account this machine is set up for. The mark shows only then.
+   */
+  isHere: boolean
+  /** The mark the line under the prompt shows now; undefined while it shows something else or nothing. */
+  mark: string | undefined
+  /** What Scribe is at, asked whenever the mark is worked out. Set once, by the plugin; without it the mark rests. */
+  doing: (() => Doing | undefined) | undefined
   /** The line last said about why the plugin stays out; said once, not at every answer. */
   offLine: string | undefined
   /** The account Fylgja answered for this connection, and whether it is the pinned one. */
@@ -95,6 +107,9 @@ export function create(): Session {
     server: undefined,
     notice: undefined,
     isOutside: false,
+    isHere: false,
+    mark: undefined,
+    doing: undefined,
     offLine: undefined,
     account: { state: 'unknown', who: undefined },
     known: undefined,
@@ -137,6 +152,40 @@ export function say(host: Host, session: Session, notice: string | undefined): v
   }
 }
 
+/** The mark as it would read now; undefined while Fylgja is not here for the pinned account. */
+function markNow(session: Session): string | undefined {
+  return session.isHere ? markOf(session.doing?.()) : undefined
+}
+
+/**
+ * The mark for the line under the prompt, which is about to be written as
+ * `line`: the mark when the line has nothing else to say and Fylgja is here,
+ * undefined otherwise. What it answers is kept as what the line shows.
+ */
+export function markFor(session: Session, line: string | undefined): string | undefined {
+  session.mark = line === undefined ? markNow(session) : undefined
+
+  return session.mark
+}
+
+/**
+ * Brings the mark up to date after something it says may have changed. The
+ * line is written only when it is the mark's to write, with no sign-in line
+ * and no notice up, and only when the mark reads differently than it shows.
+ *
+ * It only shows, so it never fails: a line that could not be written stays
+ * as it is, and whatever called this goes on as it would have without it.
+ */
+export function remark(host: Host, session: Session): void {
+  try {
+    if (!session.signIn.isShown && session.notice === undefined && markNow(session) !== session.mark) {
+      host.status(undefined)
+    }
+  } catch {
+    // The line stays as it is.
+  }
+}
+
 /** The person sent a prompt: a line about why the plugin stays out has been there long enough. */
 export function prompted(host: Host, session: Session): void {
   if (session.notice !== undefined && session.notice === session.offLine) {
@@ -165,6 +214,8 @@ export function revet(session: Session): void {
   session.pin = 'unknown'
   session.acceptUntil = 0
   session.isPutOff = false
+  // Until both are known again, the mark does not vouch for either.
+  session.isHere = false
 }
 
 /**
@@ -221,6 +272,8 @@ function stayOut(host: Host, session: Session, line: string): undefined {
 
   session.isOutside = true
   session.server = undefined
+  session.isHere = false
+  remark(host, session)
 
   return undefined
 }
@@ -318,6 +371,7 @@ export async function pressed(host: Host, session: Session, key: string): Promis
       session.pin = 'match'
       session.acceptUntil = 0
       session.isOutside = false
+      session.isHere = true
       session.offLine = undefined
       say(host, session, undefined)
       // What was known was another account's to see.
@@ -396,7 +450,7 @@ export async function serverOf(host: Host, session: Session, isFirst = false): P
     return stayOut(host, session, TWIN_STATUS)
   }
 
-  const { server: answered, change } = await SignIn.check(host, session.signIn, isFirst)
+  const { server: answered, change, isLatest } = await SignIn.check(host, session.signIn, isFirst)
 
   if (session.signIn.isShown && session.recheck === undefined) {
     session.recheck = host.every(RECHECK_MS, () => {
@@ -405,6 +459,12 @@ export async function serverOf(host: Host, session: Session, isFirst = false): P
   }
 
   followed(host, session, change)
+
+  // Not connected, by the latest answer: Fylgja is not here, whoever was signed in.
+  if (answered === undefined && isLatest) {
+    session.isHere = false
+    remark(host, session)
+  }
 
   if (answered !== undefined && answered !== OWN_SERVER) {
     return stayOut(host, session, TWIN_STATUS)
@@ -452,6 +512,8 @@ export async function serverOf(host: Host, session: Session, isFirst = false): P
     }
 
     session.isOutside = false
+    session.isHere = true
+    remark(host, session)
   }
 
   // An answer that came late names no server; the name last known stands

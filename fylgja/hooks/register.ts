@@ -38,11 +38,14 @@ function hostOf($: EngineInterface, session: Session.Session, live?: Live): Host
     call: (server, tool, args) => called(live, () => $.mcp.call(server, tool, args)),
     isLive: () => live?.isOpen === true,
     // The line under the prompt has one owner. Sign-in comes first; when it
-    // has nothing to say, the line shows what the plugin left there, if anything.
+    // has nothing to say, the line shows what the plugin left there, if
+    // anything; and when nothing was left there, the mark, which is made of
+    // safe parts and keeps its own dots.
     status: text => {
       const line = text ?? session.notice
+      const mark = Session.markFor(session, line)
 
-      $.ui.status(line === undefined ? undefined : drawn(line, MAX_LINE))
+      $.ui.status(line === undefined ? mark : drawn(line, MAX_LINE))
     },
     redraw: () => $.ui.invalidate('ui.render'),
     every: (ms, fn) => $.clock.every(ms, fn),
@@ -110,6 +113,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live)
     toast: text => $.ui.toast(drawn(text, MAX_LINE)),
     // Scribe's line goes where every line of the plugin's goes, behind the sign-in line.
     status: text => Session.say(hostOf($, session, live), session, text),
+    mark: () => remark($, session),
     debug: text => $.ui.log(drawn(text, MAX_LINE), { to: 'debug' }),
     box: async () => (await $.prompt.read()).text,
     fill: async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled,
@@ -130,6 +134,11 @@ function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live)
     destination: () =>
       session.account.state === 'pinned' && session.account.who !== undefined ? destinationOf(session.account.who) : undefined,
   }
+}
+
+/** Brings the mark under the prompt up to date; see `Session.remark`. No call to Fylgja is started for it. */
+function remark($: EngineInterface, session: Session.Session): void {
+  Session.remark(hostOf($, session), session)
 }
 
 // How the engine words a call of a plugin's that it did not let through:
@@ -177,6 +186,9 @@ export function register(on: On, options: PluginOptions = {}): void {
   const session = Session.create()
   const draft = Draft.create()
   const scribe = Scribe.create({ isOn: options.scribe !== false })
+
+  // What the mark says of Scribe is read from Scribe when the line is written.
+  session.doing = () => Scribe.doing(scribe)
   // The keys pressed and the lines entered in the band, as its elements'
   // own handlers took them; the hook on the press does the work.
   const presses: string[] = []
@@ -202,6 +214,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       await briefly(host.after, flush(host, session, true), SHORT_WAIT_MS)
     } finally {
       close(live)
+      remark($, session)
     }
 
     return started
@@ -226,6 +239,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       await briefly(host.after, flush(host, session), SHORT_WAIT_MS)
     } finally {
       close(live)
+      remark($, session)
     }
 
     return started
@@ -418,6 +432,8 @@ export function register(on: On, options: PluginOptions = {}): void {
       // The turn ended as it would have without the plugin.
     } finally {
       close(live)
+      // Every look of Scribe's has ended by here, however it ended.
+      remark($, session)
     }
 
     return done
@@ -507,6 +523,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         // The press is done with.
       } finally {
         close(live)
+        remark($, session)
       }
     }
 
@@ -526,6 +543,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         // The line is done with.
       } finally {
         close(live)
+        remark($, session)
       }
     }
 
