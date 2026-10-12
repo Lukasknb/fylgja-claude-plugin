@@ -14,6 +14,7 @@
  */
 
 import type { Doing } from '../companion'
+import type { View as Listed } from '../listing'
 import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
 import * as Band from './band'
@@ -3278,7 +3279,7 @@ export function view(scribe: Scribe, isWorking: boolean, destination?: string): 
  * @param isFocused whether the window has the keys
  * @param isHere whether Fylgja is here for the account this machine is set up for
  */
-export function ledger(scribe: Scribe, columns: number, rows: number, isFocused: boolean, isHere: boolean): Ledger.View {
+export function ledger(scribe: Scribe, columns: number, rows: number, isFocused: boolean, isHere: boolean): Listed {
   Ledger.tidy(scribe.written, scribe.ledger)
 
   return Ledger.viewOf(

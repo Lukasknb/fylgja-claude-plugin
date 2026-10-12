@@ -1,26 +1,25 @@
 /**
- * The ledger: the window that lists what Scribe kept in this session, one
- * row per record, newest first, with the record that is selected opened.
+ * The ledger: the view of Fylgja's window that lists what Scribe kept in
+ * this session, one row per record, newest first, with the record that is
+ * selected opened.
  *
  * It is open only because the developer opened it, by pressing the mark
  * above the prompt or by its command, and it shows what the plugin already
  * holds: nothing is asked of Fylgja or of a model to draw it. What is here
- * is its state and the description both surfaces draw it from. Every word
- * that comes from a record passes the sanitiser the chips use.
- *
- * No key of it is a letter or a digit. What the developer types is a prompt
- * and goes to the prompt box, whether the window has the keys or not; the
- * window is worked with the arrows, Enter and Escape, or with clicks. The
- * arrows move from record to record. Enter on a record brings up what can
- * be done with it, and only there can something be changed.
+ * is its state and its description in the shapes every view of the window
+ * is drawn from (see `listing.ts`, which also says how the window is
+ * worked). Every word that comes from a record passes the sanitiser the
+ * chips use.
  */
 
 import { glyphOf } from '../glyphs'
+import { fitted, LEGENDS, roomFor, stepped } from '../listing'
+import type { Action, Line, View } from '../listing'
 import { drawn } from '../plain'
 import type { Armed } from './band'
 import type { Written } from './types'
 import { kindName, MAX_CONTENT, MAX_OPTION, why } from './view'
-import type { Field, Part } from './view'
+import type { Part } from './view'
 
 export type Ledger = {
   /** Whether the window is open, as far as the plugin was told. */
@@ -50,12 +49,6 @@ export const MAX_GONE = 40
 
 /** A record's row lists no more of its places than this. */
 const MAX_PLACES = 8
-
-/** A row's sentence is never cut shorter than this, however narrow the window. */
-const MIN_SENTENCE = 16
-
-/** Cells of a row that are not the record's: the mark in front, and the room a key's own edges take where it is drawn. */
-const ROW_EDGE = 3
 
 export function create(): Ledger {
   return {
@@ -140,17 +133,17 @@ export function rest(ledger: Ledger, id: string): boolean {
  * record now selected, or undefined when it did not move.
  */
 export function step(entries: readonly Entry[], ledger: Ledger, by: number): string | undefined {
-  const current = selectedIn(entries, ledger)
-  const at = current === undefined ? -1 : entries.indexOf(current)
-  const to = entries[Math.min(entries.length - 1, Math.max(0, at + by))]
+  const to = stepped(
+    entries.map(entry => entry.record.id),
+    ledger.selected,
+    by,
+  )
 
-  if (to === undefined || to === current) {
-    return undefined
+  if (to !== undefined) {
+    rest(ledger, to)
   }
 
-  rest(ledger, to.record.id)
-
-  return to.record.id
+  return to
 }
 
 /**
@@ -187,18 +180,6 @@ export function settled(ledger: Ledger): void {
 }
 
 /**
- * Notes whether the window has the keys as it is drawn. Whether it was just
- * given them: its focus ring is then on nothing, and is to be seated.
- */
-export function keyed(ledger: Ledger, isFocused: boolean): boolean {
-  const isGiven = isFocused && !ledger.hadKeys
-
-  ledger.hadKeys = isFocused
-
-  return isGiven
-}
-
-/**
  * The element the focus ring belongs on: the selected record's row, or,
  * while that record's keys are up, the key that waits for its second press
  * or else the first of them. Undefined with no record, and while the field
@@ -225,47 +206,8 @@ export function closed(ledger: Ledger): void {
   ledger.editing = undefined
 }
 
-/**
- * A key of the window: its address and its words. It is pressed with Enter
- * while the ring is on it, or with a click. An armed key was pressed once
- * and acts when it is pressed again in time: it keeps its words and its
- * place, and is only marked.
- */
-export type Action = { key: string; label: string; isArmed?: true }
-
-export type Line = {
-  id: string
-  isSelected: boolean
-  /** Whether the record was removed: its row is dim and offers only to put it back. */
-  isGone: boolean
-  /** What kind of record it is, with its glyph. */
-  kind: string
-  /** Its sentence, cut to the row. */
-  sentence: string
-  /** What became of it, when it is not simply new. */
-  outcome: string
-  /** The selected record, opened: its reason, what was ruled out and where it applies. Empty for every other row. */
-  detail: Part[][]
-  /** What went wrong with the last change to it. */
-  trouble?: string
-  /** Said while a change to it is on its way to Fylgja. */
-  waiting?: string
-  field?: Field
-  actions: Action[]
-}
-
-export type View = {
-  /** How many records stand, as the title says it. */
-  count: string
-  lines: Line[]
-  /** The one line shown in place of rows. */
-  quiet?: string
-  /** Whether a key of the selected record waits for its second press. */
-  isArmed: boolean
-  /** Whether the rule under the title bar is drawn: it is the first thing let go when the window has no room for everything. */
-  hasRule: boolean
-  legend: string
-}
+/** What the title bar says after Fylgja's name while this view is up. */
+export const NAME = 'kept in this session'
 
 /** Why the window has no rows to show although it is open. */
 export type Away = 'off' | 'signed-out'
@@ -286,22 +228,6 @@ export const TROUBLE = {
 } as const
 
 export const WAITING = 'Asking Fylgja…'
-
-/**
- * The line of keys, for each state the window is in. Without the keys it
- * names none of them: it says how the window is given them.
- */
-export const LEGENDS = {
-  list: '↑↓ record · enter what can be done · esc close',
-  keys: '↑↓ move · enter press · esc close',
-  field: 'enter save · esc leave the field',
-  quiet: 'esc close',
-  away: 'ctrl+x tab gives this window the keys · or click a record',
-  awayQuiet: 'ctrl+x tab gives this window the keys',
-} as const
-
-/** What the selected record says, on a line of its own above its keys, while one of them waits for its second press. */
-export const ARMED_NOTE = 'Enter again within five seconds and it is done. Nothing is changed until then.'
 
 const OUTCOMES: Readonly<Record<Written['outcome'], string>> = {
   created: '',
@@ -365,6 +291,7 @@ export function viewOf(
 ): View {
   if (away !== undefined) {
     return {
+      name: NAME,
       count: '',
       lines: [],
       quiet: QUIET[away],
@@ -381,11 +308,8 @@ export function viewOf(
     const isSelected = selected?.record.id === id
     const kind = `${glyphOf('decision')} ${kindName(record.kind)}`
     const outcome = isGone ? OUTCOMES.withdrawn : OUTCOMES[record.outcome]
-    // The row is one line: its mark, its kind and what became of it are kept, and the sentence is cut to what is left.
-    // A sentence that is cut ends in one mark more than it was cut to.
-    const room = columns - ROW_EDGE - kind.length - 3 - (outcome === '' ? 0 : outcome.length + 3) - 1
     const whole = drawn(record.content, MAX_CONTENT)
-    const sentence = drawn(record.content, Math.max(MIN_SENTENCE, Math.min(MAX_CONTENT, room)))
+    const sentence = drawn(record.content, roomFor(columns, kind, outcome, MAX_CONTENT))
     const trouble = ledger.trouble.get(id)
     const isBusy = ledger.busy.has(id)
     const isEditing = isSelected && !isGone && !isBusy && ledger.editing === id
@@ -394,10 +318,10 @@ export function viewOf(
     return {
       id,
       isSelected,
-      isGone,
+      isDim: isGone,
       kind,
       sentence,
-      outcome,
+      tail: outcome,
       detail: isSelected ? opened(record, sentence !== whole) : [],
       ...(trouble === undefined ? {} : { trouble }),
       ...(isBusy ? { waiting: WAITING } : {}),
@@ -439,6 +363,7 @@ export function viewOf(
   const hasRule = fitted(lines, rows - 3 - (lines.length === 0 ? 1 : 0) - (isArmed ? 1 : 0))
 
   return {
+    name: NAME,
     count: written.length === 0 ? '' : `${written.length} kept`,
     lines,
     ...(lines.length === 0 ? { quiet: QUIET.empty } : {}),
@@ -446,34 +371,4 @@ export function viewOf(
     hasRule,
     legend,
   }
-}
-
-/**
- * Makes the rows fit a window with room for `room` of them, when little
- * enough is over: the title bar and the line of keys are what a window is
- * known by, and are not to be scrolled out of sight for one row. The rule
- * under the title bar goes first. While the selected record's keys or its
- * field are up, the last lines of what it holds go next, down to one: the
- * record was read before its keys were asked for. Whether the rule stays.
- * A list that is longer than that is left whole and scrolled.
- */
-function fitted(lines: Line[], room: number): boolean {
-  const open = lines.find(line => line.isSelected)
-  const heightOf = (line: Line): number =>
-    1 +
-    (line.trouble === undefined ? 0 : 1) +
-    (line.isSelected ? line.detail.length + (line.waiting === undefined ? 0 : 1) + (line.field === undefined ? 0 : 1) + (line.actions.length === 0 ? 0 : 1) : 0)
-  const over = lines.reduce((sum, line) => sum + heightOf(line), 0) - room
-  const isWorkedOn = open !== undefined && (open.actions.length > 0 || open.field !== undefined)
-  const spare = isWorkedOn ? Math.max(0, open.detail.length - 1) : 0
-
-  if (over <= 0 || over > 1 + spare) {
-    return true
-  }
-
-  if (open !== undefined && over > 1) {
-    open.detail = open.detail.slice(0, open.detail.length - (over - 1))
-  }
-
-  return false
 }

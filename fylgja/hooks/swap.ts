@@ -41,6 +41,28 @@ function textFor(
   })
 }
 
+/**
+ * The chip a reference stands as when the plugin itself puts it into
+ * `draft`, as a pasted one would: the first of its texts no other reference
+ * uses, remembered so that the prompt is sent with the reference as written.
+ * Undefined when `reference` is not one reference, when all its texts are
+ * taken, or when no more chips can be remembered; it then goes in as written.
+ */
+export function chipFor(known: Known, draft: string, reference: string): string | undefined {
+  const [token, ...more] = tokensIn(reference)
+
+  if (token === undefined || more.length > 0 || token.text !== reference || draft.length > MAX_DRAFT) {
+    return undefined
+  }
+
+  const shaped = shapedIn(known, draft)
+  const standing = new Set(shaped.filter(one => one.token !== undefined).map(one => one.chip))
+  const strangers = new Set(shaped.filter(one => one.token === undefined).map(one => one.chip))
+  const chip = textFor(token, known, new Map(), strangers)
+
+  return chip !== undefined && hold(known, chip, token.text, standing) ? chip : undefined
+}
+
 function build(text: string, chosen: ReadonlyMap<Token, string>): { out: string; changes: Change[] } {
   const changes: Change[] = []
   let out = ''

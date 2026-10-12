@@ -19,6 +19,11 @@ quiet touches that make working with it feel at home.
   the way it is. When a decision has no reason it asks, once and briefly.
   When you work in a file that has a recorded decision or gotcha, it tells
   you. It runs beside the conversation, never in it.
+- **Search Fylgja without leaving the prompt.** `/fylgja-search` finds what
+  was decided, by what it says, in a window of your own: Claude does not
+  see what you found. Cite a record and its reference goes into your
+  prompt as a chip. Fylgja is asked when you press Enter, never while you
+  type.
 
 ## Install
 

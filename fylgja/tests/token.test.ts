@@ -4,8 +4,8 @@ import { distinctById, tokensIn } from '../hooks/token'
 import { MEETING_ID, NOTE_ID, token } from './fixtures'
 
 describe('references in text', () => {
-  test('each of the four kinds is read with its id and place', () => {
-    for (const kind of ['meeting', 'session', 'note', 'project']) {
+  test('each kind a reference names, the four the app copies and a knowledge atom, is read with its id and place', () => {
+    for (const kind of ['meeting', 'session', 'note', 'project', 'atom']) {
       const written = token(kind, 'Launch checklist', MEETING_ID)
       const [found] = tokensIn(`see ${written} please`)
 

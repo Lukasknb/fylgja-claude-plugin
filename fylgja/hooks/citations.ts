@@ -22,6 +22,21 @@ const PATTERN = new RegExp(
   'g',
 )
 
+// A record's page: on Fylgja's own host, a kind and an id and nothing after.
+const PAGE = new RegExp(
+  `^https://${FYLGJA_HOST.replace(/\./g, '\\.')}/open/[a-z_]{1,40}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+  'i',
+)
+
+/**
+ * The address of a record's page as Fylgja answered it, or null for
+ * anything that is not exactly one: a link is drawn only when it goes to a
+ * record on Fylgja's own host and nowhere else.
+ */
+export function pageOf(value: unknown): string | null {
+  return typeof value === 'string' && PAGE.test(value) ? value : null
+}
+
 /**
  * A reply's markdown with the record's glyph put before the label of every
  * link to a Fylgja record, or undefined when it holds no such link.

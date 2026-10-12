@@ -112,6 +112,8 @@ export type StageOptions = {
   hasNoId?: boolean
   /** What is already kept on this machine. */
   kept?: Readonly<Record<string, unknown>>
+  /** A dialog holds the keys: the prompt box takes no text the plugin puts in. */
+  isBoxHeld?: boolean
 }
 
 export type Stage = {
@@ -141,8 +143,8 @@ export type Stage = {
   kept: Map<string, unknown>
   /** The conversation; a test adds to it and ends the turn. */
   rows: Row[]
-  /** The prompt box as `$.prompt.read` answers. */
-  box: { text: string }
+  /** The prompt box as `$.prompt.read` answers; the cursor is at the end of the text unless a test puts it elsewhere. */
+  box: { text: string; cursor?: number }
   clock: MockClock
   /** The calls made of one tool. */
   of: (tool: string) => Record<string, unknown>[]
@@ -169,7 +171,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const statuses: (string | undefined)[] = []
   const kept = new Map<string, unknown>(Object.entries(options.kept ?? {}))
   const rows: Row[] = []
-  const box = { text: '' }
+  const box: { text: string; cursor?: number } = { text: '' }
   const clock = mock.clock(on)
   let written = 0
 
@@ -338,10 +340,18 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
     return { value: undefined }
   })
-  on('prompt.read', () => ({ value: { text: box.text, cursor: box.text.length } }))
+  on('prompt.read', () => ({ value: { text: box.text, cursor: box.cursor ?? box.text.length } }))
+  // The box takes a text as Claude Code's does: over the draft, after it, or in at the cursor.
   on('prompt.fill', ($, e) => {
+    if (options.isBoxHeld === true) {
+      return { isFilled: false, refusal: 'dialog' as const }
+    }
+
+    const at = box.cursor ?? box.text.length
+
     fills.push(e.text)
-    box.text = e.text
+    box.text = e.mode === 'replace' ? e.text : e.mode === 'append' ? box.text + e.text : box.text.slice(0, at) + e.text + box.text.slice(at)
+    box.cursor = e.mode === 'insert' ? at + e.text.length : box.text.length
 
     return { isFilled: true }
   })

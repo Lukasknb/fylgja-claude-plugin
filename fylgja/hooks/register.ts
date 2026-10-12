@@ -6,7 +6,7 @@ import { withGlyphs } from './citations'
 import * as Draft from './draft'
 import { restored } from './known'
 import type { Host } from './host'
-import { ledgerOf, PANE, RINGLESS, TITLE } from './ledger'
+import { keyed } from './listing'
 import { briefly, called, close, line, LINE_WAIT_MS, open, passed, serve, SHORT_WAIT_MS } from './live'
 import type { Line, Live } from './live'
 import { flush, want } from './lookups'
@@ -20,8 +20,11 @@ import { REFUSED, verdictFor } from './scribe/grant'
 import * as Ledger from './scribe/ledger'
 import * as Scribe from './scribe/scribe'
 import type { ScribeHost } from './scribe/scribe'
+import * as Search from './search'
 import * as Session from './session'
 import { referencesIn, rowTextOf } from './user-row'
+import { PANE, RINGLESS, TITLES, windowOf } from './window'
+import type { Which } from './window'
 
 /** No line this plugin shows is longer than this. */
 const MAX_LINE = 200
@@ -198,28 +201,50 @@ const MAX_ROWS = 18
 const ROWS_AROUND = 8
 
 /**
- * Opens the window of what was kept, or brings it the keys when it is open.
- * The keys are asked for, not taken: where the prompt box holds text or a
- * dialog is up, Claude Code keeps them and the window is shown all the same.
- * Escape closes it. It holds back nobody's toasts.
+ * Fylgja's one window: which of its views it shows, and what the search
+ * view holds. What the view of what was kept holds is Scribe's. One view is
+ * up at a time, so the title bar, the rows, the ring and the keys are the
+ * same code whichever it is.
  */
-async function openLedger($: EngineInterface, scribe: Scribe.Scribe): Promise<void> {
-  const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, Scribe.ledgerEntries(scribe).length + ROWS_AROUND))
+type Win = { which: Which; search: Search.Search }
 
-  scribe.ledger.isOpen = true
+/** Whether the window is open, on either view. */
+function isUp(scribe: Scribe.Scribe, win: Win): boolean {
+  return scribe.ledger.isOpen || win.search.isOpen
+}
+
+/** Notes whether the window is open on the view it shows; the other view is not. */
+function noted(scribe: Scribe.Scribe, win: Win, isOpen: boolean): void {
+  scribe.ledger.isOpen = isOpen && win.which === 'kept'
+  win.search.isOpen = isOpen && win.which === 'search'
+}
+
+/**
+ * Opens the window on the view it is set to, or brings it the keys when it
+ * is open. The keys are asked for, not taken: where the prompt box holds
+ * text or a dialog is up, Claude Code keeps them and the window is shown all
+ * the same. Escape closes it. It holds back nobody's toasts.
+ */
+async function openWindow($: EngineInterface, scribe: Scribe.Scribe, win: Win): Promise<void> {
+  // The search view has its field above the records and its line in place of them, and opens a record to more lines than a kept one has.
+  const found = win.search.hits.length
+  const listed = win.which === 'kept' ? Scribe.ledgerEntries(scribe).length : found + (found === 0 ? 2 : 5)
+  const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, listed + ROWS_AROUND))
+
+  noted(scribe, win, true)
 
   try {
-    const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true, closeOnEscape: true, rows })
+    const opened = await $.ui.open({ id: PANE, title: TITLES[win.which], focus: true, closeOnEscape: true, rows })
 
     // Open, and no surface draws it: the person asked for it and sees nothing, so they are told why,
     // and it is not left waiting to come up later by itself.
     if (!opened.isPlaced) {
       $.ui.toast(drawn(`Fylgja: the window cannot be shown here. ${opened.reason}`, MAX_LINE))
-      await closeLedger($, scribe)
+      await closeWindow($, scribe, win)
     }
   } catch {
     // Not opened: nothing is drawn, and the next press asks again.
-    scribe.ledger.isOpen = false
+    noted(scribe, win, false)
     $.ui.toast('Fylgja: the window could not be opened here.')
   }
 
@@ -227,9 +252,28 @@ async function openLedger($: EngineInterface, scribe: Scribe.Scribe): Promise<vo
   $.ui.invalidate('ui.render')
 }
 
-/** Closes the window of what was kept. */
-async function closeLedger($: EngineInterface, scribe: Scribe.Scribe): Promise<void> {
+/** Shows what was kept: the search view, if that was up, lets go of what it held half done. */
+async function openKept($: EngineInterface, scribe: Scribe.Scribe, win: Win): Promise<void> {
+  Search.closed(win.search)
+  win.which = 'kept'
+  await openWindow($, scribe, win)
+}
+
+/**
+ * A search was answered while the window shows it: the window is asked to
+ * be as tall as what was found needs, since it was opened before anything
+ * was, and for the keys it had.
+ */
+async function fitFound($: EngineInterface, scribe: Scribe.Scribe, win: Win): Promise<void> {
+  if (win.which === 'search' && win.search.isOpen && win.search.hits.length > 0) {
+    await openWindow($, scribe, win)
+  }
+}
+
+/** Closes the window, whichever view it shows. */
+async function closeWindow($: EngineInterface, scribe: Scribe.Scribe, win: Win): Promise<void> {
   Ledger.closed(scribe.ledger)
+  Search.closed(win.search)
   // The mark is a key again.
   $.ui.invalidate('ui.render')
 
@@ -237,7 +281,15 @@ async function closeLedger($: EngineInterface, scribe: Scribe.Scribe): Promise<v
     await $.ui.close({ id: PANE })
   } catch {
     // Kept open by another plugin's hook: it is theirs to say, and the next press closes it.
-    scribe.ledger.isOpen = true
+    noted(scribe, win, true)
+  }
+}
+
+/** The prompt box as the search view reaches it: read as it stands, and written at the cursor alone. */
+function boxOf($: EngineInterface): Search.Box {
+  return {
+    read: () => $.prompt.read(),
+    insert: async (text, decorations) => (await $.prompt.fill({ text, mode: 'insert', decorations })).isFilled,
   }
 }
 
@@ -245,11 +297,13 @@ async function closeLedger($: EngineInterface, scribe: Scribe.Scribe): Promise<v
  * Puts the window's focus ring where the window now is, once it has been
  * drawn again: on the selected record's row, or, while that record's keys
  * are up, on the key that waits for its second press or else the first of
- * them. The row is brought into view. Only a window that holds the keys has
- * a ring to move; any other is left as it is.
+ * them; in the search view, in its field while what is typed goes there.
+ * The row is brought into view. Only a window that holds the keys has a
+ * ring to move; any other is left as it is.
  */
-function ring($: EngineInterface, scribe: Scribe.Scribe): void {
-  const key = Ledger.ringKey(Scribe.ledgerEntries(scribe), scribe.ledger)
+function ring($: EngineInterface, session: Session.Session, scribe: Scribe.Scribe, win: Win): void {
+  const key =
+    win.which === 'search' ? Search.ringKey(win.search, session.isHere) : Ledger.ringKey(Scribe.ledgerEntries(scribe), scribe.ledger)
 
   if (key === undefined) {
     return
@@ -308,11 +362,18 @@ const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
  * What Scribe kept in the session is listed in a window the developer
  * opens, by pressing the mark above the prompt or with `/fylgja-kept`. It
  * never opens by itself, and it draws from what the plugin already holds.
+ *
+ * The same window searches Fylgja's knowledge atoms when the developer
+ * types `/fylgja-search`. Fylgja is asked on their Enter and at no other
+ * time, what it found is shown to them and not to Claude, and nothing of it
+ * reaches the conversation but the reference of a record they chose to
+ * cite, put into the prompt box for them to send (see `search.ts`).
  */
 export function register(on: On, options: PluginOptions = {}): void {
   const session = Session.create()
   const draft = Draft.create()
   const scribe = Scribe.create({ isOn: options.scribe !== false })
+  const win: Win = { which: 'kept', search: Search.create() }
 
   // What the mark says of Scribe is read from Scribe when the line is written.
   session.doing = () => Scribe.doing(scribe)
@@ -320,7 +381,7 @@ export function register(on: On, options: PluginOptions = {}): void {
   // own handlers took them; the hook on the press does the work.
   const presses: string[] = []
   const entries: { key: string; value: string }[] = []
-  // The same for the window of what was kept.
+  // The same for the window, whichever view it shows.
   const picks: string[] = []
   const lines: string[] = []
   // The calls to Fylgja of a look that outlived the hook it began in.
@@ -356,13 +417,60 @@ export function register(on: On, options: PluginOptions = {}): void {
       // The mark still opens it.
     }
 
+    // The one way to the search: nothing else opens it.
+    try {
+      await $.command.register({
+        name: 'fylgja-search',
+        description: 'Search Fylgja for what was decided and why',
+        argumentHint: '[what to look for]',
+        immediate: true,
+      })
+    } catch {
+      // Claude can still search with Fylgja's own tool.
+    }
+
     return started
   }).catch(($, e, next) => next(e))
 
   // Typed by the developer, so the window opens. It answers with no line of
   // its own: a command's line is read by Claude, and the window says it all.
   on('command.run', { command: 'fylgja-kept' }, async $ => {
-    await openLedger($, scribe)
+    await openKept($, scribe, win)
+
+    return {}
+  })
+
+  // Typed by the developer, so the window opens on its search view, which
+  // starts over. With words after the command they are searched for at
+  // once, as Enter in the field would: the one call to Fylgja a search is,
+  // made here, where the command is being waited on. With none the ring is
+  // in the field, and nothing is asked until Enter. It answers with no line
+  // of its own either: what was found is the developer's to read, not Claude's.
+  on('command.run', { command: 'fylgja-search' }, async ($, e) => {
+    const query = Search.queryOf(e.args)
+
+    Ledger.closed(scribe.ledger)
+    win.which = 'search'
+    Search.current(win.search, session.epoch)
+    Search.begun(win.search, query !== '')
+    await openWindow($, scribe, win)
+
+    if (query !== '' && win.search.isOpen) {
+      const live = open()
+
+      try {
+        await Search.look(hostOf($, session, live), session, win.search, query)
+      } catch {
+        // The view says what it has.
+      } finally {
+        close(live)
+        remark($, session)
+      }
+
+      await fitFound($, scribe, win)
+    }
+
+    ring($, session, scribe, win)
 
     return {}
   })
@@ -383,9 +491,9 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     Scribe.startOver(scribe)
 
-    // What the window listed was the conversation's before.
+    // What the window listed was the conversation's before. The search view stays up, and lets go of what it found when it is next looked at.
     if (scribe.ledger.isOpen) {
-      await closeLedger($, scribe)
+      await closeWindow($, scribe, win)
     }
 
     $.ui.invalidate('ui.render')
@@ -741,7 +849,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         flexDirection: 'column',
         children: [
           await next(e),
-          Scribe.isOff(scribe) || scribe.ledger.isOpen
+          Scribe.isOff(scribe) || isUp(scribe, win)
             ? Text({ dimColor: true, children: [mark ?? ''] })
             : Button({ key: MARK_KEY, plain: true, dimColor: true, onPress: () => void presses.push(MARK_KEY), children: [mark ?? ''] }),
         ],
@@ -760,8 +868,8 @@ export function register(on: On, options: PluginOptions = {}): void {
     const pressed = await next(e)
     const key = presses.shift()
 
-    if (key === MARK_KEY && scribe.ledger.isOpen) {
-      await closeLedger($, scribe)
+    if (key === MARK_KEY && isUp(scribe, win)) {
+      await closeWindow($, scribe, win)
     } else if (key === MARK_KEY) {
       // Opened here, where the person's press is being answered, so it is
       // placed at any width. The press left the keys with the band, and a
@@ -769,12 +877,12 @@ export function register(on: On, options: PluginOptions = {}): void {
       // With the window open the mark is drawn as text, so the band has
       // nothing left to hold them with: once it has been drawn so, the
       // window is asked again, and gets them.
-      await openLedger($, scribe)
+      await openKept($, scribe, win)
 
       if (scribe.ledger.isOpen) {
         $.clock.after(HANDOVER_MS, () => {
           if (scribe.ledger.isOpen) {
-            void openLedger($, scribe).finally(() => ring($, scribe))
+            void openWindow($, scribe, win).finally(() => ring($, session, scribe, win))
           }
         })
       }
@@ -796,7 +904,7 @@ export function register(on: On, options: PluginOptions = {}): void {
 
       // Scribe was turned off with a key: the window has nothing left to list.
       if (scribe.ledger.isOpen && Scribe.isOff(scribe)) {
-        await closeLedger($, scribe)
+        await closeWindow($, scribe, win)
       }
     }
 
@@ -823,24 +931,34 @@ export function register(on: On, options: PluginOptions = {}): void {
     return entered
   }).catch(($, e, next) => next(e))
 
-  // The window of what was kept, in the pane Claude Code frames and places.
-  // It is drawn from what the plugin holds, so it follows Scribe: a record
-  // kept while it is open is listed when the band is next asked to draw.
+  // The window, in the pane Claude Code frames and places, on the view it
+  // is set to. Either is drawn from what the plugin holds. What was kept
+  // follows Scribe: a record kept while it is open is listed when the band
+  // is next asked to draw.
   on('ui.render', { component: 'Pane', requestId: PANE }, ($, e, next) => {
     if (e.surface !== 'terminal' && e.surface !== 'desktop') {
       return next(e)
     }
 
     const { bodyColumns, isFocused } = e.props
-    const shown = Scribe.ledger(scribe, bodyColumns, e.props.scroll.bodyRows, isFocused, session.isHere)
+    const isSearch = win.which === 'search'
+
+    // Everything known was dropped since the view last looked, by a sign-in or a sign-out: what it found is let go before it is drawn.
+    if (isSearch) {
+      Search.current(win.search, session.epoch)
+    }
+
+    const shown = isSearch
+      ? Search.viewOf(win.search, bodyColumns, isFocused, session.isHere, e.props.scroll.bodyRows)
+      : Scribe.ledger(scribe, bodyColumns, e.props.scroll.bodyRows, isFocused, session.isHere)
 
     // Given the keys with ctrl+x tab, the window's ring is on nothing, and Enter would press nothing:
     // it is seated on the selected record, so Enter and the arrows start from what is shown as selected.
-    if (Ledger.keyed(scribe.ledger, isFocused)) {
-      ring($, scribe)
+    if (keyed(isSearch ? win.search : scribe.ledger, isFocused)) {
+      ring($, session, scribe, win)
     }
 
-    return ledgerOf($.ui.resolve(e), shown, bodyColumns, isFocused, {
+    return windowOf($.ui.resolve(e), shown, bodyColumns, isFocused, {
       press: key => void picks.push(key),
       submit: (key, value) => void lines.push(value),
     })
@@ -849,7 +967,8 @@ export function register(on: On, options: PluginOptions = {}): void {
   // A key of the window. As in the band, the element's own handler only
   // notes which; the work is done here, where a call to Fylgja is this
   // plugin's own to make. The window's keys are its own: a key of the band
-  // is the band's, whether the window is open or not.
+  // is the band's, whether the window is open or not. A key of the search
+  // view changes no record: it reads one, or puts its reference in the box.
   on('ui.press', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const pressed = await next(e)
     const key = picks.shift()
@@ -858,7 +977,11 @@ export function register(on: On, options: PluginOptions = {}): void {
       const live = open()
 
       try {
-        await Scribe.ledgerPressed(scribeHostOf($, session, live), scribe, key)
+        if (win.which !== 'search') {
+          await Scribe.ledgerPressed(scribeHostOf($, session, live), scribe, key)
+        } else if (!Search.current(win.search, session.epoch)) {
+          await Search.pressed(hostOf($, session, live), session, win.search, draft, boxOf($), key)
+        }
       } catch {
         // The press is done with.
       } finally {
@@ -866,12 +989,15 @@ export function register(on: On, options: PluginOptions = {}): void {
         refresh($, session, scribe)
       }
 
-      ring($, scribe)
+      ring($, session, scribe, win)
     }
 
     return pressed
   }).catch(($, e, next) => next(e))
 
+  // Enter in the window's field. In the search view that is a search, the
+  // only thing that starts one: nothing is asked of Fylgja while the field
+  // is typed into.
   on('ui.input', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const entered = await next(e)
     const value = lines.shift()
@@ -880,7 +1006,12 @@ export function register(on: On, options: PluginOptions = {}): void {
       const live = open()
 
       try {
-        await Scribe.ledgerEntered(scribeHostOf($, session, live), scribe, value)
+        if (win.which === 'search') {
+          Search.current(win.search, session.epoch)
+          await Search.look(hostOf($, session, live), session, win.search, value)
+        } else {
+          await Scribe.ledgerEntered(scribeHostOf($, session, live), scribe, value)
+        }
       } catch {
         // The line is done with.
       } finally {
@@ -888,7 +1019,8 @@ export function register(on: On, options: PluginOptions = {}): void {
         refresh($, session, scribe)
       }
 
-      ring($, scribe)
+      await fitFound($, scribe, win)
+      ring($, session, scribe, win)
     }
 
     return entered
@@ -897,20 +1029,29 @@ export function register(on: On, options: PluginOptions = {}): void {
   // The arrows move the ring from row to row, and the record under it is the
   // selected one: a move the person makes onto a row lets go of whatever was
   // half done. The ring on anything but a key that waits for its second
-  // press ends that wait.
+  // press ends that wait. In the search view the ring the person moves into
+  // the field makes what is typed the field's, and out of it no longer.
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const moved = await next(e)
 
     if (moved.deny === undefined) {
       const isOntoRow = e.origin.kind === 'person' && e.element?.startsWith('row:') === true
-      const isChanged = isOntoRow ? Ledger.rest(scribe.ledger, (e.element ?? '').slice(4)) : Ledger.ringed(scribe.ledger, e.element)
+      const id = (e.element ?? '').slice(4)
+      const isChanged =
+        win.which !== 'search'
+          ? isOntoRow
+            ? Ledger.rest(scribe.ledger, id)
+            : Ledger.ringed(scribe.ledger, e.element)
+          : isOntoRow
+            ? Search.rest(win.search, id)
+            : e.origin.kind === 'person' && e.element === Search.fieldKey(win.search) && Search.entered(win.search)
 
       if (isChanged) {
         $.ui.invalidate('ui.render')
 
         // What was under the ring may be gone from the drawing now: the ring is seated on the row again.
         if (isOntoRow) {
-          ring($, scribe)
+          ring($, session, scribe, win)
         }
       }
     }
@@ -923,19 +1064,23 @@ export function register(on: On, options: PluginOptions = {}): void {
   // and End to the ends. The wheel moves the window alone, as does a key
   // once the selection is at its end, so what lies past the rows is reached.
   on('ui.scroll', { component: 'Pane', requestId: PANE }, ($, e, next) => {
-    if (e.origin.kind !== 'person' || e.pointer !== undefined || scribe.ledger.editing !== undefined || e.by === 0) {
+    const isInField = win.which === 'search' ? Search.inField(win.search, session.isHere) : scribe.ledger.editing !== undefined
+
+    if (e.origin.kind !== 'person' || e.pointer !== undefined || isInField || e.by === 0) {
       return next(e)
     }
 
     const far = Math.abs(e.by)
     const rows = far >= e.contentRows ? Number.MAX_SAFE_INTEGER : far > 1 ? Math.max(1, e.bodyRows - 1) : 1
+    const by = Math.sign(e.by) * rows
+    const to = win.which === 'search' ? Search.step(win.search, by) : Ledger.step(Scribe.ledgerEntries(scribe), scribe.ledger, by)
 
-    if (Ledger.step(Scribe.ledgerEntries(scribe), scribe.ledger, Math.sign(e.by) * rows) === undefined) {
+    if (to === undefined) {
       return next(e)
     }
 
     $.ui.invalidate('ui.render')
-    ring($, scribe)
+    ring($, session, scribe, win)
 
     return {}
   }).catch(($, e, next) => next(e))
@@ -946,9 +1091,9 @@ export function register(on: On, options: PluginOptions = {}): void {
   // the field: the window stays, and is asked the keys again, which Escape
   // handed back to the prompt.
   on('ui.close', { id: PANE }, async ($, e, next) => {
-    if (e.origin.kind === 'person' && Scribe.ledgerLeftField(scribe)) {
+    if (e.origin.kind === 'person' && (win.which === 'search' ? Search.leftField(win.search, session.isHere) : Scribe.ledgerLeftField(scribe))) {
       $.ui.invalidate('ui.render')
-      $.clock.after(0, () => void openLedger($, scribe).then(() => ring($, scribe)))
+      $.clock.after(0, () => void openWindow($, scribe, win).then(() => ring($, session, scribe, win)))
 
       return { value: undefined }
     }
@@ -956,6 +1101,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     const closed = await next(e)
 
     Ledger.closed(scribe.ledger)
+    Search.closed(win.search)
     // The mark is a key again.
     $.ui.invalidate('ui.render')
 

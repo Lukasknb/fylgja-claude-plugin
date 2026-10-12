@@ -276,6 +276,7 @@ describe('what the plugin hooks', () => {
     ).toEqual([
       'session.start',
       'command.run',
+      'command.run',
       'classic.SessionStart',
       'session.compact',
       'prompt.context',
@@ -298,6 +299,7 @@ describe('what the plugin hooks', () => {
 
     expect(own.map(hook => hook.matcher)).toEqual([
       { command: 'fylgja-kept' },
+      { command: 'fylgja-search' },
       { component: 'Pane', requestId: 'fylgja-kept' },
       { component: 'Pane', requestId: 'fylgja-kept' },
       { id: 'fylgja-kept' },

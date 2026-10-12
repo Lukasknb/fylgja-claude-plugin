@@ -1,5 +1,6 @@
 /**
- * The reference the Fylgja app copies for Claude:
+ * The reference the Fylgja app copies for Claude, and the one this plugin
+ * writes for a record the developer cites from a search:
  * `{{fylgja:<kind>[ <title>]|<uuid>}}`. One parser for every place that
  * reads it: the prompt as submitted, the row it is drawn in, and the paint
  * over the prompt box.
@@ -8,7 +9,8 @@
  * about the record; only the kind and the id are used to look the record up.
  */
 
-export type TokenKind = 'meeting' | 'session' | 'note' | 'project'
+/** The kinds of record a reference names: the four the app has a page for, and a knowledge atom. */
+export type TokenKind = 'meeting' | 'session' | 'note' | 'project' | 'atom'
 
 export type Token = {
   /** Where the token begins in the text it was found in. */
@@ -28,7 +30,7 @@ export type Token = {
 export const HEAD_LENGTH = 9
 
 const PATTERN =
-  /\{\{fylgja:(meeting|session|note|project)(?: [^{}|\n]{0,200})?\|([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\}\}/g
+  /\{\{fylgja:(meeting|session|note|project|atom)(?: [^{}|\n]{0,200})?\|([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\}\}/g
 
 /**
  * Every well-formed token in `text`, in the order written. A token-shaped

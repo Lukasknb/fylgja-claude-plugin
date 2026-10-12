@@ -3,12 +3,15 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { ACCENT } from '../hooks/card'
-import { PANE, RINGLESS } from '../hooks/ledger'
+import { keyed, LEGENDS } from '../hooks/listing'
 import { ARM_MS } from '../hooks/scribe/band'
 import * as Ledger from '../hooks/scribe/ledger'
 import type { Written } from '../hooks/scribe/types'
 import { ARMED_NOTE } from '../hooks/scribe/view'
+import { ARMED_KEY, PANE, RINGLESS } from '../hooks/window'
 import { answer, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { all, frame, pane, ringOn, scrolled } from './window-fixtures'
+import type { Node } from './window-fixtures'
 import { claude, decision, dev, edit, EMPTY, MARK, NOTHING, press, pressTwice, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
 
 const FILE = 'src/queue/lock.ts'
@@ -49,138 +52,6 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as never
 
-type Node = { type: string; props?: Record<string, unknown>; children?: (Node | string)[] }
-
-/** What Claude Code was asked about the window, in order: the engine beneath the plugin, answered by the test. */
-type Frame = {
-  opens: Record<string, unknown>[]
-  closes: string[]
-  /** How many moves of the window the plugin left to Claude Code. */
-  scrolls: number
-  commands: Record<string, unknown>[]
-}
-
-/** @param answers what Claude Code says to a request to open the window; that it is placed, without it */
-function frame(on: On, answers: () => 'placed' | 'unplaced' | 'refused' = () => 'placed'): Frame {
-  const seen: Frame = { opens: [], closes: [], scrolls: 0, commands: [] }
-
-  on('ui.open', ($, e) => {
-    seen.opens.push({ ...e })
-
-    const said = answers()
-
-    return said === 'refused'
-      ? { deny: 'no panes here' }
-      : { value: said === 'placed' ? { isPlaced: true as const } : { isPlaced: false as const, reason: 'The terminal is 60 columns wide.' } }
-  })
-  on('ui.close', ($, e) => {
-    seen.closes.push(e.id)
-
-    return { value: undefined } as never
-  })
-  on('ui.focus', () => ({}))
-  on('ui.scroll', () => {
-    seen.scrolls += 1
-
-    return {}
-  })
-  on('command.register', ($, e) => {
-    seen.commands.push({ ...e })
-
-    return { value: { command: e.name } } as never
-  })
-
-  return seen
-}
-
-function wordsOf(node: Node | string): string {
-  if (typeof node === 'string') {
-    return node
-  }
-
-  // A key is its words: the label it was given, or the one its children come to.
-  if (typeof node.props?.label === 'string') {
-    return node.props.label
-  }
-
-  return (node.children ?? []).map(wordsOf).join('')
-}
-
-function all(tree: Node, type: string): Node[] {
-  const below = (tree.children ?? []).flatMap(child => (typeof child === 'string' ? [] : all(child, type)))
-
-  return tree.type === type ? [tree, ...below] : below
-}
-
-const isRule = (text: string): boolean => /^─+$/.test(text)
-
-/** One line of the window as its words: what stands side by side in a row is set apart by a bar. */
-function lineOf(node: Node | string): string {
-  return typeof node !== 'string' && node.type === 'Box' ? (node.children ?? []).map(lineOf).join(' | ') : wordsOf(node)
-}
-
-/** The window as the plugin draws it: into `columns` cells and `rows` rows, with or without the keys. */
-async function pane($: Engine, isFocused = true, columns = 100, rows = 20, surface: 'terminal' | 'desktop' = 'terminal') {
-  const ui = await $.ui.mount({
-    plugin: 'fylgja',
-    component: 'Pane',
-    surface,
-    requestId: PANE,
-    props: { title: 'Fylgja · kept', isFocused, bodyColumns: columns, placement: 'inline', scroll: { offset: 0, bodyRows: rows }, view: {} },
-  } as never)
-  const tree = async (): Promise<Node> => (await ui.drawn()) as unknown as Node
-  const keys = async (): Promise<Node[]> => all(await tree(), 'Button')
-
-  return {
-    tree,
-    keys,
-    /** Every line the window shows, in the order drawn, the rule under the title bar left out. */
-    lines: async () =>
-      ((await tree()).children ?? []).flatMap(function lines(child): string[] {
-        if (typeof child === 'string') {
-          return [child]
-        }
-
-        // A column holds lines; anything else is one line, its parts set apart.
-        return child.type === 'Box' && child.props?.flexDirection === 'column' ? (child.children ?? []).flatMap(lines) : [lineOf(child)]
-      }).filter(line => !isRule(line)),
-    hasRule: async () => all(await tree(), 'Text').some(text => isRule(wordsOf(text))),
-    /** The rows, each as its words. */
-    rows: async () =>
-      (await keys())
-        .filter(key => String(key.props?.key).startsWith('row:'))
-        .map(wordsOf),
-    /** The keys that are not rows, each as its words. */
-    actions: async () =>
-      (await keys())
-        .filter(key => !String(key.props?.key).startsWith('row:'))
-        .map(wordsOf),
-    /** The keys that wait for their second press, each as its words: the ones that are filled. */
-    waiting: async () =>
-      (await keys())
-        .filter(key => all(key, 'Text').some(text => text.props?.inverse === true))
-        .map(wordsOf),
-    press: (key: string) => ui.press({ key } as never),
-    /** Enter in the field that is open, with `value` in it. */
-    enter: async (value: string) => {
-      const key = String(all(await tree(), 'Input')[0]?.props?.key)
-
-      return (ui as unknown as { input: (act: { key: string; text: string }) => Promise<unknown> }).input({ key, text: value })
-    },
-    /** The window is drawn again, with or without the keys. */
-    keyed: (isHeld: boolean) =>
-      ui.redraw({
-        title: 'Fylgja · kept',
-        isFocused: isHeld,
-        bodyColumns: columns,
-        placement: 'inline',
-        scroll: { offset: 0, bodyRows: rows },
-        view: {},
-      } as never),
-    unmount: () => ui.unmount(),
-  }
-}
-
 /** A session in which Scribe has kept two records, the lock first and the cap after it; the window is not open. */
 async function kept($: Engine, on: On, options: Parameters<typeof stage>[1] = {}, answers?: () => 'placed' | 'unplaced' | 'refused') {
   const seen = frame(on, answers)
@@ -201,30 +72,6 @@ async function opened($: Engine, on: On, options: Parameters<typeof stage>[1] = 
   await $.command.run(COMMAND)
 
   return session
-}
-
-/** The person moves the window with a key or the wheel, as Claude Code reports it. */
-function scrolled($: Engine, by: number, more: Record<string, unknown> = {}): Promise<{ deny?: string }> {
-  return $.ui.scroll({
-    component: 'Pane',
-    requestId: PANE,
-    offset: Math.max(0, by),
-    by,
-    bodyRows: 6,
-    contentRows: 40,
-    origin: { kind: 'person' },
-    ...more,
-  } as never)
-}
-
-/** The person moves the focus ring onto an element of the window: an arrow, Tab or a click. */
-function ringOn($: Engine, element: string | undefined): Promise<unknown> {
-  return $.ui.focus({
-    component: 'Pane',
-    requestId: PANE,
-    ...(element === undefined ? {} : { plugin: 'fylgja', element }),
-    origin: { kind: 'person' },
-  } as never)
 }
 
 const record = (id: string, content: string, more: Partial<Written> = {}): Written => ({
@@ -252,7 +99,7 @@ describe('the window of what was kept, as it is described', () => {
 
     const view = Ledger.viewOf(written, ledger, 100, true)
 
-    expect(view.lines.map(line => [line.id, line.isGone, line.outcome])).toEqual([
+    expect(view.lines.map(line => [line.id, line.isDim, line.tail])).toEqual([
       ['b', false, ''],
       ['a', false, ''],
       ['y', true, 'removed'],
@@ -271,7 +118,7 @@ describe('the window of what was kept, as it is described', () => {
     Ledger.shelve(ledger, record('a', 'First.', { outcome: 'withdrawn' }))
 
     expect(
-      Ledger.viewOf([record('a', 'First.', { outcome: 'restored' })], ledger, 100, true).lines.map(line => [line.id, line.outcome]),
+      Ledger.viewOf([record('a', 'First.', { outcome: 'restored' })], ledger, 100, true).lines.map(line => [line.id, line.tail]),
     ).toEqual([['a', 'put back']])
   })
 
@@ -299,7 +146,7 @@ describe('the window of what was kept, as it is described', () => {
       const [line] = Ledger.viewOf([record('a', long, { outcome: 'updated' })], Ledger.create(), columns, true).lines
 
       expect(line?.sentence.endsWith('…')).toBe(true)
-      expect(`▸ ${line?.kind} · ${line?.sentence} · ${line?.outcome}`.length, `at ${columns} columns`).toBeLessThan(columns)
+      expect(`▸ ${line?.kind} · ${line?.sentence} · ${line?.tail}`.length, `at ${columns} columns`).toBeLessThan(columns)
       expect(words(line?.detail[0])).toBe(long)
     }
   })
@@ -315,20 +162,20 @@ describe('the window of what was kept, as it is described', () => {
     const written = [record('a', 'First.')]
     const legend = (isFocused: boolean): string => Ledger.viewOf(written, ledger, 100, isFocused).legend
 
-    expect(legend(true)).toBe(Ledger.LEGENDS.list)
-    expect(legend(false), 'without the keys it says how the window is given them').toBe(Ledger.LEGENDS.away)
+    expect(legend(true)).toBe(LEGENDS.list)
+    expect(legend(false), 'without the keys it says how the window is given them').toBe(LEGENDS.away)
 
     ledger.acting = 'a'
 
-    expect(legend(true)).toBe(Ledger.LEGENDS.keys)
-    expect(legend(false)).toBe(Ledger.LEGENDS.away)
+    expect(legend(true)).toBe(LEGENDS.keys)
+    expect(legend(false)).toBe(LEGENDS.away)
 
     ledger.editing = 'a'
 
-    expect(legend(true)).toBe(Ledger.LEGENDS.field)
-    expect(Ledger.viewOf([], Ledger.create(), 100, false).legend).toBe(Ledger.LEGENDS.awayQuiet)
+    expect(legend(true)).toBe(LEGENDS.field)
+    expect(Ledger.viewOf([], Ledger.create(), 100, false).legend).toBe(LEGENDS.awayQuiet)
 
-    for (const line of [Ledger.LEGENDS.list, Ledger.LEGENDS.keys, Ledger.LEGENDS.field, Ledger.LEGENDS.quiet]) {
+    for (const line of [LEGENDS.list, LEGENDS.keys, LEGENDS.field, LEGENDS.quiet]) {
       expect(line, 'only the arrows, Enter and Escape').not.toMatch(/(?:^| )[a-z0-9] /)
     }
   })
@@ -450,7 +297,7 @@ describe('the mark opens the window', () => {
   test('its command opens the same window, and answers with no line for Claude to read', async ($, on) => {
     const { seen } = await kept($, on)
 
-    expect(seen.commands).toEqual([{ name: 'fylgja-kept', description: 'Show what Fylgja kept in this session', immediate: true }])
+    expect(seen.commands[0]).toEqual({ name: 'fylgja-kept', description: 'Show what Fylgja kept in this session', immediate: true })
     expect(await $.command.run(COMMAND)).toEqual({})
     expect(seen.opens.map(open => open.id)).toEqual([PANE])
 
@@ -493,7 +340,7 @@ describe('the window lists what Scribe kept', () => {
         'Rejected: retry forever',
         `In: ${FILE}`,
         LOCK_ROW,
-        Ledger.LEGENDS.list,
+        LEGENDS.list,
       ])
       expect(await ui.hasRule()).toBe(true)
       expect(await ui.actions(), 'the close mark is the one Claude Code draws on the frame: no second one, and no key until one is asked for').toEqual([])
@@ -517,7 +364,7 @@ describe('the window lists what Scribe kept', () => {
     const [dim] = all(await ui.tree(), 'Text')
 
     expect(dim).toMatchObject({ props: { dimColor: true, bold: true }, children: ['ᚠ fylgja'] })
-    expect((await ui.lines()).at(-1)).toBe(Ledger.LEGENDS.away)
+    expect((await ui.lines()).at(-1)).toBe(LEGENDS.away)
     expect(await ui.rows(), 'the rows are the same').toEqual([CAP_ROW, LOCK_ROW])
 
     await ui.unmount()
@@ -530,7 +377,7 @@ describe('the window lists what Scribe kept', () => {
 
     expect(await ui.hasRule()).toBe(false)
     expect((await ui.lines()).at(0)).toMatch('ᚠ fylgja')
-    expect((await ui.lines()).at(-1)).toBe(Ledger.LEGENDS.list)
+    expect((await ui.lines()).at(-1)).toBe(LEGENDS.list)
 
     await ui.unmount()
   })
@@ -612,7 +459,7 @@ describe('the window lists what Scribe kept', () => {
 
     const ui = await pane($)
 
-    expect(await ui.lines()).toEqual([' ᚠ fylgja  | kept in this session | ', Ledger.QUIET.empty, Ledger.LEGENDS.quiet])
+    expect(await ui.lines()).toEqual([' ᚠ fylgja  | kept in this session | ', Ledger.QUIET.empty, LEGENDS.quiet])
     expect(await ui.keys()).toEqual([])
 
     await ui.unmount()
@@ -635,7 +482,7 @@ describe('the window lists what Scribe kept', () => {
       'Rejected: retry forever',
       `In: ${FILE}`,
       LOCK_ROW,
-      Ledger.LEGENDS.list,
+      LEGENDS.list,
     ])
 
     await ui.unmount()
@@ -678,7 +525,7 @@ describe('what is typed never acts on a record', () => {
     await ui.press(`row:${SECOND}`)
 
     expect(await ui.actions()).toEqual(['Reword', 'Remove'])
-    expect((await ui.lines()).at(-1)).toBe(Ledger.LEGENDS.keys)
+    expect((await ui.lines()).at(-1)).toBe(LEGENDS.keys)
     expect([set.of('amend_memory'), set.of('remember').length], 'nothing was changed').toEqual([[], 2])
 
     await ui.unmount()
@@ -697,7 +544,7 @@ describe('a record is changed from the window', () => {
 
     expect(field?.props).toMatchObject({ key: `reword-text:${SECOND}:1`, label: 'Reword', value: 'Cap retries at five.', autoFocus: true })
     expect(await ui.actions()).toEqual(['Cancel'])
-    expect((await ui.lines()).at(-1)).toBe(Ledger.LEGENDS.field)
+    expect((await ui.lines()).at(-1)).toBe(LEGENDS.field)
     expect(set.of('amend_memory'), 'nothing is changed by opening the field').toEqual([])
 
     await ui.enter('  Cap retries at three,\n not five. ')
@@ -764,7 +611,7 @@ describe('a record is changed from the window', () => {
     expect(all(await ui.tree(), 'Box').find(box => box.props?.columnGap === 2)?.props, 'the row of keys is laid out as it was').toEqual(row?.props)
     expect(during, 'what a second press does is a line of its own, above the keys').toEqual([
       ...before.slice(0, before.indexOf('Reword | Remove')),
-      Ledger.ARMED_NOTE,
+      `${ARMED_KEY} | ${ARMED_NOTE}`,
       ...before.slice(before.indexOf('Reword | Remove')),
     ])
 
@@ -1147,9 +994,9 @@ describe('the window after a change, after Escape in its field, and when it is g
     await set.clock.advance(1)
 
     expect(tried(), 'without the keys there is no ring to seat').toBe(0)
-    expect(Ledger.keyed({ ...Ledger.create(), hadKeys: false }, true)).toBe(true)
-    expect(Ledger.keyed({ ...Ledger.create(), hadKeys: true }, true), 'kept, not given').toBe(false)
-    expect(Ledger.keyed({ ...Ledger.create(), hadKeys: true }, false)).toBe(false)
+    expect(keyed({ ...Ledger.create(), hadKeys: false }, true)).toBe(true)
+    expect(keyed({ ...Ledger.create(), hadKeys: true }, true), 'kept, not given').toBe(false)
+    expect(keyed({ ...Ledger.create(), hadKeys: true }, false)).toBe(false)
 
     await ui.keyed(true)
     await set.clock.advance(1)
@@ -1240,7 +1087,7 @@ describe('the window where Scribe does not run', () => {
 
     const ui = await pane($)
 
-    expect(await ui.lines()).toEqual([' ᚠ fylgja  | kept in this session | ', Ledger.QUIET.off, Ledger.LEGENDS.quiet])
+    expect(await ui.lines()).toEqual([' ᚠ fylgja  | kept in this session | ', Ledger.QUIET.off, LEGENDS.quiet])
 
     await ui.unmount()
   })
@@ -1260,7 +1107,7 @@ describe('the window where Scribe does not run', () => {
 
     const ui = await pane($, false)
 
-    expect(await ui.lines()).toEqual(['ᚠ fylgja | kept in this session | ', Ledger.QUIET['signed-out'], Ledger.LEGENDS.awayQuiet])
+    expect(await ui.lines()).toEqual(['ᚠ fylgja | kept in this session | ', Ledger.QUIET['signed-out'], LEGENDS.awayQuiet])
 
     await ui.unmount()
   })

@@ -23,6 +23,10 @@ quiet touches that make working with it feel at home.
   has been compacted, the records Scribe kept in the session are listed
   in the context Claude Code gives Claude with it, so Claude still knows
   what you decided and why.
+- **Search Fylgja without leaving the prompt.** `/fylgja-search` finds what
+  was decided, by what it says, in a window of your own: Claude does not
+  see what you found. Cite a record and its reference goes into your
+  prompt as a chip.
 
 ## Install
 
@@ -108,8 +112,9 @@ Very little, on purpose.
   `[ Remove ]`, or `[ Put back ]` on a removed one; the arrows move
   between them and Enter presses. Remove and Put back act on a second
   Enter: the first only fills the key where it stands, with its words and
-  its place as they were, and a line above the keys says what the second
-  does. A move away ends the wait. Everything can be clicked too. A
+  its place as they were, and a line above the keys, the one a card
+  shows, says what the second does (` press enter ` on a filled label). A
+  move away ends the wait. Everything can be clicked too. A
   change Fylgja did not take is said in the record's row, which stays as
   it was. Escape leaves the field, then closes the window; so do Claude
   Code's own `✕` on the frame and `/clear`. A compaction leaves it, and
@@ -118,6 +123,65 @@ Very little, on purpose.
   keys the window says how it is given them (ctrl+x tab). The band's cards
   and their digit keys are as they are without it. With Scribe off the
   mark is plain text and the command's window says so in one line.
+- A search of Fylgja's knowledge atoms, in the same window, when you type
+  `/fylgja-search`. Nothing else opens it.
+
+  ```
+  ᚠ fylgja  search                                              3 found
+  Search: retry queue
+  ▸ ◆ Decision · Use a Redis lock for the retry queue. · 2026-09-30
+      Why: Redis is already there, and the lock must outlive a worker.
+      Rejected: a Postgres advisory lock
+      From: Queue review · meeting · 2026-09-30
+      [ Cite in prompt ]  Open where it came from
+    ◆ Atom · Cap retries at five. · 2026-08-02
+  ↑↓ move · enter press · esc close
+  ```
+
+  With words after the command (`/fylgja-search retry queue`) they are
+  searched for at once; with none the window opens on an empty field that
+  holds the keyboard. Fylgja is asked when you press Enter in the field,
+  and at no other time: never while you type, one search at a time, and
+  not again for the words whose answer is on screen. Fylgja checks every
+  search with a model call before it answers, which is why a search is
+  something you do and never something that happens. One search returns
+  at most twenty records, and the title bar says when more may match
+  (`first 20, more may match`); at most 200 characters of what you typed
+  are searched for.
+
+  One row a record: what it is, what it says and the day it was said. The
+  selected one is opened to its topic, the question it answers, where it
+  is filed and, for an older statement, what holds now. Enter on a record
+  brings up what can be done with it and has Fylgja asked what more it
+  holds, with two reads that cost no check: what kind of record it is,
+  its reason, what was ruled out, who decided, and the meeting or session
+  it was said in. What was answered is kept for the search; a read that
+  failed says so in the row and is made again by the next Enter on it.
+  Neither a search nor a record read this way says which files a record
+  concerns or how stale it is, so the window does not either. The keys
+  are the window's: no letter or digit, the arrows from record to record
+  and up into the field, Enter, and Escape, which leaves the field and
+  then closes the window. In the field what you type is the field's, and
+  only Enter does anything. The field keeps the keyboard while Fylgja is
+  asked, so what you type meanwhile is still there when the answer comes.
+
+  `[ Cite in prompt ]` puts the record's reference into the prompt box
+  where your cursor is, as the chip a pasted reference becomes, with what
+  you had typed left as it was on either side; the prompt is sent with
+  the reference itself, and Claude opens it with Fylgja's tools. The
+  reference is the one the app would copy, `{{fylgja:atom <label>|<id>}}`,
+  its label the start of the record's sentence, forty characters at most,
+  as the app's titles are. A record
+  already in your draft is not put in twice. `Open where it came from` is
+  a link to the page of the meeting or session, which your terminal
+  opens; an atom has no page of its own. Nothing here changes a record.
+  What you searched for and what was found stay in the running plugin:
+  none of it goes to Claude, into the conversation or into a log, and it
+  is let go when the account signs out or in, or the conversation starts
+  over. A search that did not go through and a search that found nothing
+  are each one line. Where Fylgja is not here for your account the window
+  says that in one line, with no field: `[ Ask again ]` looks whether it
+  is by now, and one Escape closes.
 
 ## Scribe
 
@@ -1065,3 +1129,16 @@ see in ordinary work, and last what needs your setup changed.
     conversation. Not seen: Claude answering from it, Claude Code's own
     summary beside it, an automatic compaction in the middle of a turn,
     and whether a subagent's context carries the block too.)
+24. The search: `/fylgja-search` and a few words, Enter. That one search
+    is made, the rows read as your records do, Enter on one fills in its
+    reason and where it was said, and `[ Cite in prompt ]` puts a chip
+    where your cursor is without touching what you typed. Then with no
+    words: that typing goes into the field and asks nothing, that
+    Escape leaves the field and a second one closes, and that ↑ from the
+    first record goes back into the field. (Seen in a real session of
+    Claude Code 2.1.296 against a stand-in for Fylgja's server, with no
+    prompt sent: all of the above, in the window above the prompt and
+    docked beside a fullscreen transcript. Not seen: a search of the real
+    server and what its check does to the wait, a record whose kind is
+    not a decision, the link opened from a terminal, and the desktop
+    surface.)

@@ -3,7 +3,7 @@
  * they come in. A record that does not read as one is left out.
  */
 
-import { FYLGJA_HOST } from '../citations'
+import { pageOf } from '../citations'
 import { isRecord } from '../payload'
 import { anchorsOf } from './repo'
 import type { Fact, ReasonStatus } from './types'
@@ -11,12 +11,6 @@ import type { Fact, ReasonStatus } from './types'
 const ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
 const MAX_FACTS = 30
-
-// The page a record came from: one line, on Fylgja's own host, a kind and an id and nothing after.
-const LINK = new RegExp(
-  `^https://${FYLGJA_HOST.replace(/\./g, '\\.')}/open/[a-z_]{1,40}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
-  'i',
-)
 
 /** Every record id written in `text`, lower-cased. */
 export function idsIn(text: string): string[] {
@@ -83,7 +77,7 @@ function factOf(value: unknown): Fact | undefined {
     reasonStatus: reasonStatusOf(value.reason_status),
     date: day?.slice(0, 10) ?? null,
     origin: typeof value.origin === 'string' && /^[a-z_]{1,40}$/.test(value.origin) ? value.origin : '',
-    link: typeof value.link === 'string' && LINK.test(value.link) ? value.link : null,
+    link: pageOf(value.link),
   }
 }
 

@@ -1,6 +1,6 @@
 import { create as createKnown, shapedIn } from './known'
 import type { Known, Span } from './known'
-import { swap } from './swap'
+import { chipFor, swap } from './swap'
 
 /**
  * After this many swaps in a row that the prompt box did not take, with
@@ -44,6 +44,17 @@ export function create(): Draft {
 export function startOver(draft: Draft): void {
   draft.below = undefined
   draft.refused = 0
+}
+
+/**
+ * The text a reference the plugin puts into the box itself is to go in as:
+ * its chip, as a pasted reference becomes one, or the reference as written
+ * where the box is believed to take no chips. `box` is the draft it goes into.
+ */
+export function cited(draft: Draft, box: string, reference: string): { text: string; isChip: boolean } {
+  const chip = draft.refused >= MAX_REFUSED ? undefined : chipFor(draft.known, box, reference)
+
+  return chip === undefined ? { text: reference, isChip: false } : { text: chip, isChip: true }
 }
 
 /**

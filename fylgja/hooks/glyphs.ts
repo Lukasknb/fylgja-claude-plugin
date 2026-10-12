@@ -9,6 +9,8 @@ const BY_KIND: Readonly<Record<string, string>> = {
   person: '◐',
   topic: '◇',
   decision: '◆',
+  // A knowledge atom is drawn as the decisions, gotchas and corrections it holds are.
+  atom: '◆',
   document: '▭',
 }
 
@@ -16,7 +18,7 @@ const BY_KIND: Readonly<Record<string, string>> = {
 const OTHER = '□'
 
 /** Every glyph a record is drawn with. */
-export const GLYPHS: readonly string[] = [...Object.values(BY_KIND), OTHER]
+export const GLYPHS: readonly string[] = [...new Set([...Object.values(BY_KIND), OTHER])]
 
 /** The glyph for `kind`; one neutral glyph for every kind this build does not know. */
 export function glyphOf(kind: string): string {
