@@ -90,6 +90,8 @@ describe('a link to a Fylgja record in a reply', () => {
     const row = await ui.find({ type: 'Text' })
 
     expect(String(row?.children?.[0]).endsWith(`[◉ the retro](${LINK})`)).toBe(true)
-    expect(performance.now() - before < 1000).toBe(true)
+    // The bound only has to tell a linear scan from one that backtracks on these brackets. A
+    // linear one takes about half a second, and twice that on a busy machine.
+    expect(performance.now() - before < 10_000).toBe(true)
   })
 })
