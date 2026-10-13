@@ -450,6 +450,41 @@ describe('the window lists what Scribe kept', () => {
     await ui.unmount()
   })
 
+  test('what was not kept is said in one closing line of the window, by why, and nowhere above the prompt', async ($, on) => {
+    const refusal = 'refused:leans_on_conversation — "option B" only means something inside the conversation it came from.'
+    const leaning = decision({ content: 'Go with option B for the retry queue.', detail: 'It was simpler.', anchors: [{ path: FILE }] })
+
+    frame(on)
+    const set = stage(on, {
+      replies: [verdict({ records: [LOCK, leaning] }), JSON.stringify({ drop: true })],
+      tools: {
+        remember: (args: Record<string, unknown>) =>
+          String(args.content).startsWith('Go with option B')
+            ? { content: [{ type: 'text', text: refusal }], isError: true }
+            : answer({ atom_id: FIRST, outcome: 'created', supersede: 'not_requested', note: null }),
+      },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+
+    expect(await shown($), 'the receipt says what was kept and nothing of what was not').not.toMatch('not kept')
+
+    await press($, 'ok')
+    await $.command.run(COMMAND)
+
+    const ui = await pane($)
+
+    expect(await ui.rows()).toEqual(['▸ ◆ Decision · Use a Redis lock for the retry queue.'])
+    expect(await ui.lines()).toContain('1 not kept — wording leaned on this conversation')
+    expect(Ledger.notKept(new Map([['leans_on_conversation', 2], ['too_long', 1]]))).toBe(
+      '2 not kept — wording leaned on this conversation · 1 not kept — Fylgja turned it down (too_long)',
+    )
+    expect(Ledger.notKept(new Map())).toBeUndefined()
+
+    await ui.unmount()
+  })
+
   test('with nothing kept it says so in one quiet line', async ($, on) => {
     frame(on)
     stage(on)

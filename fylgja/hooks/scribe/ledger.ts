@@ -229,6 +229,24 @@ export const TROUBLE = {
 
 export const WAITING = 'Asking Fylgja…'
 
+/** Why a record was not kept, by the rule Fylgja refused it by; any other rule is said by its name. */
+const NOT_KEPT: Readonly<Record<string, string>> = {
+  leans_on_conversation: 'wording leaned on this conversation',
+}
+
+/**
+ * The one line that says what was not kept, grouped by why; undefined when
+ * everything was. It is said here, where somebody asked what was kept, and
+ * never above the prompt.
+ */
+export function notKept(lost: ReadonlyMap<string, number>): string | undefined {
+  const said = [...lost]
+    .filter(([, count]) => count > 0)
+    .map(([code, count]) => `${count} not kept — ${Object.hasOwn(NOT_KEPT, code) ? NOT_KEPT[code] : `Fylgja turned it down (${code})`}`)
+
+  return said.length === 0 ? undefined : said.join(' · ')
+}
+
 const OUTCOMES: Readonly<Record<Written['outcome'], string>> = {
   created: '',
   restored: 'put back',
@@ -280,6 +298,7 @@ function opened(record: Written, isCut: boolean): Part[][] {
  * @param isFocused whether the window has the keys: the line of keys names them only then
  * @param away why there is nothing to list, when Scribe does not run here
  * @param rows how many rows the window has room for; every row is drawn when it is not known
+ * @param lost how many records were not kept, by the rule Fylgja refused them by
  */
 export function viewOf(
   written: readonly Written[],
@@ -288,6 +307,7 @@ export function viewOf(
   isFocused: boolean,
   away?: Away,
   rows = Number.MAX_SAFE_INTEGER,
+  lost: ReadonlyMap<string, number> = new Map(),
 ): View {
   if (away !== undefined) {
     return {
@@ -360,13 +380,15 @@ export function viewOf(
           : LEGENDS.list
 
   const isArmed = lines.some(line => line.actions.some(action => action.isArmed === true))
-  const hasRule = fitted(lines, rows - 3 - (lines.length === 0 ? 1 : 0) - (isArmed ? 1 : 0))
+  const closing = notKept(lost)
+  const hasRule = fitted(lines, rows - 3 - (lines.length === 0 ? 1 : 0) - (isArmed ? 1 : 0) - (closing === undefined ? 0 : 1))
 
   return {
     name: NAME,
     count: written.length === 0 ? '' : `${written.length} kept`,
     lines,
     ...(lines.length === 0 ? { quiet: QUIET.empty } : {}),
+    ...(closing === undefined ? {} : { closing }),
     isArmed,
     hasRule,
     legend,

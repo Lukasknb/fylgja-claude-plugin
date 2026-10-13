@@ -33,14 +33,20 @@ export function codeOf(refusal: string | undefined): string | undefined {
   return /^refused:([a-z_]{1,60})(?![a-z_])/.exec(refusal ?? '')?.[1]
 }
 
-/** The part of a record a refusal is about, and so the only part a correction may change. */
-export type Part = 'content' | 'triggers' | 'reason' | 'alternatives' | 'anchors'
+/**
+ * The part of a record a refusal is about, and so the only part a correction
+ * may change. `wording` is the words of the record wherever they stand: its
+ * sentence, its reason and its rejected alternatives.
+ */
+export type Part = 'content' | 'triggers' | 'reason' | 'alternatives' | 'anchors' | 'wording'
 
 const PARTS: Readonly<Record<string, Part>> = {
   not_imperative: 'content',
   too_long: 'content',
   not_one_sentence: 'content',
   status_not_memory: 'content',
+  // A label only the session knew may stand in the sentence, the reason or an alternative.
+  leans_on_conversation: 'wording',
   no_trigger: 'triggers',
   reason_missing: 'reason',
   reason_contradiction: 'reason',

@@ -268,6 +268,122 @@ describe('a refusal that says what is wrong is used once', () => {
     )
   })
 
+  const LEANS = 'refused:leans_on_conversation — "the P2 flag" only means something inside the conversation it came from. Rule: a record is read by someone who never saw this conversation. Name the thing by what it is.'
+  const BEHIND = decision({
+    content: 'Reopening a closed thread on an ERP update goes behind the P2 flag.',
+    detail: 'It is safer than option B.',
+    reason_status: 'stated',
+    alternatives: ['option B'],
+  })
+  const NAMED = {
+    ...BEHIND,
+    content: 'Reopening a closed thread on an ERP update goes behind the partial-sync flag.',
+    detail: 'It is safer than resyncing the whole thread on every reopen.',
+    alternatives: ['resyncing the whole thread on every reopen'],
+  }
+
+  test('a record refused for a label only the session knew is put right by a model that is handed the session, and names the thing', async ($, on) => {
+    const set = stage(on, {
+      replies: [verdict({ records: [BEHIND] }), JSON.stringify({ record: NAMED })],
+      tools: refusing('Reopening a closed thread on an ERP update goes behind the P2', LEANS),
+    })
+
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev('SESSION-TEXT: P2 is the partial-sync flag; option B was resyncing the whole thread on every reopen. Go with P2.'),
+      claude('Done.', edit('src/queue/lock.ts')),
+    )
+
+    const [, naming] = set.asked
+
+    expect(set.asked.length).toBe(2)
+    expect(naming?.system).toMatch('names something by a label that only the session it came from knows')
+    expect(naming?.system).toMatch('Take what it stands for from the session and from nowhere else')
+    expect(naming?.system).toMatch('If the session does not show what a label stands for, drop the record.')
+    expect(naming?.prompt).toMatch('refused:leans_on_conversation')
+    expect(naming?.prompt, 'the session the record was taken from is handed over').toMatch('SESSION-TEXT: P2 is the partial-sync flag')
+    expect(naming?.prompt.match(/^<<< /gm)?.length, 'all three are fenced as data').toBe(3)
+    expect(
+      set.of('remember').map(args => [args.content, args.detail, args.alternatives]),
+      'the second write names the thing in the sentence, the reason and the alternative, each longer than it was',
+    ).toEqual([
+      [BEHIND.content, BEHIND.detail, BEHIND.alternatives],
+      [NAMED.content, NAMED.detail, NAMED.alternatives],
+    ])
+    expect(await shown($)).toMatch('✓ Recorded · Reopening a closed thread on an ERP update goes behind the partial-sync flag.')
+  })
+
+  test('a label explained three turns earlier is found there: the lines that mention it are handed over with the turn in hand', async ($, on) => {
+    const set = stage(on, {
+      replies: [NOTHING, NOTHING, NOTHING, verdict({ records: [BEHIND] }), JSON.stringify({ record: NAMED })],
+      tools: refusing('Reopening a closed thread on an ERP update goes behind the P2', LEANS),
+    })
+
+    await $.session.start(START)
+    await turn($, set, dev('EARLY-TEXT: call the partial-sync flag P2 from here on'), claude('Understood.', edit('src/flags.ts')))
+    await turn($, set, dev('rename the importer module'), claude('Done.', edit('src/importer.ts')))
+    await turn($, set, dev('UNRELATED-TEXT: add a retry to the upload'), claude('Done.', edit('src/upload.ts')))
+    await turn($, set, dev('put reopening behind P2, not option B'), claude('Done.', edit('src/queue/lock.ts')))
+
+    const naming = set.asked.at(-1)
+
+    expect(set.asked.length).toBe(5)
+    expect(naming?.system).toMatch('names something by a label that only the session it came from knows')
+    expect(naming?.system, 'a real name is kept, as code').toMatch('keep it and put it in backticks')
+    expect(naming?.system, 'and the sentence keeps the shape the server takes').toMatch('a decision says what holds')
+    expect(naming?.prompt, 'the earlier line that explains the label').toMatch('EARLY-TEXT: call the partial-sync flag P2 from here on')
+    expect(naming?.prompt, 'the turn in hand').toMatch('put reopening behind P2, not option B')
+    expect(naming?.prompt, 'and no earlier line that does not mention it').not.toMatch('UNRELATED-TEXT')
+    expect(naming?.prompt.match(/^<<< /gm)?.length, 'fenced as data, as one session').toBe(3)
+    expect(set.of('remember').map(args => args.content)).toEqual([BEHIND.content, NAMED.content])
+    expect(await shown($)).toMatch('✓ Recorded · Reopening a closed thread on an ERP update goes behind the partial-sync flag.')
+  })
+
+  test('outside a wake there is no session to name the thing from: such a record is let go without a model call', async ($, on) => {
+    const prior = fact(5, { content: 'Use a cursor to page the audit log.', anchors: { paths: [{ path: 'src/queue/lock.ts' }] } })
+    const set = stage(on, {
+      replies: [verdict({ records: [{ ...PAGED, supersedes: idOf(5) }] }), JSON.stringify({ record: MENDED })],
+      tools: { ...refusing('We paginate', LEANS), recall: () => answer({ facts: [prior] }) },
+      kept: { 'scribe.known': [idOf(5)] },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await press($, 'different')
+
+    expect(set.asked.length, 'no model is asked to guess what the label stood for').toBe(1)
+    expect(set.of('remember').map(args => args.content)).toEqual([PAGED.content])
+    expect(await shown($)).not.toMatch('✓ Recorded')
+  })
+
+  test('a record put right in its wording may grow in every part, and gains no reason, status or alternative it did not have', () => {
+    const seen = { plans: [], saidNoReason: false, paths: new Set<string>(), facts: new Map() }
+    const leaning = draftOf({ ...BEHIND }, seen)
+    const bare = draftOf({ kind: 'decision', content: 'We go with option B', reason_status: 'not_stated' }, seen)
+    const mended = { ...NAMED, alternatives: [...NAMED.alternatives, 'one nobody weighed'], anchors: [{ path: 'src/invented.ts' }] }
+
+    expect(leaning === undefined || bare === undefined).toBe(false)
+
+    if (leaning === undefined || bare === undefined) {
+      return
+    }
+
+    expect(teaches('leans_on_conversation')).toBe('wording')
+    expect(String(NAMED.detail).length > String(BEHIND.detail).length && String(NAMED.content).length > String(BEHIND.content).length).toBe(true)
+    expect(correctedOf(leaning, mended, 'wording', seen)).toEqual({
+      ...leaning,
+      content: NAMED.content,
+      detail: NAMED.detail,
+      alternatives: NAMED.alternatives,
+    })
+    expect(
+      correctedOf(bare, { ...mended, content: 'Retry failed uploads with exponential backoff' }, 'wording', seen),
+      'a record with no reason and no alternatives gets its sentence put right and neither of the two',
+    ).toEqual({ ...bare, content: 'Retry failed uploads with exponential backoff' })
+  })
+
   for (const [code, part] of [
     ['too_long', 'content'],
     ['not_one_sentence', 'content'],

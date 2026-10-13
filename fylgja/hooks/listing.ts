@@ -57,6 +57,8 @@ export type View = {
   quiet?: string
   /** The one key of a view that lists nothing and can do one thing about it, under that line. */
   action?: Action
+  /** One line under the rows, about what the view does not list. */
+  closing?: string
   /** Whether a key of the selected record waits for its second press. */
   isArmed: boolean
   /** Whether the rule under the title bar is drawn: it is the first thing let go when the window has no room for everything. */

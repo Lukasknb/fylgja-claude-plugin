@@ -26,7 +26,7 @@ import { REFUSED } from './grant'
 import * as Ledger from './ledger'
 import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
 import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
-import type { LoopHost, Proposal } from './loop'
+import type { LoopHost, NamingSession, Proposal } from './loop'
 import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
 import type { Block } from './prompt'
@@ -332,6 +332,8 @@ export type Scribe = {
   /** Records handed back to the model once to be put right, and those lost for good after a refusal. */
   corrections: number
   dropped: number
+  /** Those lost for good, by the rule Fylgja refused them by: said in the window of what was kept, and nowhere else. */
+  lost: Map<string, number>
 }
 
 /** The keys kept on this machine. */
@@ -510,6 +512,7 @@ export function create(options: Options): Scribe {
     refused: 0,
     corrections: 0,
     dropped: 0,
+    lost: new Map(),
   }
 }
 
@@ -1278,8 +1281,13 @@ function settle(host: ScribeHost, scribe: Scribe): void {
   host.redraw()
 }
 
-/** What is left of a wake for putting refused records right: model calls, time, and what a record is checked against. */
-type Budget = { steps: number; until: number; seen: Seen; isLastTry?: true; lookups?: number }
+/**
+ * What is left of a wake for putting refused records right: model calls,
+ * time, and what a record is checked against. `window` is what the wake read
+ * of the session and what Scribe still holds from before it; a write outside
+ * a wake has none.
+ */
+type Budget = { steps: number; until: number; seen: Seen; isLastTry?: true; lookups?: number; window?: NamingSession }
 
 /**
  * What a write outside a wake may spend on putting a refused record right:
@@ -1312,7 +1320,11 @@ async function lone(host: ScribeHost, scribe: Scribe): Promise<Budget> {
  * with the record is used once: the model is handed the record and the
  * refusal, and nothing else, and what it puts right is checked and sent
  * once. Refused again, or dropped by the model, the record is let go and
- * counted. A refusal that is the server's own trouble is tried once more at
+ * counted. A record refused for a label only the session knew is the one
+ * case where the model is handed the session too, since what the label
+ * stands for is nowhere else; where there is no session to hand over, the
+ * record is let go and counted, and no model is asked to guess. A refusal
+ * that is the server's own trouble is tried once more at
  * the next turn's end, as it is. This spends the wake's own model calls and
  * time, and none when the wake has used them up.
  */
@@ -1353,8 +1365,8 @@ async function written(
 
   const left = budget.until - (await host.now())
 
-  if (budget.steps <= 0 || left <= 0) {
-    scribe.dropped += 1
+  if (budget.steps <= 0 || left <= 0 || (part === 'wording' && budget.window === undefined)) {
+    lose(scribe, first.code)
 
     return undefined
   }
@@ -1380,12 +1392,13 @@ async function written(
     },
     refusal: first.refusal ?? '',
     timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
+    ...(part === 'wording' && budget.window !== undefined ? { session: budget.window } : {}),
   })
   const better = answer === 'drop' || answer === undefined ? undefined : correctedOf(draft, answer, part, budget.seen)
   const second = better === undefined ? undefined : (await send(host, scribe, who, better, prior)).written
 
   if (second === undefined) {
-    scribe.dropped += 1
+    lose(scribe, first.code)
   }
 
   return second
@@ -2239,6 +2252,23 @@ function summaryOf(verdict: Verdict, written: readonly Written[]): string {
       : {}),
     ...(verdict.withdrawn.length === 0 ? {} : { withdrawn: verdict.withdrawn.length }),
   })
+}
+
+/**
+ * What Scribe still holds of the session from before the turn in hand, line
+ * by line: the plan documents and the earlier wakes in brief. It is where a
+ * label a later turn uses was explained.
+ */
+function earlierLines(scribe: Scribe): string[] {
+  return [...scribe.plans.docs.map(doc => doc.text), ...scribe.past.map(block => block.text)]
+    .flatMap(text => text.split('\n'))
+    .filter(line => line.trim() !== '' && !/^(?:<<<|>>>|Earlier wake \d+:|\[your verdict then\])/.test(line))
+}
+
+/** A record lost for good after Fylgja refused it, counted under the rule it was refused by. */
+function lose(scribe: Scribe, code: string): void {
+  scribe.dropped += 1
+  scribe.lost.set(code, (scribe.lost.get(code) ?? 0) + 1)
 }
 
 /**
@@ -3124,6 +3154,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
           lookups: MAX_LOOKUPS - woken.lookups,
           until: woken.startedAt + WAKE_DEADLINE_MS,
           seen: { ...judged, facts: woken.facts },
+          window: { recent: seen.lines, earlier: earlierLines(scribe) },
         })
         isWhole = !isInside || missedBy(host) === missed
 
@@ -3799,6 +3830,7 @@ export function ledger(scribe: Scribe, columns: number, rows: number, isFocused:
     isFocused,
     !isHere ? 'signed-out' : isOff(scribe) ? 'off' : undefined,
     rows,
+    scribe.lost,
   )
 }
 

@@ -483,8 +483,12 @@ const MAX_STATED_CHARS = 200
  * other part as it was. A reworded sentence can so never bring a reason
  * with it that nobody gave, or a place nobody opened. Nor can a mended
  * reason: a record that had none gets none, and one that had one gets it
- * back no longer than it was. Undefined when the answer is no record, or
- * changes nothing.
+ * back no longer than it was. A record whose wording is put right names
+ * what a label stood for, which takes more words than the label: its
+ * sentence, its reason and its alternatives may each grow to what the
+ * server takes, but a record that had no reason still gets none, it keeps
+ * its reason status, and it gets no more alternatives than it had.
+ * Undefined when the answer is no record, or changes nothing.
  */
 export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen): Draft | undefined {
   const answered = draftOf(isRecord(value) ? { ...value, kind: draft.kind } : value, seen)
@@ -507,8 +511,15 @@ export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen
           ? { ...draft, detail, reasonStatus, alternatives: answered.alternatives }
           : part === 'alternatives'
             ? { ...draft, alternatives: answered.alternatives }
-            : // Places put right stay in the repository the record is about.
-              { ...draft, anchors: answered.repo === null || answered.repo === draft.repo ? answered.anchors : draft.anchors }
+            : part === 'wording'
+              ? {
+                  ...draft,
+                  content: answered.content,
+                  detail: had !== '' && answered.detail.trim() !== '' ? answered.detail : draft.detail,
+                  alternatives: answered.alternatives.slice(0, draft.alternatives.length),
+                }
+              : // Places put right stay in the repository the record is about.
+                { ...draft, anchors: answered.repo === null || answered.repo === draft.repo ? answered.anchors : draft.anchors }
 
   return JSON.stringify(better) === JSON.stringify(draft) ? undefined : better
 }

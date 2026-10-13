@@ -699,7 +699,10 @@ cost line for these requests, so here is what they are.
   requests out of the same four: one to look for a decision's reason in
   what you wrote, one to say whether a new decision goes against a
   recorded one (only when Fylgja holds something on its subject), and
-  one to put right a record the server refused.
+  one to put right a record the server refused. That last one is small
+  too, except for a record refused because it names something by a label
+  only the session knew: then it carries up to 16,000 characters of the
+  session, to say what the label stands for.
 - **At most, per turn:** 4 requests of at most about 31,000 input tokens
   each (123,000 characters: the instruction, up to 24,000 characters of
   plan text, 4 earlier turns in brief, 14,000 characters of this turn, 10
@@ -712,7 +715,8 @@ cost line for these requests, so here is what they are.
   the picked options, Claude's proposal and the plan sections that
   mention the decision, and its instruction), the one that compares a
   decision with what is recorded (up to five records, about 2,000 input
-  tokens) and the one that puts a refused record right (under 1,000).
+  tokens) and the one that puts a refused record right (under 1,000, or
+  up to about 5,000 when it carries the session to name a label).
   So the worst turn is four full looks, not a look and three small
   requests. On top of
   the 4, the end of a turn may put right up to 10 records that waited

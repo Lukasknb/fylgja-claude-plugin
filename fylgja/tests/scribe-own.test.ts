@@ -180,6 +180,20 @@ describe('the shape the server takes is in the instruction', () => {
     expect(SYSTEM).toMatch('do not put "Always" before it')
     expect(SYSTEM).toMatch('"open PR"')
   })
+
+  test('a record names a thing by what it is, in its sentence, its reason and its alternatives, and that is said once', () => {
+    expect(SYSTEM.split('are read by someone who never saw this session').length).toBe(2)
+    expect(SYSTEM).toMatch('"content", "detail" and every entry of "alternatives" are read by someone who never saw')
+    expect(SYSTEM).toMatch('Name a thing by what it is, never by a label the session gave it')
+
+    for (const label of ['"P2"', '"option B"', '"phase 2"', '"this PR"', '"as discussed"', '"the above"']) {
+      expect(SYSTEM, label).toMatch(label)
+    }
+
+    expect(SYSTEM).toMatch('not by its letter or its number')
+    expect(SYSTEM).toMatch('A name that exists outside the session stays as it is')
+    expect(SYSTEM).toMatch('When you cannot say what a label stands for, there is no record.')
+  })
 })
 
 describe('what a wake is sent', () => {

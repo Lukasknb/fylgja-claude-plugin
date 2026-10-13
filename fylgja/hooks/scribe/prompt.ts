@@ -44,6 +44,14 @@ const SHAPE = `The knowledge base takes a sentence by its kind.
   Whatever its kind a record is a rule, not a report of where something stands: no ticket numbers, no dates, none of ${quoted(STATUS_PHRASES)}, and none of ${quoted(STATUS_WORDS)} beside a ticket, a pull request or a date.`
 
 /**
+ * What every word of a record is held to: its reader never saw the session.
+ * Fylgja's server refuses a record that names a thing by a label only the
+ * session knew (`leans_on_conversation`), in the sentence, the reason and
+ * the rejected alternatives alike; this states the same rule beforehand.
+ */
+export const STANDS_ALONE = `"content", "detail" and every entry of "alternatives" are read by someone who never saw this session. Name a thing by what it is, never by a label the session gave it: not "P2", "L5", "phase 2", "step 3", "option B", "the first approach", "ruling 3", "the fix", "this PR", "the new flag", "as discussed", "the above". Write "the partial-sync flag", "the line-level ERP lock", "retrying with backoff". An option the developer turned down is listed by what it was ("failing the upload on the first error"), not by its letter or its number. A name that exists outside the session stays as it is: a flag's actual name, a file path, a function, a product or a customer. When you cannot say what a label stands for, there is no record.`
+
+/**
  * How a record the developer said no longer holds is marked for the model:
  * in the heading of its block, which the plugin writes, and never among the
  * record's own words, which anybody may have written.
@@ -82,6 +90,7 @@ Never: doing what the developer asked for when no alternative was weighed ("cach
 - "detail": for a decision, the reason, in the words it was given, in at most ${SHAPE_LIMITS.detail} characters. Empty when no reason was given. Never invent a reason.
 - "reason_status" (decision only): "stated" only when the developer gave or confirmed the reason in their own words, when the assistant gave the reason for a choice it made itself, or when a plan document gives it. When the assistant only listed what speaks for each option and the developer picked one without saying why, the reason is "not_stated": those points go into the question's "options", never into "detail". "no_strong_reason" ONLY when the developer said in so many words that there was no particular reason.
 - "alternatives" (decision only): what was considered and rejected, as at most ${SHAPE_LIMITS.alternatives} short phrases.
+- ${STANDS_ALONE}
 - "anchors": the files the record concerns, as [{"path":"src/a.ts","symbol":"optionalName"}]. Paths exactly as the session's tool lines write them, a full path where the line writes a full path. Only files that appear in the session. A record belongs to the repository its files lie in, and to one repository only: when a decision concerns files of two repositories, anchor it to the files of the one it is mainly about.
 - "triggers" (gotcha only, required): 1 to 3 words or error strings a later shell command or error message would contain.
 - "supersedes": the id of a recorded decision this one replaces. Only an id from a record shown to you. Otherwise null.

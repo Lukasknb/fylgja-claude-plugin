@@ -188,6 +188,7 @@ export function windowOf(t: Table, shown: View, columns: number, isFocused: bool
       ...(shown.quiet === undefined ? [] : [t.Text({ dimColor: true, wrap: 'wrap', children: [shown.quiet] })]),
       ...(shown.action === undefined ? [] : [t.Box({ flexDirection: 'row', children: [actionOf(t, shown.action, act)] })]),
       ...shown.lines.flatMap(line => lineOf(t, line, act)),
+      ...(shown.closing === undefined ? [] : [t.Text({ dimColor: true, wrap: 'wrap', children: [shown.closing] })]),
       t.Text({ dimColor: true, italic: true, wrap: 'wrap', children: [shown.legend] }),
     ],
   })
