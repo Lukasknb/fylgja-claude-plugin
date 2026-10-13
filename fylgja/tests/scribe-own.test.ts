@@ -178,6 +178,11 @@ describe('the shape the server takes is in the instruction', () => {
     expect(SYSTEM, 'a decision is said in whatever words say what holds, by the server’s own rule').toMatch(DECISION_RULE)
     expect(SYSTEM, 'and names what the server refuses as an account').toMatch(ACCOUNT_OPENERS.join(', '))
     expect(SYSTEM).toMatch('do not put "Always" before it')
+    expect(SYSTEM, 'a reason is a cause, said where the reason and the alternatives are defined').toMatch(
+      /- "alternatives" \(decision only\): [^\n]+\n- A reason is the cause that will still be the cause later/,
+    )
+    expect(SYSTEM).toMatch('"temporary until Z ships" are how things stand today, not a reason')
+    expect(SYSTEM).toMatch('leave "detail" empty and give the decision reason_status "not_stated"')
     expect(SYSTEM).toMatch('"open PR"')
   })
 

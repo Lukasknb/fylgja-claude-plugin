@@ -1320,10 +1320,14 @@ async function lone(host: ScribeHost, scribe: Scribe): Promise<Budget> {
  * with the record is used once: the model is handed the record and the
  * refusal, and nothing else, and what it puts right is checked and sent
  * once. Refused again, or dropped by the model, the record is let go and
- * counted. A record refused for a label only the session knew is the one
- * case where the model is handed the session too, since what the label
+ * counted. A record refused for a label only the session knew is a case
+ * where the model is handed the session too, since what the label
  * stands for is nowhere else; where there is no session to hand over, the
- * record is let go and counted, and no model is asked to guess. A refusal
+ * record is let go and counted, and no model is asked to guess. A decision
+ * refused because its reason or a rejected alternative says how things
+ * stand today is handed the session as well, when there is one: the cause
+ * behind the state is seldom in the record. Without one it is still put
+ * right, by what the record says or by losing the reason. A refusal
  * that is the server's own trouble is tried once more at
  * the next turn's end, as it is. This spends the wake's own model calls and
  * time, and none when the wake has used them up.
@@ -1348,7 +1352,7 @@ async function written(
   }
 
   const first = await send(host, scribe, who, draft, prior)
-  const part = first.written === undefined ? teaches(first.code) : undefined
+  const part = first.written === undefined ? teaches(first.code, first.refusal) : undefined
 
   if (first.written !== undefined || first.code === undefined) {
     return first.written
@@ -1392,9 +1396,10 @@ async function written(
     },
     refusal: first.refusal ?? '',
     timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
-    ...(part === 'wording' && budget.window !== undefined ? { session: budget.window } : {}),
+    ...((part === 'wording' || part === 'cause') && budget.window !== undefined ? { session: budget.window } : {}),
+    ...(part === 'cause' ? { isAboutACause: true } : {}),
   })
-  const better = answer === 'drop' || answer === undefined ? undefined : correctedOf(draft, answer, part, budget.seen)
+  const better = answer === 'drop' || answer === undefined ? undefined : correctedOf(draft, answer, part, budget.seen, first.refusal)
   const second = better === undefined ? undefined : (await send(host, scribe, who, better, prior)).written
 
   if (second === undefined) {

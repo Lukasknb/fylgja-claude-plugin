@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { codeOf, isRepoPath, teaches } from '../hooks/scribe/gate'
+import { codeOf, isRepoPath, stateFields, teaches } from '../hooks/scribe/gate'
 import { anchorsOf } from '../hooks/scribe/repo'
 import { MAX_WAKES_PER_HOUR, refusalLine } from '../hooks/scribe/scribe'
 import { correctedOf, draftOf } from '../hooks/scribe/verdict'
@@ -382,6 +382,159 @@ describe('a refusal that says what is wrong is used once', () => {
       correctedOf(bare, { ...mended, content: 'Retry failed uploads with exponential backoff' }, 'wording', seen),
       'a record with no reason and no alternatives gets its sentence put right and neither of the two',
     ).toEqual({ ...bare, content: 'Retry failed uploads with exponential backoff' })
+  })
+
+  const RULE =
+    'Rule: a decision\'s reason is the cause that will still be the cause later, not how things stand today. Give the constraint behind it, or leave the reason unstated: no detail and reason_status="not_stated". Never invent a reason'
+  const STATE_IN_REASON = `refused:status_not_memory — in the reason: "cannot be handled yet" says what something is right now. ${RULE}`
+  const STATE_IN_OPTION = 'refused:status_not_memory — in a rejected alternative: "is still pending" says what something is right now. Rule: a rejected alternative names the option that was ruled out'
+  const STATE_IN_BOTH = `refused:status_not_memory — in the reason: "cannot be handled yet" says what something is right now; in a rejected alternative: "is still pending" says what something is right now. ${RULE}`
+  const REOPEN = decision({
+    content: 'Reopen a thread into Ready to Sync on an ERP update.',
+    detail: 'Zahoransky has auto-sync off only because their cases cannot be handled yet.',
+    reason_status: 'stated',
+    alternatives: ['never acting on a reopened thread', 'wait, since the migration is still pending'],
+  })
+  const CAUSED = 'Zahoransky\'s cases need scheduled lines and partial sync, which auto-sync cannot handle; reopening into Ready to Sync keeps a person in the loop for exactly those.'
+
+  /** A server that refuses a decision whose reason says "yet", as it refuses state in a reason, and takes every other. */
+  function refusingAStateReason() {
+    let n = 0
+
+    return {
+      remember: (args: Record<string, unknown>) => {
+        if (String(args.detail ?? '').includes('yet')) {
+          return refused(STATE_IN_REASON)
+        }
+
+        n += 1
+
+        return created(100 + n)
+      },
+    }
+  }
+
+  test('a decision refused for state in its reason is handed the session, and its reason comes back as the cause the session gives, longer than it was', async ($, on) => {
+    const caused = { ...REOPEN, content: 'Something else entirely.', detail: CAUSED, alternatives: [] }
+    const set = stage(on, {
+      replies: [verdict({ records: [REOPEN] }), JSON.stringify({ record: caused })],
+      tools: refusingAStateReason(),
+    })
+
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev('SESSION-TEXT: Zahoransky needs scheduled lines and partial sync, auto-sync cannot do those. Reopen into Ready to Sync.'),
+      claude('Done.', edit('src/queue/lock.ts')),
+    )
+
+    const [, correction] = set.asked
+
+    expect(set.asked.length).toBe(2)
+    expect(correction?.system).toMatch('says how things stand today')
+    expect(correction?.system, 'what a reason is').toMatch("A reason is the cause that holds whatever today's settings or progress are")
+    expect(correction?.system, 'a general mechanism is no state').toMatch('is fine with "yet" or "still" in it')
+    expect(correction?.system, 'and not stated is the last resort').toMatch('Only as the last resort, when neither gives a cause')
+    expect(correction?.prompt, 'the field and the wording the server named reach the model').toMatch(
+      'in the reason: "cannot be handled yet"',
+    )
+    expect(correction?.prompt, 'the session the record was taken from is handed over').toMatch('SESSION-TEXT: Zahoransky needs scheduled lines')
+    expect(correction?.prompt.match(/^<<< /gm)?.length, 'all three are fenced as data').toBe(3)
+    expect(CAUSED.length > String(REOPEN.detail).length).toBe(true)
+    expect(set.of('remember').length).toBe(2)
+    expect(set.of('remember')[1], 'the sentence and the alternatives are as they were, whatever the answer did to them').toMatchObject({
+      content: REOPEN.content,
+      detail: CAUSED,
+      reason_status: 'stated',
+      alternatives: REOPEN.alternatives,
+    })
+    expect(await shown($)).toMatch('✓ Recorded · Reopen a thread into Ready to Sync on an ERP update.')
+  })
+
+  test('when neither the session nor the record gives a cause, the decision is kept and its reason is marked not stated', async ($, on) => {
+    const unstated = { ...REOPEN, detail: '', reason_status: 'not_stated' }
+    const set = stage(on, {
+      replies: [verdict({ records: [REOPEN] }), JSON.stringify({ record: unstated })],
+      tools: refusingAStateReason(),
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember')[1]).toMatchObject({
+      content: REOPEN.content,
+      reason_status: 'not_stated',
+      alternatives: REOPEN.alternatives,
+    })
+    expect(set.of('remember')[1]?.detail).toBeUndefined()
+    expect(await shown($)).toMatch('✓ Recorded · Reopen a thread into Ready to Sync on an ERP update.')
+  })
+
+  test('a reason that still says how things stand is refused a second time, and the record is let go: no third try', async ($, on) => {
+    const still = { ...REOPEN, detail: 'Their cases are not handled yet.' }
+    const set = stage(on, {
+      replies: [verdict({ records: [REOPEN] }), JSON.stringify({ record: still }), NOTHING],
+      tools: refusingAStateReason(),
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember').map(args => args.detail)).toEqual([REOPEN.detail, still.detail])
+    expect(set.asked.length).toBe(2)
+    expect(await shown($)).toBe(QUIET)
+  })
+
+  test('a refusal for state changes only the fields it names: the reason, the alternatives, or both', () => {
+    const seen = { plans: [], saidNoReason: false, paths: new Set<string>(), facts: new Map() }
+    const reasoned = draftOf({ ...REOPEN }, seen)
+    const bare = draftOf({ ...REOPEN, detail: '', reason_status: 'not_stated' }, seen)
+    const shrugged = draftOf({ ...REOPEN, detail: 'Nothing decided it yet.', reason_status: 'no_strong_reason' }, { ...seen, saidNoReason: true })
+    const options = ['never acting on a reopened thread', 'waiting for the migration']
+    const mended = { ...REOPEN, content: 'Something else entirely.', detail: CAUSED, alternatives: [...options, 'one nobody weighed'] }
+
+    expect(reasoned === undefined || bare === undefined || shrugged === undefined).toBe(false)
+
+    if (reasoned === undefined || bare === undefined || shrugged === undefined) {
+      return
+    }
+
+    expect(teaches('status_not_memory', STATE_IN_REASON)).toBe('cause')
+    expect(teaches('status_not_memory', STATE_IN_OPTION)).toBe('cause')
+    expect(teaches('status_not_memory', 'refused:status_not_memory — "is merged" says what something is right now')).toBe('content')
+    expect(teaches('too_long', STATE_IN_REASON), 'only that one code is read past its name').toBe('content')
+    expect(stateFields(STATE_IN_BOTH)).toEqual({ reason: true, alternatives: true })
+    expect(
+      stateFields('refused:status_not_memory — in the reason: "not yet" says. Rule: a rejected alternative: none'),
+      'a field is named ahead of the rule, never by it',
+    ).toEqual({ reason: true, alternatives: false })
+
+    expect(
+      correctedOf(reasoned, mended, 'cause', seen, STATE_IN_OPTION),
+      'about an alternative: the reason is not touched, and no alternative is added',
+    ).toEqual({ ...reasoned, alternatives: options })
+    expect(
+      correctedOf(reasoned, { ...mended, alternatives: [] }, 'cause', seen, STATE_IN_REASON),
+      'about the reason: it may grow, and no alternative is changed or dropped',
+    ).toEqual({ ...reasoned, detail: CAUSED })
+    expect(correctedOf(reasoned, mended, 'cause', seen, STATE_IN_BOTH), 'about both: both').toEqual({
+      ...reasoned,
+      detail: CAUSED,
+      alternatives: options,
+    })
+    expect(
+      correctedOf(reasoned, { ...mended, detail: '', reason_status: 'not_stated' }, 'cause', seen, STATE_IN_REASON),
+      'no cause to be found: the decision is kept without a reason',
+    ).toEqual({ ...reasoned, detail: '', reasonStatus: 'not_stated' })
+    expect(
+      correctedOf(bare, mended, 'cause', seen, STATE_IN_BOTH),
+      'a record with no reason gets none, and its alternative is said as the option it was',
+    ).toEqual({ ...bare, alternatives: options })
+    expect(
+      correctedOf(shrugged, { ...REOPEN, detail: '', reason_status: 'not_stated' }, 'cause', seen, STATE_IN_REASON),
+      'what the developer said about having no reason goes, and that they had none stays on record',
+    ).toEqual({ ...shrugged, detail: '', reasonStatus: 'no_strong_reason' })
   })
 
   for (const [code, part] of [

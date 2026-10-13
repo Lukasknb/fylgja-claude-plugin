@@ -7,6 +7,7 @@
 import { isRecord } from '../payload'
 import { reasonStatusOf } from './facts'
 import { MAX_ALTERNATIVE_CHARS, MAX_ALTERNATIVES, MAX_ANCHORS, MAX_CONTENT_CHARS, MAX_DETAIL_CHARS } from './gate'
+import { stateFields } from './gate'
 import type { Part } from './gate'
 import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
@@ -487,10 +488,13 @@ const MAX_STATED_CHARS = 200
  * what a label stood for, which takes more words than the label: its
  * sentence, its reason and its alternatives may each grow to what the
  * server takes, but a record that had no reason still gets none, it keeps
- * its reason status, and it gets no more alternatives than it had.
+ * its reason status, and it gets no more alternatives than it had. A
+ * decision whose reason or alternative said how things stand today keeps
+ * its sentence, and of the two changes only what `refusal` names
+ * (`withoutState`).
  * Undefined when the answer is no record, or changes nothing.
  */
-export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen): Draft | undefined {
+export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen, refusal?: string): Draft | undefined {
   const answered = draftOf(isRecord(value) ? { ...value, kind: draft.kind } : value, seen)
 
   if (answered === undefined) {
@@ -511,6 +515,8 @@ export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen
           ? { ...draft, detail, reasonStatus, alternatives: answered.alternatives }
           : part === 'alternatives'
             ? { ...draft, alternatives: answered.alternatives }
+            : part === 'cause'
+              ? { ...draft, ...withoutState(draft, answered, stateFields(refusal)) }
             : part === 'wording'
               ? {
                   ...draft,
@@ -522,6 +528,42 @@ export function correctedOf(draft: Draft, value: unknown, part: Part, seen: Seen
                 { ...draft, anchors: answered.repo === null || answered.repo === draft.repo ? answered.anchors : draft.anchors }
 
   return JSON.stringify(better) === JSON.stringify(draft) ? undefined : better
+}
+
+/**
+ * The reason and the rejected alternatives of a decision refused because
+ * one or both say how things stand today, as the model's answer leaves
+ * them. Only what the refusal `named` is taken from the answer: a refusal
+ * about an alternative never changes the reason, and one about the reason
+ * never changes or drops an alternative.
+ *
+ * The cause behind a state takes more words than the state did, so the
+ * reason may grow to what the server takes. An answer with no reason
+ * leaves the decision with none on record (`not_stated`), which is what it
+ * then is; a record that had no reason gets none, and one already said to
+ * have no strong reason keeps saying so. The alternatives come back
+ * reworded or fewer, never more.
+ */
+function withoutState(
+  draft: Draft,
+  answered: Draft,
+  named: { reason: boolean; alternatives: boolean },
+): Pick<Draft, 'detail' | 'reasonStatus' | 'alternatives'> {
+  const alternatives = named.alternatives ? answered.alternatives.slice(0, draft.alternatives.length) : draft.alternatives
+
+  if (!named.reason || draft.detail.trim() === '') {
+    return { detail: draft.detail, reasonStatus: draft.reasonStatus, alternatives }
+  }
+
+  if (answered.detail.trim() !== '') {
+    return { detail: answered.detail, reasonStatus: draft.reasonStatus, alternatives }
+  }
+
+  return {
+    detail: '',
+    reasonStatus: draft.reasonStatus === 'no_strong_reason' ? draft.reasonStatus : 'not_stated',
+    alternatives,
+  }
 }
 
 // What a person says when there is no why: that they do not know, or that

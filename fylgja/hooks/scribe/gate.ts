@@ -27,7 +27,8 @@ export const MAX_SYMBOL_CHARS = 200
 /**
  * The name of the rule Fylgja refused something by. Every refusal of the
  * server's opens `refused:<code> — <what to do>`; the code is what is read,
- * never the words after it. Undefined for anything else.
+ * and of the words after it only which fields they name (`stateFields`).
+ * Undefined for anything else.
  */
 export function codeOf(refusal: string | undefined): string | undefined {
   return /^refused:([a-z_]{1,60})(?![a-z_])/.exec(refusal ?? '')?.[1]
@@ -36,9 +37,12 @@ export function codeOf(refusal: string | undefined): string | undefined {
 /**
  * The part of a record a refusal is about, and so the only part a correction
  * may change. `wording` is the words of the record wherever they stand: its
- * sentence, its reason and its rejected alternatives.
+ * sentence, its reason and its rejected alternatives. `cause` is a
+ * decision's reason and its rejected alternatives where the refusal says
+ * they tell how things stand today: of the two, only what the refusal names
+ * is changed, and the decision stays.
  */
-export type Part = 'content' | 'triggers' | 'reason' | 'alternatives' | 'anchors' | 'wording'
+export type Part = 'content' | 'triggers' | 'reason' | 'alternatives' | 'anchors' | 'wording' | 'cause'
 
 const PARTS: Readonly<Record<string, Part>> = {
   not_imperative: 'content',
@@ -59,14 +63,37 @@ const PARTS: Readonly<Record<string, Part>> = {
 }
 
 /**
+ * Which of a decision's fields a refusal for state names. The server
+ * refuses state by one code wherever it stands, and when that is not the
+ * sentence it names every field it found some in, each ahead of the phrase
+ * it matched and all of them ahead of the rule: "refused:status_not_memory —
+ * in the reason: "…" says …; in a rejected alternative: "…" says …. Rule: …".
+ */
+export function stateFields(refusal: string | undefined): { reason: boolean; alternatives: boolean } {
+  const named = /^refused:status_not_memory \u2014 (in (?:the reason|a rejected alternative):.*?)(?: Rule:|$)/s.exec(refusal ?? '')?.[1] ?? ''
+
+  return { reason: named.includes('in the reason:'), alternatives: named.includes('in a rejected alternative:') }
+}
+
+/**
  * Which part of a record a refusal teaches something about; undefined for a
  * refusal that says nothing a rewording could mend (the record is gone, too
  * many were written, the server is having trouble) and for a code not known
- * here, which is a failure and nothing more.
+ * here, which is a failure and nothing more. The code decides it. The
+ * refusal's own words are read in one case only: state the server found in a
+ * decision's reason or in a rejected alternative, and not in its sentence.
  */
-export function teaches(code: string | undefined): Part | undefined {
+export function teaches(code: string | undefined, refusal?: string): Part | undefined {
   if (code === undefined) {
     return undefined
+  }
+
+  if (code === 'status_not_memory') {
+    const named = stateFields(refusal)
+
+    if (named.reason || named.alternatives) {
+      return 'cause'
+    }
   }
 
   return Object.hasOwn(PARTS, code) ? PARTS[code] : undefined

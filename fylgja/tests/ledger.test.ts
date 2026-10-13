@@ -450,6 +450,35 @@ describe('the window lists what Scribe kept', () => {
     await ui.unmount()
   })
 
+  test('a decision whose reason said how things stand, refused again after it was put right, is counted as not kept', async ($, on) => {
+    const refusal = 'refused:status_not_memory — in the reason: "not yet" says what something is right now.'
+    const dated = decision({ content: 'Reopen a thread into Ready to Sync.', detail: 'Auto-sync is not yet enabled for them.', anchors: [{ path: FILE }] })
+
+    frame(on)
+    const set = stage(on, {
+      replies: [verdict({ records: [LOCK, dated] }), JSON.stringify({ record: { ...dated, detail: 'It is not enabled yet.' } })],
+      tools: {
+        remember: (args: Record<string, unknown>) =>
+          String(args.detail ?? '').includes('yet')
+            ? { content: [{ type: 'text', text: refusal }], isError: true }
+            : answer({ atom_id: FIRST, outcome: 'created', supersede: 'not_requested', note: null }),
+      },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'ok')
+    await $.command.run(COMMAND)
+
+    const ui = await pane($)
+
+    expect(set.of('remember').length, 'sent, put right once, sent again, and no third time').toBe(3)
+    expect(await ui.rows()).toEqual(['▸ ◆ Decision · Use a Redis lock for the retry queue.'])
+    expect(await ui.lines()).toContain('1 not kept — Fylgja turned it down (status_not_memory)')
+
+    await ui.unmount()
+  })
+
   test('what was not kept is said in one closing line of the window, by why, and nowhere above the prompt', async ($, on) => {
     const refusal = 'refused:leans_on_conversation — "option B" only means something inside the conversation it came from.'
     const leaning = decision({ content: 'Go with option B for the retry queue.', detail: 'It was simpler.', anchors: [{ path: FILE }] })
