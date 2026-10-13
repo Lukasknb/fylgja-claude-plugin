@@ -369,7 +369,9 @@ describe('Scribe records', () => {
 
     const tools = set.calls.map(call => call.tool)
 
-    expect(set.of('attach_commit')).toEqual([{ repo: REPO, sha: '1a2b3c4', session_id: SESSION_ID }])
+    expect(set.of('attach_commit')).toEqual([
+      { repo: REPO, sha: '1a2b3c4', session_id: SESSION_ID, paths: ['src/queue/lock.ts'] },
+    ])
     expect(tools.indexOf('attach_commit') > tools.indexOf('remember'), 'after the record').toBe(true)
 
     await turn($, set, dev('thanks'), claude('Welcome.'))

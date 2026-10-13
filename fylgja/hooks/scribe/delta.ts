@@ -11,6 +11,8 @@
 import { isRecord } from '../payload'
 import { isPlanDocument, PLAN_MODE } from './plans'
 import { relativeTo } from './repo'
+import { cleared, countIn, namedAfter } from './staged'
+import type { Away, Index, Step, Whole } from './staged'
 
 /** A row of the conversation, as much of it as is read here. */
 export type Row = {
@@ -31,6 +33,34 @@ export type Row = {
 /** A plan document seen in a tool call: its whole text, or one edit to it. */
 export type PlanSighting = { key: string; path: string | null; text: string } | { key: string; before: string; after: string }
 
+/**
+ * A commit made in this repository, and what the rows before it say of the
+ * files it holds.
+ */
+export type Landed = {
+  sha: string
+  /** The files written or changed in these rows before it and after the commit before, as absolute paths. */
+  before: string[]
+  /**
+   * The files the commands of these rows named as staged for it, as paths
+   * from the working tree's root; null when they do not plainly say.
+   */
+  named: string[] | null
+  /** Whether a command of these rows did anything to what is staged for it, beside the commit's own `-a` and the whole tree staged from its root. */
+  hasStaged: boolean
+  /** Whether the whole tree was staged for it, by itself or by a command before it, and whether new files with it. */
+  whole: Whole
+  /**
+   * Those among `before` that these rows show to be new: written where the
+   * tool said it created the file. Staging what git tracks does not take them.
+   */
+  created: string[]
+  /** Where the shell was when it was made: at the working tree's root, in a folder inside it, or outside it. */
+  isAway: Away
+  /** How many files git said it changed; null when it did not say. */
+  count: number | null
+}
+
 export type Seen = {
   /** The rows as lines, oldest first, cut to `MAX_DELTA_CHARS` from the old end. */
   lines: string[]
@@ -47,6 +77,14 @@ export type Seen = {
   changed: string[]
   /** The sha of every commit a shell call made in this repository. */
   commits: string[]
+  /** Those commits in the order they were made, each with what the rows say of the files it holds. */
+  landed: Landed[]
+  /** The files written or changed after the last of those commits, as absolute paths: no commit among the rows holds them. */
+  loose: string[]
+  /** Those among them the rows show to be new files. */
+  created: string[]
+  /** What the shell commands since the last commit, these rows' included, say of the commit to come. */
+  index: Index
   plans: PlanSighting[]
   /** Everything the developer wrote, for checks on their own words. */
   developer: string
@@ -457,13 +495,21 @@ export function isPrompt(row: Row, prompts: ReadonlySet<string>): boolean {
  *
  * @param root the working tree's root; files are named from it
  * @param prompts the prompts the developer sent, each as `plain` leaves it
+ * @param index what the shell commands before these rows, since the commit before, say of the commit to come
  */
-export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet<string>): Seen {
+export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet<string>, index: Index = cleared(false)): Seen {
   const lines: string[] = []
   const touched = new Set<string>()
   const files = new Set<string>()
   const changed = new Set<string>()
   const commits: string[] = []
+  const landed: Landed[] = []
+  // Since the last commit among the rows: the files changed, those of them
+  // that are new, and what the commands say of what is staged.
+  let since = new Set<string>()
+  let created = new Set<string>()
+  let { named, hasStaged, whole } = index
+  let away: Away = index.isAway
   const plans: PlanSighting[] = []
   const developer: string[] = []
   const acts: { key: string; words: string }[] = []
@@ -563,6 +609,12 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
 
         if (CHANGING.has(use.tool) && !isError) {
           changed.add(absolute(root, file))
+          since.add(absolute(root, file))
+
+          // The tool says when it wrote a file that was not there; any other wording counts as a file that was.
+          if (use.tool === 'Write' && /^File created\b/.test(use.text ?? '')) {
+            created.add(absolute(root, file))
+          }
         }
       }
 
@@ -572,8 +624,39 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
 
       const sha = use.tool === 'Bash' && typeof input.command === 'string' ? commitOf(input.command, use.text, root) : undefined
 
+      // Every shell command is read for the files it stages by name and for
+      // where it leaves the shell. A commit that did not show, and a command
+      // that names git and failed, leave what is staged unknown.
+      const step: Step | undefined =
+        use.tool === 'Bash' && typeof input.command === 'string' ? namedAfter(named, input.command, root, away, whole) : undefined
+
+      if (step !== undefined) {
+        const isLost: boolean = sha === undefined && (step.next !== undefined || (isError && /\bgit\b/.test(String(input.command))))
+
+        away = step.isAway
+        named = sha !== undefined ? named : isLost ? null : step.named
+        hasStaged ||= step.hasStaged || isLost
+        whole = step.whole
+      }
+
       if (sha !== undefined && !commits.includes(sha)) {
         commits.push(sha)
+        landed.push({
+          sha,
+          before: [...since],
+          named: step?.named ?? null,
+          hasStaged,
+          whole,
+          created: [...created],
+          isAway: away,
+          count: countIn(use.text ?? '', sha),
+        })
+        since = new Set()
+        created = new Set()
+        // A command that went on after its commit has done to the next one what is not read here.
+        named = step?.next ?? null
+        hasStaged = named === null
+        whole = false
         hasChange = true
       }
 
@@ -617,6 +700,10 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
     offers,
     offeredText: offeredText.join('\n'),
     commits,
+    landed,
+    loose: [...since],
+    created: [...created],
+    index: { named, hasStaged, whole, isAway: away },
     plans,
     developer: developer.join('\n'),
     hasChange,

@@ -676,7 +676,7 @@ export async function relationOf(
     const reply = await host.complete({
       model: input.model,
       system: [{ text: RELATE, cache: true }],
-      prompt: [{ text: `${fenced('decision', input.decision)}\n\n${input.facts.map(recordText).join('\n')}${ANSWER_NOW}` }],
+      prompt: [{ text: `${fenced('decision', input.decision)}\n\n${input.facts.map(fact => recordText(fact)).join('\n')}${ANSWER_NOW}` }],
       maxTokens: 200,
       timeoutMs: Math.max(1, Math.floor(input.timeoutMs)),
     })

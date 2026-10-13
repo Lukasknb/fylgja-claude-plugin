@@ -360,6 +360,8 @@ function noteItems(scribe: Scribe.Scribe, seen: Set<Band.Item>, step: Step, show
       step.tells.push({ id: item.fact.id, text: item.fact.content })
     } else if (item.form === 'reason') {
       step.questions.push({ form: 'reason', text: item.content, options: item.options, prior: null })
+    } else if (item.form === 'holds') {
+      step.questions.push({ form: 'holds', text: item.fact.content, options: [], prior: null })
     } else {
       step.questions.push({ form: 'reversal', text: item.draft.content, options: item.options, prior: item.prior.content })
     }

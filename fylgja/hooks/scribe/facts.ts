@@ -78,7 +78,46 @@ function factOf(value: unknown): Fact | undefined {
     date: day?.slice(0, 10) ?? null,
     origin: typeof value.origin === 'string' && /^[a-z_]{1,40}$/.test(value.origin) ? value.origin : '',
     link: pageOf(value.link),
+    changed: changedOf(value),
   }
+}
+
+/** No more files a commit touched are kept of one record than this. */
+const MAX_CHANGED = 6
+
+/**
+ * The files of a record that a commit touched after it was last confirmed,
+ * as the server names them; null when it says no such thing. A record marked
+ * so without its files is kept as marked, with none named.
+ */
+function changedOf(value: Record<string, unknown>): string[] | null {
+  const stamp = isRecord(value.code_changed) ? value.code_changed : undefined
+
+  return stamp === undefined && value.staleness !== 'code_changed' ? null : strings(stamp?.paths, MAX_CHANGED)
+}
+
+/** No more of one file's path is said than this. */
+const MAX_PATH = 120
+
+/**
+ * What is said of a record whose code changed after it was last confirmed,
+ * wherever the record is shown to a person or handed to a model: a few
+ * plain words and the file, so that neither takes it for settled. Undefined
+ * for every other record.
+ *
+ * @param safe makes a path fit to stand where the line is put
+ */
+export function changedLine(fact: Pick<Fact, 'changed'>, safe: (path: string, max: number) => string): string | undefined {
+  if (fact.changed === null) {
+    return undefined
+  }
+
+  // On one line, whatever the path holds.
+  const [first, ...rest] = fact.changed.map(path => safe(path.replace(/\s+/g, ' ').trim(), MAX_PATH)).filter(path => path !== '')
+
+  return first === undefined
+    ? 'Its code changed since it was last confirmed.'
+    : `Its code changed since it was last confirmed: ${first}${rest.length === 0 ? '' : ` and ${rest.length} more`}`
 }
 
 /** The records a lookup answered with, each once, in the order given. */

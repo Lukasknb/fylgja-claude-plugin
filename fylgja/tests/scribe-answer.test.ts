@@ -375,7 +375,7 @@ describe('an answer the developer gives to a question of Claude’s is looked at
 
     expect(set.of('remember').length).toBe(1)
     expect(set.of('attach_commit'), 'once, by the look that came next').toEqual([
-      { repo: 'acme/web', sha: '1a2b3c4', session_id: 'c0ffee00-0000-4000-8000-000000000001' },
+      { repo: 'acme/web', sha: '1a2b3c4', session_id: 'c0ffee00-0000-4000-8000-000000000001', paths: [FILE] },
     ])
   })
 

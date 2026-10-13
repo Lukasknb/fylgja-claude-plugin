@@ -264,7 +264,10 @@ at a time.
   reason, and `Fylgja record 1a2b3c4d` with who wrote it down, so Claude
   can open it by that id; the link follows only where the record has one.
   It sends nothing, and leaves a box with text in it alone. Knew this
-  keeps that record away on this machine for good.
+  keeps that record away on this machine for good. A record whose code a
+  commit changed after it was last confirmed says so under its sentence,
+  with the file, and so does the note for Claude; Scribe's model is told
+  the same. Neither is to take it for settled.
 - **It reads the plan.** If the session works from a plan (plan mode's own,
   or a markdown file that calls itself a plan, a design, a spec, an RFC, an
   ADR or a work package), that is where Scribe looks first for the reason.
@@ -278,13 +281,89 @@ at a time.
   a plain `git commit`, or one that names this repository's root. One made
   after `cd` into another folder or with `git -C` elsewhere is not, since
   a folder inside the tree may be a repository of its own.
+  With the commit go files the session wrote or changed in this
+  repository, as paths from its root, at most 200. Fylgja marks the
+  other decisions anchored to those very files as ones whose code
+  changed since they were last confirmed. Scribe runs no index command
+  and reads no file's content, so it does not know what a commit holds.
+  It has the files the session changed and the number of files git
+  itself prints for the commit, and it reports a file only when the two
+  agree. A mark on somebody's record that the commit never touched is
+  worse than a missed one, so a commit goes unreported more often than
+  it need be; that is the price, and it is paid on purpose. The rule:
+  - the candidates are the files the session changed since the commit
+    before and before the commit's own command, in the main
+    conversation or through an agent, in the working tree the commit
+    was made in (not a repository checked out inside it, not another
+    worktree of the same repository);
+  - git printed no "N files changed" on the line after the commit's
+    own, or the shell had been left in another folder when the commit
+    was made: nothing;
+  - the commit took the whole tree, by its own `-a` or after the whole
+    tree was staged from its root with nothing named (`add -A`,
+    `add --all`, `add .`, `add -u`), and no other command since the
+    commit before touched what is staged: the candidates, when they are
+    as many as git counted. Where only what git tracks was taken (`-a`,
+    `-u`), a file the session is known to have created is left out;
+  - any other commit, a bare `git commit` too, takes what was staged,
+    and the candidates' number proves nothing then, since the file
+    staged may be another one (any other `git add`, any other git
+    command that is not `status`, `diff`, `log` or `show`, git reached
+    through another program, an amend). Only where the commands named
+    the staged files one by one (a plain `git add` of files, or files
+    named on the commit, joined by `&&` and nothing else), every one of
+    them is a candidate and they are as many as git counted: those
+    files;
+  - otherwise nothing.
+  What the commands staged is kept from turn to turn until a commit is
+  seen, so a commit is read with what was staged turns before it.
+  At every commit its candidates are let go, reported or not; a file
+  changed after the commit's command is the next commit's. A commit
+  made after the shell was taken out of the working tree altogether is
+  another repository's, and is not attached at all. A file the commit
+  holds that the session never touched is unknown to Scribe, and a
+  record anchored to such a file is not marked. A Fylgja server that
+  does not know of a commit's files yet turns that call down and names
+  the argument; the commit is then attached without them, as before,
+  and the session sends none again. A call that fails for any other
+  reason changes nothing.
+- **It asks whether a decision still holds.** When a commit of the
+  session marks a recorded decision that way, or a record that comes
+  back for a file in hand already reads so, one of them is asked about
+  once Claude has finished:
+
+  `? Still true: Use Redis with Redlock for the job queue. · 2026-09-12`
+  `Its code changed since it was last confirmed: src/queue/lock.ts`
+  `1 Still holds  2 No longer holds  0 Skip`
+
+  Still holds, pressed twice, confirms the record again in Fylgja, and
+  the mark is gone. Fylgja is asked first whether it still returns the
+  record, for as many records as it gives at once (25): one that was
+  replaced or removed meanwhile is not sent, one that could not be
+  looked for among more records than that is not sent either, and a
+  confirmation Fylgja refuses is not taken for one. Each is said on the
+  card in one line, and the record stays marked. No longer holds writes
+  nothing, and the card says so: only a record's author can change it,
+  and what takes its place is not known at that moment. The next three
+  looks are shown the record, by its id and its sentence, as one you
+  gave up, and when the session shows the decision that replaces it,
+  that comes as the question above ("Yes, it replaces it"), which only
+  your key settles. This is kept through a compaction and let go on a
+  `/clear`. Skip, or your next prompt, leaves the record marked. It is
+  one of the session's questions and held to their limits; a record is
+  asked about once in a session, and one the session itself wrote,
+  Scribe's or Claude's, never. When several are marked, one is asked
+  about and the others come as tells, one a turn, each saying that its
+  code changed. No count of them is put on the card: a number names
+  nothing you could act on.
 
 What Scribe writes to Fylgja without a key of yours, all of it: a new
 record; a rewrite or a withdrawal of a record it wrote as new in this
 session and you have not touched; places added to such a record; and
-the session's commit attached to the session's records. Everything else
-(a replacement of a recorded decision, a reason, a fix, a removal,
-putting a record back) is written on your key, pressed twice.
+the session's commit attached to the session's records, with the files
+the session changed in it. Everything else (a replacement of a recorded
+decision, a confirmation that one still holds, a reason, a fix, a
+removal, putting a record back) is written on your key, pressed twice.
 
 Staying out of the way is the point, and the limits are in the code:
 
@@ -309,7 +388,7 @@ Staying out of the way is the point, and the limits are in the code:
   not a receipt. Nothing takes the keyboard by itself.
 - Every key that writes to Fylgja or settles something for good acts on
   the second press of the same key within five seconds: Remove, Knew this,
-  Turn Scribe off, "Yes, it replaces it", Put back, a proposed reason and
+  Turn Scribe off, "Yes, it replaces it", "Still holds", Put back, a proposed reason and
   "No particular reason". The first press only fills the key where it stands, and a line
   above the keys says so. A digit
   typed alone into an empty prompt box presses a key of the band, and a
@@ -521,6 +600,10 @@ author, against a stand-in knowledge base, with nobody at the keys.
   words only.
 - An agent's commit is read from its command; Scribe runs no git, so
   "the commit's files" are the files changed since the commit before.
+  The sha of an agent's commit is never seen, so that commit is not
+  attached and its files are reported with none. A file a commit holds
+  that the session did not touch is not reported either, and a record
+  anchored to it is not marked as changed.
   What an agent decided on its own is not seen at all: only the paths
   it changed are.
 - Six of seven looks for a reason found none, at 21,000 to 33,000
@@ -658,7 +741,8 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   find what is already recorded on its subject; the records it writes, each with its sentence, reason,
   alternatives, file anchors, your session's id, and `author: scribe`; your
   answers to its questions; your Fix, Remove and Put back; and the sha of a commit
-  made in the session.
+  made in the session, with the paths of the files the session changed in
+  that repository since the commit before (their paths, never their content).
 - **Kept:** what the chips show is held in memory by the running plugin for
   the conversation. It is dropped on `/clear`, on resume, when you have to
   sign in again, and when the session ends. The chip texts shown in the

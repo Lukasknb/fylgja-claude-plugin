@@ -20,8 +20,8 @@ import { drawn } from '../plain'
 import * as Band from './band'
 import { carried, listedOf, saidOf } from './carry'
 import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain } from './delta'
-import type { Offer, Row } from './delta'
-import { factsOf, isAnchoredTo, knownReposIn } from './facts'
+import type { Landed, Offer, Row } from './delta'
+import { changedLine, factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
 import * as Ledger from './ledger'
 import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
@@ -31,6 +31,8 @@ import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
 import type { Block } from './prompt'
 import { relativeTo, repoNameOf } from './repo'
+import { cleared } from './staged'
+import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
 import type { Draft, Fact, Place, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReason } from './verdict'
@@ -102,6 +104,12 @@ type Identity = { sessionId: string; repo: string | null; root: string }
 
 /** A working tree on this machine: where it begins, and the repository it is a checkout of, as `owner/name`. */
 type Tree = { root: string; repo: string }
+
+/** A commit made in the session's own repository: its sha, and the files it holds as paths from that repository's root. */
+type Commit = { sha: string; paths: string[] }
+
+/** A recorded decision whose code changed, waiting its turn; `asks` is false once another of its batch was asked about. */
+type Doubted = { fact: Fact; repo: string; asks: boolean }
 
 /** Something to do on Fylgja that could not be done when it was asked for, kept for the next turn. */
 type Deferred = ({ tool: string; args: Record<string, unknown> } | { draft: Draft; against?: string }) & {
@@ -273,11 +281,42 @@ export type Scribe = {
   /** Commits already seen in the rows: each is attached once. */
   commits: Set<string>
   /**
-   * Commits seen in the rows and not yet attached, oldest first. The look
-   * that sees a commit may end before it attaches it; whichever look comes
-   * next does.
+   * Commits seen in the rows and not yet attached, oldest first, each with
+   * the files it holds as paths from its repository's root. The look that
+   * sees a commit may end before it attaches it; whichever look comes next
+   * does.
    */
-  toAttach: string[]
+  toAttach: Commit[]
+  /** Whether Fylgja's server takes the files of a commit: true until it turned a commit down for them. */
+  takesPaths: boolean
+  /**
+   * Recorded decisions whose code a commit changed after they were last
+   * confirmed, not yet asked about: one of them is asked about when a look
+   * ends, and the others are told like any other record.
+   */
+  doubted: Doubted[]
+  /**
+   * Recorded decisions the developer said no longer hold, by id, each with
+   * its one sentence, its day, and the wake it was said before: shown to
+   * the next `DENIED_WAKES` looks as given up, or until the decision that
+   * takes its place is put to the developer as its replacement. Kept
+   * through a compaction and let go on a `/clear`; nothing of it is written
+   * to Fylgja.
+   */
+  denied: Map<string, { content: string; date: string | null; since: number }>
+  /**
+   * What the shell commands of the session since its last commit say of the
+   * commit to come, and where they left the shell: carried from look to
+   * look, so that a commit is read with what was staged turns before it.
+   */
+  index: Index
+  /** The files the session created since its last commit, as absolute paths: staging what git tracks does not take them. */
+  created: Set<string>
+  /**
+   * The ids of the records Fylgja attached a commit of this session to: the
+   * session's own, Scribe's and Claude's alike. None of them is asked about.
+   */
+  own: Set<string>
   /** Whether a call of Scribe's own has got through to Fylgja in this session. */
   isGranted: boolean
   /** Whether Fylgja has been asked at all in this session, got through or not. */
@@ -337,6 +376,24 @@ export const MAX_SPOKEN_CHARS = 30_000
 
 /** No more files of one commit are listed to a look than this. */
 const MAX_COMMIT_FILES = 60
+
+/** No more files are sent to Fylgja with one commit than this: as many as its server matches of one call. */
+export const MAX_COMMIT_PATHS = 200
+
+/** No more records whose code changed wait to be asked about than this; the oldest are let go. */
+const MAX_DOUBTED = 5
+
+/** No more records the developer said no longer hold are kept for the looks to come than this; the oldest are let go. */
+const MAX_DENIED = 5
+
+/** A record the developer said no longer holds is shown to this many looks: what takes its place is said soon after, or not at all. */
+export const DENIED_WAKES = 3
+
+/** The most records Fylgja returns for one lookup by path, asked for where one particular record is looked for. */
+const MOST_RECALLED = 25
+
+/** No more ids of the session's own records are kept than this. */
+const MAX_OWN = 500
 
 /** No more questions and option names are kept for telling a reason from an echo of the question. */
 const MAX_OFFERED = 80
@@ -439,6 +496,12 @@ export function create(options: Options): Scribe {
     deferred: [],
     commits: new Set(),
     toAttach: [],
+    takesPaths: true,
+    doubted: [],
+    denied: new Map(),
+    index: cleared(false),
+    created: new Set(),
+    own: new Set(),
     isGranted: false,
     hasAsked: false,
     said: new Set(),
@@ -512,6 +575,9 @@ export function startOver(scribe: Scribe): void {
   scribe.proposals = []
   scribe.earlier = []
   scribe.anchored.clear()
+  scribe.doubted = []
+  // The developer cleared the conversation on purpose: what they said of a record in it goes with it.
+  scribe.denied.clear()
   scribe.deferred = []
 }
 
@@ -537,6 +603,10 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   scribe.carry = undefined
   scribe.isGranted = false
   scribe.hasAsked = false
+  scribe.takesPaths = true
+  scribe.index = cleared(false)
+  scribe.created.clear()
+  scribe.own.clear()
   scribe.isInteractive = isInteractive && (surface === 'terminal' || surface === 'desktop')
 }
 
@@ -834,6 +904,9 @@ async function identityOf(host: ScribeHost, scribe: Scribe): Promise<Identity | 
   // a new one starts with none.
   if (carry?.sessionId === sessionId) {
     Object.assign(band, carry.tally)
+  } else if (carry !== undefined) {
+    // Another session: which records were the session's own was said of the one before.
+    scribe.own.clear()
   }
 
   scribe.carry = undefined
@@ -1006,16 +1079,30 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
   }
 }
 
-/** What sending one record came to: what was written, or the code Fylgja refused it by and its words. */
-type Sent = { written: Written | undefined; code: string | undefined; refusal: string | undefined }
+/**
+ * What sending one record came to: what was written, or the code Fylgja
+ * refused it by and its words. `isTaken` says Fylgja took it, whether or not
+ * anything new was written for it.
+ */
+type Sent = { written: Written | undefined; code: string | undefined; refusal: string | undefined; isTaken: boolean }
 
 /**
  * Writes one record, once. What was written, or the code Fylgja refused it
  * by and its words. A refusal is counted.
  *
  * @param prior the recorded decision it replaces, when the developer said it does
+ * @param recalled the id of the record this is, when the developer said a
+ *   record Fylgja returned still holds: that record is confirmed again, and
+ *   nothing new is written
  */
-async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draft, prior?: Fact): Promise<Sent> {
+async function send(
+  host: ScribeHost,
+  scribe: Scribe,
+  who: Identity,
+  draft: Draft,
+  prior?: Fact,
+  recalled?: string,
+): Promise<Sent> {
   const args: Record<string, unknown> = {
     content: draft.content,
     // The repository the record is about, which need not be the one the session sits in.
@@ -1029,6 +1116,7 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
     ...(draft.triggers.length === 0 ? {} : { triggers: draft.triggers }),
     ...(draft.reasonStatus === null ? {} : { reason_status: draft.reasonStatus }),
     ...(prior === undefined ? {} : { supersedes: prior.id }),
+    ...(recalled === undefined ? {} : { recalled_atom_id: recalled }),
   }
 
   let answer: Record<string, unknown> | undefined
@@ -1040,7 +1128,7 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
     answer = undefined
   }
 
-  const none = (code?: string): Sent => ({ written: undefined, code, refusal })
+  const none = (code?: string, isTaken = false): Sent => ({ written: undefined, code, refusal, isTaken })
 
   const outcome = answer?.outcome
 
@@ -1058,7 +1146,7 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
   )
 
   if (typeof answer?.atom_id !== 'string') {
-    return none()
+    return none(undefined, true)
   }
 
   // Fylgja says when what was sent was not applied because the record is
@@ -1069,7 +1157,7 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
   // Held already by the developer's own record: nothing was written, so
   // there is nothing to show or undo.
   if (!isTheirs && outcome !== 'created' && outcome !== 'restored') {
-    return none()
+    return none(undefined, true)
   }
 
   const written: Written = {
@@ -1087,7 +1175,7 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
   }
 
   if (written.outcome === 'held') {
-    return { written, code: undefined, refusal: undefined }
+    return { written, code: undefined, refusal: undefined, isTaken: true }
   }
 
   scribe.written = [...scribe.written, written].slice(-MAX_LISTED)
@@ -1096,7 +1184,7 @@ async function send(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draf
     scribe.mine.add(written.id)
   }
 
-  return { written, code: undefined, refusal: undefined }
+  return { written, code: undefined, refusal: undefined, isTaken: true }
 }
 
 /**
@@ -1625,6 +1713,10 @@ async function apply(
     // developer's to settle, as when the wake itself saw the record.
     const against = prior === undefined ? await opposedBy(host, scribe, checked.draft, facts, budget) : undefined
 
+    // A record the developer gave up has met the decision that may take its
+    // place: from here it is the question's to settle, and is shown as given up no longer.
+    scribe.denied.delete((prior ?? against)?.id ?? '')
+
     if (against !== undefined) {
       const ask: Band.Question = {
         kind: 'question',
@@ -1720,7 +1812,6 @@ async function apply(
  */
 async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe = false): Promise<void> {
   const waiting = scribe.paths.slice(0, MAX_LOOKUP_PATHS)
-  const { epoch } = scribe
   // Each repository is asked about its own files, from its own root.
   const byRepo = new Map<string, string[]>()
 
@@ -1742,26 +1833,121 @@ async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe =
   }
 
   for (const [repo, files] of byRepo) {
-    const facts = factsOf(await call(host, scribe, 'recall', { repo, paths: files.length === 0 ? [PROBE] : files }))
-
-    if (epoch !== scribe.epoch) {
+    if ((await recalled(host, scribe, repo, files)) === undefined) {
       return
-    }
-
-    for (const fact of facts) {
-      if (scribe.written.some(own => own.id === fact.id)) {
-        continue
-      }
-
-      scribe.anchored.set(fact.id, fact)
-
-      if (isAnchoredTo(fact, files)) {
-        Band.offerTell(scribe.band, fact)
-      }
     }
   }
 
   settle(host, scribe)
+}
+
+/**
+ * Asks Fylgja what is recorded about `files` of `repo` and takes in what it
+ * answers. A record anchored to one of those very files is offered to the
+ * developer, unless it is a decision whose code changed after it was last
+ * confirmed: that one waits to be asked about (`askHolds`). A record
+ * Scribe wrote in this session is neither, and one that is the session's
+ * own in Fylgja's books (Claude's, say) is never one to ask about.
+ *
+ * @param isAgain the files were asked about before, and are asked about
+ *   again because a commit changed them: only the records marked for it are
+ *   taken in
+ * @returns the ids of the records it answered with; undefined when the
+ *   conversation is no longer the one that asked
+ */
+async function recalled(
+  host: ScribeHost,
+  scribe: Scribe,
+  repo: string,
+  files: readonly string[],
+  isAgain = false,
+): Promise<string[] | undefined> {
+  const { epoch } = scribe
+  // Asked again for particular records, it is asked for as many as Fylgja
+  // gives of one lookup: a marked record past that number is not found here.
+  const facts = factsOf(
+    await call(host, scribe, 'recall', {
+      repo,
+      paths: files.length === 0 ? [PROBE] : files,
+      ...(isAgain ? { limit: MOST_RECALLED } : {}),
+    }),
+  )
+
+  if (epoch !== scribe.epoch) {
+    return undefined
+  }
+
+  for (const fact of facts) {
+    const isOwn = scribe.own.has(fact.id)
+
+    if (scribe.written.some(own => own.id === fact.id) || (isAgain && (fact.changed === null || isOwn))) {
+      continue
+    }
+
+    scribe.anchored.set(fact.id, fact)
+
+    if (!isAnchoredTo(fact, files)) {
+      continue
+    }
+
+    if (fact.changed !== null && fact.kind === 'decision' && !isOwn) {
+      scribe.doubted = [...scribe.doubted.filter(one => one.fact.id !== fact.id), { fact, repo, asks: true }].slice(-MAX_DOUBTED)
+    } else {
+      Band.offerTell(scribe.band, fact)
+    }
+  }
+
+  return facts.map(fact => fact.id)
+}
+
+/**
+ * Asks whether one recorded decision still holds, of those whose code a
+ * commit changed after they were last confirmed. It is a question like any
+ * other, held to the same limits: one a turn, never the same decision
+ * twice in a session, none past the session's share. So where the turn has
+ * had its question, they wait for the next look.
+ *
+ * One is asked about, and no count of the others is put on its card: they
+ * are offered as any record about the code in hand is, one a turn, each
+ * saying that its code changed. A second question would be the louder way
+ * to say the same, and a number on the card names nothing that could be
+ * acted on. One that the turn's tell has no room for waits for a later
+ * turn's, and is told then, not asked about.
+ */
+function askHolds(scribe: Scribe): void {
+  const { band } = scribe
+  const waiting: Doubted[] = []
+  let isAsked = false
+
+  for (const one of scribe.doubted) {
+    const { fact, repo } = one
+
+    // Written by this session since it was looked up, or found to be the session's own: never asked about.
+    if (scribe.written.some(own => own.id === fact.id) || scribe.own.has(fact.id)) {
+      continue
+    }
+
+    if (one.asks && !isAsked) {
+      // This turn has had its question: it waits for the next look.
+      if (band.hasAskedThisTurn) {
+        waiting.push(one)
+        continue
+      }
+
+      if (Band.offerQuestion(band, { kind: 'question', form: 'holds', fact, repo, isTouched: false }, fact.content)) {
+        isAsked = true
+        continue
+      }
+    }
+
+    // Told once, or known for good: there is nothing left to say of it. Otherwise this turn's tell is taken.
+    if (!Band.offerTell(band, fact) && !band.told.has(fact.id) && !band.kept.known.includes(fact.id)) {
+      waiting.push({ ...one, asks: false })
+    }
+  }
+
+  // The others of a batch one was asked about are told, never asked about in their turn.
+  scribe.doubted = isAsked ? waiting.map(one => ({ ...one, asks: false })) : waiting
 }
 
 /** Waits for `work`, but no longer than `ms`. `work` goes on either way. */
@@ -2132,14 +2318,156 @@ function noteEdits(scribe: Scribe, who: Identity, files: readonly string[], plac
   }
 }
 
-/** A commit was made in `repo`: it holds what was changed there since the one before. */
-function committed(scribe: Scribe, repo: string): void {
+/**
+ * A commit was made in `repo`: it holds what was changed there since the one
+ * before.
+ *
+ * @returns those files, each as a tool line writes it
+ */
+function committed(scribe: Scribe, repo: string): string[] {
   const files = [...(scribe.edited.get(repo) ?? [])]
 
   scribe.edited.delete(repo)
 
   if (files.length > 0) {
     scribe.commitsToPair = [...scribe.commitsToPair, { repo, files }].slice(-MAX_PENDING_COMMITS)
+  }
+
+  return files
+}
+
+/**
+ * A commit was made at the session's own root, in `repo`: the files it is
+ * reported with, as paths from the repository's root, no more than are sent
+ * with one commit.
+ *
+ * Scribe runs no git, so what a commit holds is not known to it. What it
+ * has is two things: the files the session changed, and the number of
+ * files git itself printed for the commit. A file is reported only when
+ * the two agree. Marking somebody's record as changed by a commit that did
+ * not touch its file is worse than missing one, so wherever they do not
+ * agree nothing is reported, and a commit goes unreported more often than
+ * it need be: that is the price, and it is paid on purpose.
+ *
+ * The candidates are the files the session wrote or changed since the
+ * commit before and before this commit's own command, in the main
+ * conversation or by an agent, that lie in the working tree the commit was
+ * made in: not in a repository checked out inside it, and not in another
+ * working tree of the same repository.
+ *
+ * - Git printed no number on the line after the commit's own, or the shell
+ *   was not at the working tree's root when it was made: nothing.
+ * - The commit took the whole tree, by its own `-a` or after an add of the
+ *   whole tree from its root with nothing named (`add -A`, `add .`, `add
+ *   -u`), and no other command since the commit before did anything to
+ *   what is staged: the candidates, when they are as many as git counted.
+ *   They are then the commit, all of them. Where only what git tracks was
+ *   taken (`-a`, `-u`), a file the session created is not among them: the
+ *   write tool says when it made a file that was not there, and a file it
+ *   does not say so of counts as one that was.
+ * - Any other commit, a bare one too: it takes what was staged, and the
+ *   candidates' number says nothing, since what is counted may be some
+ *   other file. Only where the commands since the commit before named the
+ *   staged files one by one (`namedAfter`), every one of those is a
+ *   candidate and they are as many as git counted: those files.
+ * - Otherwise nothing.
+ *
+ * What the commands staged is carried from look to look until a commit is
+ * seen, so a commit is read with what was staged turns before it.
+ *
+ * At every commit its candidates are let go, reported or not: each may be
+ * in it, and none is pinned on a later commit. A file changed after the
+ * commit's command was never among them, and is the next commit's.
+ */
+function reportedWith(scribe: Scribe, who: Identity, repo: string, commit: Landed): string[] {
+  const isNew = new Set([...scribe.created].map(file => relativeTo(who.root, file) ?? file))
+  const files = committed(scribe, repo)
+  const inTree = (file: string): string[] => {
+    const place = scribe.places.get(file)
+
+    return place?.repo === repo && relativeTo(who.root, file) === place.path ? [place.path] : []
+  }
+  const candidates = new Set(files.flatMap(inTree))
+  // What a staging of the tracked files takes: not the files the session is known to have created.
+  const tracked = new Set(files.filter(file => !isNew.has(file)).flatMap(inTree))
+
+  scribe.created.clear()
+
+  if (commit.count === null || commit.isAway !== false) {
+    return []
+  }
+
+  const named = commit.named === null ? [] : [...new Set(commit.named)]
+  const whole = commit.whole === 'tracked' ? tracked : candidates
+  const held =
+    commit.whole !== false && !commit.hasStaged
+      ? whole.size === commit.count
+        ? [...whole]
+        : []
+      : named.length === commit.count && named.every(path => candidates.has(path))
+        ? named
+        : []
+
+  return held.slice(0, MAX_COMMIT_PATHS)
+}
+
+/**
+ * How Fylgja's server words its refusal of an argument it does not know,
+ * when that argument is a commit's files: the argument's name, and that it
+ * was not expected.
+ */
+const UNKNOWN_PATHS = /\bpaths\b[\s\S]{0,200}?unexpected[ _]keyword[ _]argument|unexpected[ _]keyword[ _]argument[\s\S]{0,200}?\bpaths\b/i
+
+/**
+ * Attaches one commit to what the session recorded in `repo`, Scribe's
+ * records and Claude's own, and tells Fylgja which files the commit holds
+ * (`reportedWith`): it marks the other decisions anchored to those very
+ * files as ones whose code changed, and answers with the ones it marked.
+ * Those files are then asked about again, thirty at a time, until every
+ * record it named has come back.
+ *
+ * A server that does not know of a commit's files turns the call down, and
+ * says that it is that argument it does not know. Only then is the commit
+ * attached without them, as it always was, and no later commit of the
+ * session sends any: nothing else of Scribe changes for it. A call that
+ * failed for any other reason says nothing about the server, and the next
+ * commit is sent with its files.
+ */
+async function attach(host: ScribeHost, scribe: Scribe, who: Identity, repo: string, commit: Commit): Promise<void> {
+  const args = { repo, sha: commit.sha, session_id: who.sessionId }
+  const paths = scribe.takesPaths ? commit.paths : []
+  let { answer, refusal } = await tried(host, scribe, 'attach_commit', paths.length === 0 ? args : { ...args, paths }).catch(
+    (error: unknown): Tried => {
+      // The same refusal, where the call itself is failed for it.
+      if (paths.length > 0 && error instanceof Error && UNKNOWN_PATHS.test(error.message)) {
+        return { answer: undefined, refusal: error.message }
+      }
+
+      throw error
+    },
+  )
+
+  if (answer === undefined && paths.length > 0 && UNKNOWN_PATHS.test(refusal ?? '')) {
+    scribe.takesPaths = false
+    host.debug('Scribe: Fylgja does not take the files of a commit here; commits are attached without them in this session')
+    ;({ answer, refusal } = await tried(host, scribe, 'attach_commit', args))
+  }
+
+  // What the commit was attached to is the session's own, whoever wrote it down.
+  scribe.own = new Set([...scribe.own, ...ids(answer?.atom_ids).map(id => id.toLowerCase())].slice(-MAX_OWN))
+
+  const marked = new Set(ids(answer?.flagged).map(id => id.toLowerCase()))
+
+  for (let from = 0; marked.size > 0 && from < paths.length; from += MAX_LOOKUP_PATHS) {
+    const found = await recalled(host, scribe, repo, paths.slice(from, from + MAX_LOOKUP_PATHS), true).catch(() => undefined)
+
+    if (found === undefined) {
+      break
+    }
+
+    for (const id of found) {
+      marked.delete(id)
+    }
   }
 }
 
@@ -2349,7 +2677,7 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: Abort
   const { held, compactions } = scribe
   // What a compaction took away unread comes first: it is older than every row that is there now.
   const unseen = held.length === 0 ? rows.slice(from) : [...held, ...rows.slice(from)]
-  const seen = observe(unseen, who.root, scribe.prompts)
+  const seen = observe(unseen, who.root, scribe.prompts, scribe.index)
   // An answer to a question of Claude's that no look has been begun for.
   const isAnswered = seen.acts.some(act => isAnswer(act) && !scribe.acted.has(act.key))
 
@@ -2523,21 +2851,43 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
   // the commits made since the last look, each with those files. A commit is
   // the moment a decision recorded before its code existed can be given its
   // place: the next look is asked to pair them, once.
-  noteEdits(scribe, who, seen.changed, changed)
-  wanted(scribe, who, here)
-
-  if (who.repo !== null && seen.commits.some(sha => !scribe.commits.has(sha))) {
-    committed(scribe, who.repo)
-  }
-
   // Noted now, each once, and attached at the end of a look: this one's, or
-  // a later one's when this one is stopped or its rows are read again.
-  for (const sha of seen.commits) {
-    if (!scribe.commits.has(sha)) {
-      scribe.commits.add(sha)
-      scribe.toAttach = [...scribe.toAttach, sha].slice(-MAX_PENDING_COMMITS)
+  // a later one's when this one is stopped or its rows are read again. Each
+  // commit is given the files changed before it, in the order of the rows;
+  // what was changed after the last one waits for the next.
+  for (const commit of seen.landed) {
+    // Seen by a look before this one: its files were noted then.
+    if (scribe.commits.has(commit.sha)) {
+      continue
     }
+
+    noteEdits(scribe, who, commit.before, changed)
+    scribe.commits.add(commit.sha)
+
+    for (const file of commit.created) {
+      scribe.created.add(file)
+    }
+
+    // Made after the shell was taken out of the working tree: it is some
+    // other repository's commit, and is neither attached here nor given files.
+    if (commit.isAway === 'outside') {
+      continue
+    }
+
+    scribe.toAttach = [
+      ...scribe.toAttach,
+      { sha: commit.sha, paths: who.repo === null ? [] : reportedWith(scribe, who, who.repo, commit) },
+    ].slice(-MAX_PENDING_COMMITS)
   }
+
+  noteEdits(scribe, who, seen.loose, changed)
+  scribe.index = seen.index
+
+  for (const file of seen.created) {
+    scribe.created.add(file)
+  }
+
+  wanted(scribe, who, here)
 
   // The developer's rows are told from every other by the prompt they sent.
   // Where no row holds it, their words are not labelled as theirs; that is
@@ -2638,7 +2988,32 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
       // The look is under way from here: the mark says it is reading.
       host.mark()
 
-      const shown = [...scribe.anchored.values()].slice(0, MAX_SHOWN)
+      // A record the developer said no longer holds is shown first, to a few looks, and then let go.
+      for (const [id, one] of scribe.denied) {
+        if (scribe.wakes - one.since >= DENIED_WAKES) {
+          scribe.denied.delete(id)
+        }
+      }
+
+      // As Fylgja last returned it where this look has it, and by its sentence alone where it has not.
+      const denied = [...scribe.denied].map(
+        ([id, one]): Fact =>
+          scribe.anchored.get(id) ?? {
+            id,
+            kind: 'decision',
+            content: one.content,
+            detail: '',
+            alternatives: [],
+            anchors: [],
+            addedByOthers: [],
+            reasonStatus: null,
+            date: one.date,
+            origin: '',
+            link: null,
+            changed: null,
+          },
+      )
+      const shown = [...denied, ...[...scribe.anchored.values()].filter(fact => !scribe.denied.has(fact.id))].slice(0, MAX_SHOWN)
       const plans = planBlock(scribe.plans.docs, scribe.wakes)
       const past = scribe.past.map((block, at) => (at === scribe.past.length - 1 ? { ...block, cache: true as const } : block))
       const allowed = new Set(scribe.places.keys())
@@ -2705,6 +3080,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
             stated: scribe.stated,
             asked: scribe.asked,
             told: [...scribe.band.told].slice(-MAX_LISTED),
+            denied: denied.map(fact => fact.id),
           },
         ),
         repo: judged.home ?? who.repo,
@@ -2790,20 +3166,22 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
   // recorded: Scribe's records and Claude's own. Fylgja attaches it once.
   // One whose call did not get to Fylgja stays noted for the next look. One
   // that Fylgja did not answer in time is let go: it is not waited for twice.
-  for (const sha of scribe.toAttach) {
+  for (const commit of scribe.toAttach) {
     // A commit at the session's own root is its repository's; a session with none attaches none.
     const isDone =
       who.repo === null ||
-      (await call(host, scribe, 'attach_commit', { repo: who.repo, sha, session_id: who.sessionId }).then(
+      (await attach(host, scribe, who, who.repo, commit).then(
         () => true,
         (error: unknown) => error instanceof TimedOut,
       ))
 
     if (isDone) {
-      scribe.toAttach = scribe.toAttach.filter(one => one !== sha)
+      scribe.toAttach = scribe.toAttach.filter(one => one !== commit)
     }
   }
 
+  // Last, so that a question the look itself came to is this turn's one question.
+  askHolds(scribe)
   settle(host, scribe)
 
   if (!isInside) {
@@ -2901,6 +3279,8 @@ function noteOf(lead: string, fact: Fact): string {
           ? NOT_STATED
           : '',
     fact.alternatives.length === 0 ? '' : `Rejected: ${fact.alternatives.map(one => quoted(one, 80)).join('; ')}`,
+    // Said to Claude as it is said to the developer: a record whose code changed since is not to be read as settled.
+    changedLine(fact, quoted) ?? '',
     // Most records have no page of their own; the record is then named by its short id.
     provenanceOf(fact),
     // A page's address was checked when the record was read: one line, on Fylgja's own host.
@@ -3064,6 +3444,121 @@ async function reasoned(
   }
 }
 
+/**
+ * Whether Fylgja still returns `fact` as a record that stands, asked by the
+ * files it is anchored to, for as many records as Fylgja gives of one
+ * lookup: `settled` when it does and no longer reads as changed, `gone`
+ * when it does not and fewer than that many came back, `unchecked` when
+ * that many came back without it, so that it may stand among the ones not
+ * returned. Rejects when Fylgja could not be asked.
+ */
+async function standingOf(
+  host: ScribeHost,
+  scribe: Scribe,
+  repo: string,
+  fact: Fact,
+): Promise<'changed' | 'settled' | 'gone' | 'unchecked'> {
+  const paths = fact.anchors.map(anchor => anchor.path).slice(0, MAX_LOOKUP_PATHS)
+  const answer = await call(host, scribe, 'recall', { repo, paths, limit: MOST_RECALLED })
+  const returned = Array.isArray(answer?.facts) ? answer.facts.length : 0
+  const now = factsOf(answer).find(one => one.id === fact.id)
+
+  return now !== undefined ? (now.changed === null ? 'settled' : 'changed') : returned < MOST_RECALLED ? 'gone' : 'unchecked'
+}
+
+/**
+ * The developer answered whether a recorded decision still holds.
+ *
+ * "Still holds" confirms the record again, the way anything is written to
+ * Fylgja: it is sent as it stands with the id it was returned under, and
+ * Fylgja moves the day it was last confirmed, so the mark that its code
+ * changed is gone. A record sent that way and no longer standing would be
+ * written as a new one, so Fylgja is asked first whether it still returns
+ * the record: one that was replaced or removed since is not sent at all,
+ * and neither is one that could not be looked for among all it returned.
+ * Nothing is shown for a confirmation that went through. One that did not
+ * (the record is gone, Fylgja refused it, or could not be reached) is said
+ * on the card in one line, and the record stays marked.
+ *
+ * "No longer holds" writes nothing, and the card says so. Only the author
+ * of a record can change it, and what takes its place is not known here:
+ * the record is shown to the next few looks as one the developer gave up,
+ * through a compaction and not past a `/clear`, and the decision that
+ * replaces it then comes the way every
+ * replacement does, as the question whether it replaces the recorded one,
+ * which only the developer's key settles. The record keeps its mark.
+ *
+ * "Skip" leaves the record as it is, marked.
+ */
+async function pressedHolds(host: ScribeHost, scribe: Scribe, who: Identity, item: Band.HoldsQuestion, key: string): Promise<void> {
+  const { band } = scribe
+  const { fact } = item
+
+  // The card has said what came of the answer: any key puts it away.
+  if (item.said !== undefined) {
+    Band.clear(band)
+  } else if (key === 'holds') {
+    const standing = await standingOf(host, scribe, item.repo, fact).catch(() => undefined)
+
+    if (standing === undefined || standing === 'gone' || standing === 'unchecked') {
+      item.said = standing ?? 'unconfirmed'
+
+      return
+    }
+
+    // Confirmed by somebody else meanwhile: there is nothing left to do.
+    const sent =
+      standing === 'settled'
+        ? undefined
+        : await send(
+            host,
+            scribe,
+            who,
+            {
+              kind: 'decision',
+              content: fact.content,
+              detail: fact.detail,
+              alternatives: fact.alternatives,
+              // Its places stay as they are: none is sent, so none is added.
+              anchors: [],
+              triggers: [],
+              reasonStatus: fact.reasonStatus,
+              supersedes: null,
+              repo: item.repo,
+              updates: null,
+            },
+            undefined,
+            fact.id,
+          )
+
+    if (sent !== undefined && !sent.isTaken) {
+      item.said = 'unconfirmed'
+
+      return
+    }
+
+    Band.clear(band)
+    // As Fylgja now holds it, wherever this session shows it again.
+    fact.changed = null
+
+    // Written anew after all, because it stopped standing between the two calls: shown as anything written is.
+    if (sent?.written !== undefined && sent.written.outcome !== 'held') {
+      Band.receive(band, [sent.written])
+    }
+  } else if (key === 'no-longer') {
+    item.said = 'given-up'
+    scribe.denied.delete(fact.id)
+    scribe.denied.set(fact.id, { content: fact.content, date: fact.date, since: scribe.wakes })
+
+    for (const id of [...scribe.denied.keys()].slice(0, -MAX_DENIED)) {
+      scribe.denied.delete(id)
+    }
+  } else if (key === 'skip') {
+    band.unanswered += 1
+    Band.clear(band)
+  }
+}
+
 async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, item: Band.Question, key: string): Promise<void> {
   const { band } = scribe
 
@@ -3082,6 +3577,12 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
       band.unanswered += 1
       Band.clear(band)
     }
+
+    return
+  }
+
+  if (item.form === 'holds') {
+    await pressedHolds(host, scribe, who, item, key)
 
     return
   }
@@ -3134,11 +3635,20 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
  * Whether a key writes to Fylgja or settles something for good, and so acts
  * only on its second press: removing a record, silencing one for good,
  * turning Scribe off, making a decision the replacement of a recorded one,
- * and saving a reason the model proposed. Keys that only open, skip, dismiss
- * or fill the prompt box act at once.
+ * confirming that a recorded decision still holds, and saving a reason the
+ * model proposed. Keys that only open, skip, dismiss or fill the prompt box
+ * act at once, and so does saying that a recorded decision no longer holds:
+ * it writes nothing.
  */
 function needsSecondPress(key: string): boolean {
-  return key === 'knew' || key === 'off' || key === 'replaces' || key === 'no-reason' || /^(?:remove|reason|putback):/.test(key)
+  return (
+    key === 'knew' ||
+    key === 'off' ||
+    key === 'replaces' ||
+    key === 'holds' ||
+    key === 'no-reason' ||
+    /^(?:remove|reason|putback):/.test(key)
+  )
 }
 
 /**

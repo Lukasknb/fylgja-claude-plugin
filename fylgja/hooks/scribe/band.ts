@@ -6,6 +6,11 @@
  * One thing shows at a time. A question comes before a tell and a tell
  * before a receipt; a question never shows while Claude is working, and
  * nothing new comes up while the developer is typing.
+ *
+ * A question is one of three: why a decision was taken, whether a new
+ * decision replaces a recorded one, and whether a recorded decision still
+ * holds now that its code has changed. All three are held to the same
+ * limits.
  */
 
 import type { Draft, Fact, Written } from './types'
@@ -41,7 +46,27 @@ export type ReversalQuestion = {
   isTouched: boolean
 }
 
-export type Question = ReasonQuestion | ReversalQuestion
+/**
+ * Whether a recorded decision still holds, asked about one whose code a
+ * commit changed after it was last confirmed. Nothing waits for the answer:
+ * unanswered, the record stays marked as it is.
+ */
+export type HoldsQuestion = {
+  kind: 'question'
+  form: 'holds'
+  fact: Fact
+  /** The repository the record is filed under: where it is confirmed again. */
+  repo: string
+  /**
+   * What came of the answer, once it is given and the card has one line to
+   * say about it: the record was given up for this session, the
+   * confirmation did not go through, or Fylgja no longer returns the record.
+   */
+  said?: 'given-up' | 'unconfirmed' | 'gone' | 'unchecked'
+  isTouched: boolean
+}
+
+export type Question = ReasonQuestion | ReversalQuestion | HoldsQuestion
 export type Item = Tell | Question
 
 /** One line saying what Scribe just wrote. It waits for nobody and nothing waits for it. */

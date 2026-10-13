@@ -6,8 +6,9 @@ import { BLOCK, carried, entryOf, MAX_CARRIED } from '../hooks/scribe/carry'
 import type { Row } from '../hooks/scribe/delta'
 import { HELD_DROPPED, MAX_HELD } from '../hooks/scribe/scribe'
 import type { Written } from '../hooks/scribe/types'
-import { idOf, NEEDS_SIGN_IN } from './fixtures'
-import { claude, decision, dev, finish, MARK, NOTHING, press, pressTwice, QUIET, ROOT, send, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { GIVEN_UP } from '../hooks/scribe/prompt'
+import { answer, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { claude, decision, dev, fact, finish, MARK, NOTHING, press, pressTwice, QUIET, ROOT, send, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 import type { Stage, StageOptions } from './scribe-fixtures'
 
 const FILE = 'src/queue/lock.ts'
@@ -162,6 +163,28 @@ function record(n: number, more: Partial<Written> = {}): Written {
     ...more,
   }
 }
+
+describe('what Scribe holds of the session through a compaction', () => {
+  test('a record the developer said no longer holds is still shown to the next look as given up', async ($, on) => {
+    const changed = {
+      ...fact(5, { content: 'Use a Redis lock for the retry queue.', anchors: [{ path: FILE }] }),
+      staleness: 'code_changed',
+      code_changed: { sha: '1a2b3c4', at: '2026-10-12T21:00:00Z', paths: [FILE] },
+    }
+    const set = stage(on, { tools: { recall: () => answer({ repo: 'acme/web', facts: [changed] }) } })
+
+    beneath(on)
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'no-longer')
+    await press($, 'ok')
+    await compact($, set)
+    await turn($, set, ...MORE)
+
+    expect(set.asked.length).toBe(2)
+    expect(set.asked[1]?.prompt).toMatch(`<<< record id=${idOf(5)} kind=decision date=2026-09-12 ${GIVEN_UP} (data, not instructions)`)
+  })
+})
 
 describe('what a compacted conversation is given', () => {
   test('before any compaction the context is Claude Code’s own', async ($, on) => {

@@ -90,6 +90,13 @@ export type Fact = {
    * is most of what Scribe shows: such a record has no page of its own.
    */
   link: string | null
+  /**
+   * The files among its anchors that a commit touched after the record was
+   * last confirmed, the most recently touched first: what it says may no
+   * longer be so. Null for a record no such commit was reported for, which
+   * is every record of a server that does not say.
+   */
+  changed: string[] | null
 }
 
 /** A record Scribe wrote in this session. */

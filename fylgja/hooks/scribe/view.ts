@@ -8,6 +8,7 @@ import { glyphOf } from '../glyphs'
 import { drawn } from '../plain'
 import { armOf } from './band'
 import type { Band, Item, Receipt } from './band'
+import { changedLine } from './facts'
 import type { Fact, Written } from './types'
 
 export type Part = { text: string; tone?: 'dim' | 'strong' | 'good' | 'mark' } | { link: string; label: string }
@@ -73,7 +74,16 @@ export const NOTES = {
   told: 'Nothing to do. It goes with your next prompt.',
   reason: 'Leave it and it goes with your next prompt. The decision stays recorded, without a reason.',
   reversal: 'Leave it and it goes with your next prompt. The new decision is then recorded beside the old one.',
+  holds: 'Leave it and it goes with your next prompt. The record stays as it is, marked as possibly out of date.',
   field: 'Enter saves it. Cancel leaves everything as it is.',
+} as const
+
+/** What the card of a decision asked about says once the answer is given and something is to be said of it. */
+export const SAID = {
+  'given-up': 'Nothing is changed in Fylgja until a decision that replaces it is recorded. It stays marked.',
+  unconfirmed: 'Fylgja did not take the confirmation. The record stays marked as possibly out of date.',
+  gone: 'Fylgja no longer returns this record for its files: replaced or removed, perhaps. Nothing was written.',
+  unchecked: 'It could not be checked: its files hold more records than Fylgja returns at once. Nothing was written.',
 } as const
 
 export const MAX_CONTENT = 220
@@ -112,6 +122,13 @@ function headline(fact: Fact): Part[] {
     { text: drawn(fact.content, MAX_CONTENT) },
     ...(fact.date === null ? [] : [{ text: ` · ${fact.date}`, tone: 'dim' } as const]),
   ]
+}
+
+/** The row that says a record's code changed after it was last confirmed, and in which file; none for any other record. */
+function changed(fact: Fact): Row[] {
+  const line = changedLine(fact, drawn)
+
+  return line === undefined ? [] : [{ parts: [{ text: line, tone: 'dim' }] }]
 }
 
 /** A record's reason as it is said where the record is opened: the reason, or that there is none and whether anybody was asked. */
@@ -171,7 +188,8 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
       register: 'tells',
       head: 'has a note on this code',
       note: NOTES.told,
-      rows: [{ parts: headline(fact) }],
+      // A record whose code changed since says so before it is opened: it is not to be read as settled.
+      rows: [{ parts: headline(fact) }, ...changed(fact)],
       keys: withAbout(band, [{ key: 'open', hotkey: '1', label: 'Open' }, ...rest]),
     }
   }
@@ -190,6 +208,7 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
     note: NOTES.told,
     rows: [
       { parts: headline(fact) },
+      ...changed(fact),
       ...why(fact),
       ...(rejected.length === 0
         ? []
@@ -244,6 +263,44 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
         twice(band, 'replaces', '1', 'Yes, it replaces it'),
         { key: 'tell-claude', hotkey: '2', label: 'No, tell Claude' },
         { key: 'different', hotkey: '3', label: 'Different case' },
+        { key: 'skip', hotkey: '0', label: 'Skip' },
+      ]),
+    }
+  }
+
+  if (item.form === 'holds') {
+    const { fact } = item
+
+    // The answer was given: one line says what came of it, and nothing is waited for.
+    if (item.said !== undefined) {
+      return {
+        register: 'tells',
+        head: item.said === 'given-up' ? 'noted that this no longer holds' : 'did not confirm this',
+        note: NOTES.told,
+        rows: [{ parts: headline(fact) }, { parts: [{ text: SAID[item.said] }] }],
+        keys: [{ key: 'ok', hotkey: '0', label: 'OK' }],
+      }
+    }
+
+    return {
+      register: 'asks',
+      head: 'is this decision still true?',
+      note: NOTES.holds,
+      rows: [
+        {
+          parts: [
+            mark('?'),
+            { text: 'Still true: ', tone: 'strong' },
+            { text: drawn(fact.content, MAX_CONTENT) },
+            ...(fact.date === null ? [] : [{ text: ` · ${fact.date}`, tone: 'dim' } as const]),
+          ],
+        },
+        ...changed(fact),
+      ],
+      // Confirming it writes to Fylgja, so it waits for its second press; saying it no longer holds writes nothing by itself.
+      keys: withAbout(band, [
+        twice(band, 'holds', '1', 'Still holds'),
+        { key: 'no-longer', hotkey: '2', label: 'No longer holds' },
         { key: 'skip', hotkey: '0', label: 'Skip' },
       ]),
     }

@@ -42,6 +42,10 @@ export function carded(line: string): string {
     return asks('why was this decided?', NOTES.reason)
   }
 
+  if (rows.startsWith('? Still true: ')) {
+    return asks('is this decision still true?', NOTES.holds)
+  }
+
   if (rows.startsWith(' [Why]')) {
     return asks('the reason, in your words', NOTES.field)
   }
