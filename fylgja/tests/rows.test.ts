@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   answer,
   CONNECTED,
+  engineDrew,
   idOf,
   MEETING_ID,
   meetingRecord,
@@ -42,11 +43,11 @@ describe('a reference in the person’s message', () => {
       const ui = await $.ui.mount({ ...userMessage(`what about ${MEETING}?`), surface })
 
       if (surface === 'terminal') {
-        expect(await ui.drawn()).toEqual({ type: 'Text', props: {}, children: [`engine: what about ${UNCONFIRMED}?`] })
+        expect(await ui.drawn()).toEqual(engineDrew(`engine: what about ${UNCONFIRMED}?`))
         await asked($, started, 300)
       }
 
-      expect(await ui.drawn(), surface).toEqual({ type: 'Text', props: {}, children: [`engine: what about ${VERIFIED}?`] })
+      expect(await ui.drawn(), surface).toEqual(engineDrew(`engine: what about ${VERIFIED}?`))
       await ui.unmount()
     }
 
@@ -135,11 +136,7 @@ describe('a reference in the person’s message', () => {
       const ui = await $.ui.mount({ ...userMessage(`just {{braces}} and {{fylgja:meeting Retro|1234}}`), surface })
       await started.clock.settle()
 
-      expect(await ui.drawn(), surface).toEqual({
-        type: 'Text',
-        props: {},
-        children: ['engine: just {{braces}} and {{fylgja:meeting Retro|1234}}'],
-      })
+      expect(await ui.drawn(), surface).toEqual(engineDrew('engine: just {{braces}} and {{fylgja:meeting Retro|1234}}'))
       await ui.unmount()
     }
 

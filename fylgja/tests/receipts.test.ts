@@ -2,12 +2,12 @@ import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
 import { register } from '../hooks/register'
-import { idOf } from './fixtures'
+import { engineDrew, idOf } from './fixtures'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const NAMES = ['mcp__plugin_fylgja_fylgja__', 'mcp__fylgja__'] as const
 
-const ENGINE = { type: 'Text', props: {}, children: ['drawn by Claude Code'] } as const
+const ENGINE = engineDrew('drawn by Claude Code')
 
 /** Stands for Claude Code's own row, and keeps what each was asked to draw. */
 function engineRow(on: On): unknown[] {
@@ -16,7 +16,7 @@ function engineRow(on: On): unknown[] {
   on('ui.render', ($, e) => {
     asked.push(e.props)
 
-    return { ...ENGINE, children: [...ENGINE.children] }
+    return { type: 'Text', props: {}, children: [...ENGINE.children] }
   })
 
   return asked

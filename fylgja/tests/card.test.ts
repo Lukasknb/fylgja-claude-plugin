@@ -54,18 +54,29 @@ function wordsOf(node: Node | string): string {
   return typeof node === 'string' ? node : (node.children ?? []).map(wordsOf).join('')
 }
 
-/** The frame, without what a colour alone would say: what a terminal with no colour still shows. */
+/**
+ * The frame, without what a colour alone would say: what a terminal with no colour still shows.
+ *
+ * A text's heaviness is read as Claude Code reads it, `bold` as a semibold `weight` that an explicit
+ * `weight` outranks, so a surface that spells it either way, or both, draws the same text.
+ */
 function uncoloured(tree: Node): string {
   const strip = (node: Node | string): unknown => {
     if (typeof node === 'string') {
       return node
     }
 
-    const { color, borderColor, dimColor, borderDimColor, backgroundColor, onPress, onSubmit, ...props } = node.props
+    const { color, borderColor, dimColor, borderDimColor, backgroundColor, onPress, onSubmit, bold, weight, ...props } =
+      node.props
+    const heaviness = weight ?? (bold === true ? 'semibold' : undefined)
 
     void [color, borderColor, dimColor, borderDimColor, backgroundColor, onPress, onSubmit]
 
-    return { type: node.type, props, children: (node.children ?? []).map(strip) }
+    return {
+      type: node.type,
+      props: heaviness === undefined ? props : { ...props, weight: heaviness },
+      children: (node.children ?? []).map(strip),
+    }
   }
 
   return JSON.stringify(strip(tree))

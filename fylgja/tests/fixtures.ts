@@ -176,6 +176,16 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
   return { calls, statuses, forbidden, connects: () => connects, whoamis: () => whoamis, clock }
 }
 
+/**
+ * A row as Claude Code's own stand-in drew it, showing `text`: Claude Code
+ * stamps each hook's returned root with whose part of the drawing it is, so a
+ * root marked as the test's is the stand-in's own row, not one the plugin drew
+ * or wrapped.
+ */
+export function engineDrew(text: string) {
+  return { type: 'Text', props: {}, children: [text], part: { plugin: 'test' } } as const
+}
+
 /** The person's own message as its row is handed to the plugin. */
 export function userMessage(text: string, isExpanded = false, kind: 'composer' | 'bridge' = 'composer') {
   return { plugin: 'fylgja', component: 'UserMessage', props: { text, origin: { kind }, isExpanded } } as const

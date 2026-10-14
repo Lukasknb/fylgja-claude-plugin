@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { idOf, MEETING_ID, NOTE_ID } from './fixtures'
+import { engineDrew, idOf, MEETING_ID, NOTE_ID } from './fixtures'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const LINK = `https://fylgja.lknblab.dev/open/meeting/${MEETING_ID}`
@@ -31,7 +31,7 @@ describe('a link to a Fylgja record in a reply', () => {
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...assistantMessage(reply), surface })
 
-      expect(await ui.drawn(), surface).toEqual({ type: 'Text', props: {}, children: [`engine: ${marked}`] })
+      expect(await ui.drawn(), surface).toEqual(engineDrew(`engine: ${marked}`))
       await ui.unmount()
     }
   })
@@ -66,7 +66,7 @@ describe('a link to a Fylgja record in a reply', () => {
 
     const ui = await $.ui.mount({ ...assistantMessage(reply), surface: 'terminal' })
 
-    expect(await ui.drawn()).toEqual({ type: 'Text', props: {}, children: [`engine: ${reply}`] })
+    expect(await ui.drawn()).toEqual(engineDrew(`engine: ${reply}`))
   })
 
   test('a reply without such a link is passed through untouched', async ($, on) => {
@@ -76,7 +76,7 @@ describe('a link to a Fylgja record in a reply', () => {
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...assistantMessage(reply), surface })
 
-      expect(await ui.drawn(), surface).toEqual({ type: 'Text', props: {}, children: [`engine: ${reply}`] })
+      expect(await ui.drawn(), surface).toEqual(engineDrew(`engine: ${reply}`))
       await ui.unmount()
     }
   })
