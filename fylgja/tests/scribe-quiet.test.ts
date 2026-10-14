@@ -666,8 +666,8 @@ describe('what Scribe keeps', () => {
     expect(set.kept.get('scribe.known')).toEqual([idOf(1)])
     // Which records the conversation kept: their ids and fixed words, under the conversation's own key.
     expect((set.kept.get(`scribe.list.${SESSION_ID}`) as { records: unknown[] }).records).toEqual([
-      { id: idOf(101), kind: 'decision', outcome: 'created' },
-      { id: idOf(102), kind: 'decision', outcome: 'created' },
+      { id: idOf(101), kind: 'decision', outcome: 'created', waiting: true },
+      { id: idOf(102), kind: 'decision', outcome: 'created', waiting: true },
     ])
     expect(set.kept.get('scribe.lists')).toEqual([SESSION_ID])
     expect(JSON.stringify([...set.kept.entries()])).not.toMatch('SECRET')

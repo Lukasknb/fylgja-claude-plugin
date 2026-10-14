@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
-import type { Ran } from '../hooks/scribe/base'
+import type { Ran } from '../hooks/scribe/git'
 import type { Row } from '../hooks/scribe/delta'
 import { HEADLINES, NOTES } from '../hooks/scribe/view'
 import { ACCOUNT, answer, CONNECTED, eventsOf, idOf, MANIFEST, MANIFEST_PATH, REPORT } from './fixtures'
@@ -122,9 +122,10 @@ export type StageOptions = {
   isBoxHeld?: boolean
   /**
    * What git answers, handed what it was asked after the working tree (`-C <root>`) and that tree; undefined
-   * for a git that fails to start. Without it no command runs: each is refused, as a machine without git would.
+   * for a git that fails to start, and `hangs` for one that never answers. Without it no command runs: each is
+   * refused, as a machine without git would.
    */
-  git?: (args: readonly string[], root: string, clock: MockClock) => Ran | undefined | Promise<Ran | undefined>
+  git?: (args: readonly string[], root: string, clock: MockClock) => Ran | undefined | 'hangs' | Promise<Ran | undefined>
 }
 
 export type Stage = {
@@ -374,7 +375,14 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     runs.push(e.argv)
 
     const at = e.argv.indexOf('-C')
-    const ran = options.git === undefined || at === -1 ? undefined : await options.git(e.argv.slice(at + 2), e.argv[at + 1] ?? '', clock)
+    const answer = options.git === undefined || at === -1 ? undefined : options.git(e.argv.slice(at + 2), e.argv[at + 1] ?? '', clock)
+
+    // A git that never answers: what waits for it has to give up on its own.
+    if (answer === 'hangs') {
+      return new Promise<never>(() => undefined)
+    }
+
+    const ran = await answer
 
     return ran === undefined
       ? { deny: 'git did not start' }
@@ -672,5 +680,26 @@ export function decision(overrides: Record<string, unknown> = {}): Record<string
     supersedes: null,
     plan: null,
     ...overrides,
+  }
+}
+
+/**
+ * What `git status --porcelain -z` prints for the files asked about, given
+ * which of them are untracked and which ignored: every other is tracked.
+ */
+export function gitStatus(untracked: readonly string[], ignored: readonly string[] = []) {
+  return (args: readonly string[]): Ran | undefined => {
+    // Only the status that asks which files git ignores; any other command fails, as git with no commit would.
+    if (args[0] !== 'status' || !args.some(arg => arg.startsWith('--ignored'))) {
+      return undefined
+    }
+
+    const asked = args.slice(args.indexOf('--') + 1)
+    const stdout = asked
+      .flatMap(path => (untracked.includes(path) ? [`?? ${path}`] : ignored.includes(path) ? [`!! ${path}`] : []))
+      .map(entry => `${entry}\0`)
+      .join('')
+
+    return { exitCode: 0, stdout }
   }
 }

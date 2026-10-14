@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { GIT_TIMEOUT_MS } from '../hooks/scribe/base'
+import { GIT_TIMEOUT_MS } from '../hooks/scribe/git'
 import { answer } from './fixtures'
 import { claude, decision, dev, edit, REPO, ROOT, stage, START, turn, use, verdict } from './scribe-fixtures'
 import type { StageOptions } from './scribe-fixtures'
@@ -21,6 +21,9 @@ const gitAt =
 const sentOf = (set: ReturnType<typeof stage>): unknown[][] =>
   set.of('remember').map(args => [args.base_sha, args.base_dirty])
 
+/** The commands that read the commit; the status that asks which files git ignores is the anchors' own (`anchoring.ts`). */
+const commitRuns = (set: { runs: (readonly string[])[] }) => set.runs.filter(argv => !argv.includes('--ignored=traditional'))
+
 describe('the commit a decision was written at', () => {
   test('a decision about files goes with the commit the tree is at, and says its files were clean', async ($, on) => {
     const set = stage(on, { replies: [verdict({ records: [decision()] })], git: gitAt() })
@@ -30,7 +33,7 @@ describe('the commit a decision was written at', () => {
 
     expect(set.of('remember')[0]).toMatchObject({ repo: REPO, anchors: [{ path: FILE }], base_sha: SHA, base_dirty: false })
     const git = ['git', '--no-optional-locks', '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-C', ROOT]
-    expect(set.runs, 'git is asked in the tree the files lie in, and is told not to lock or monitor anything').toEqual([
+    expect(commitRuns(set), 'git is asked in the tree the files lie in, and is told not to lock or monitor anything').toEqual([
       [...git, 'rev-parse', '--verify', '--quiet', 'HEAD'],
       [...git, 'status', '--porcelain', '--untracked-files=all', '--', FILE],
     ])
@@ -105,7 +108,7 @@ describe('the commit a decision was written at', () => {
     expect(sentOf(set)).toEqual([[undefined, undefined]])
   })
 
-  test('a record that is no decision, or a decision about no file, runs no git', async ($, on) => {
+  test('a record that is no decision, or a decision about no file, runs no git for the commit', async ($, on) => {
     const set = stage(on, {
       replies: [
         verdict({
@@ -123,7 +126,7 @@ describe('the commit a decision was written at', () => {
 
     expect(set.of('remember').length).toBeGreaterThan(0)
     expect(sentOf(set).every(([sha]) => sha === undefined)).toBe(true)
-    expect(set.runs).toEqual([])
+    expect(commitRuns(set)).toEqual([])
   })
 
   test('a decision about a worktree’s files is read in that worktree, not in the session’s own tree', async ($, on) => {
@@ -142,7 +145,7 @@ describe('the commit a decision was written at', () => {
     await turn($, set, dev('do it in the worktree'), claude('Done.', use('Edit', { file_path: '/work/wt/src/x.ts', old_string: 'a', new_string: 'b' })))
 
     expect(set.of('remember')[0]).toMatchObject({ repo: REPO, anchors: [{ path: 'src/x.ts' }], base_sha: SHA })
-    expect(set.runs.map(argv => argv[argv.indexOf('-C') + 1])).toEqual(['/work/wt', '/work/wt'])
+    expect(commitRuns(set).map(argv => argv[argv.indexOf('-C') + 1])).toEqual(['/work/wt', '/work/wt'])
   })
 
   test('a server that does not take the commit gets the decision without it, and is not sent it again this session', async ($, on) => {
@@ -182,7 +185,7 @@ describe('the commit a decision was written at', () => {
       [undefined, undefined],
     ])
     expect(written, 'both decisions are written').toBe(2)
-    expect(set.runs.length, 'and git is asked only for the first').toBe(2)
+    expect(commitRuns(set).length, 'and git is asked only for the first').toBe(2)
   })
 
   test('a refusal for anything else is not taken for an old server: the commit is sent again with the next decision', async ($, on) => {

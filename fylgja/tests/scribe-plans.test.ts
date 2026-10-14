@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { MAX_PLAN_CHARS } from '../hooks/scribe/plans'
-import { claude, decision, dev, edit, NOTHING, ROOT, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { claude, decision, dev, edit, gitStatus, NOTHING, ROOT, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 
 const PLAN = [
   '# Plan: queue rework',
@@ -34,7 +34,7 @@ const FOLLOWING = decision({
 const WHY = { form: 'reason', record: 0, options: ['a', 'b'] }
 
 describe('Scribe reads the plan the session works from', () => {
-  test('a decision whose reason is in the plan is recorded with that reason, names the plan, and is not asked about', async ($, on) => {
+  test('a decision whose reason is in the plan is recorded with that reason, names the plan, and is not asked about; a plan of the work is no anchor', async ($, on) => {
     const set = stage(on, { replies: [NOTHING, verdict({ records: [FOLLOWING], question: WHY })] })
 
     await $.session.start(START)
@@ -47,11 +47,28 @@ describe('Scribe reads the plan the session works from', () => {
       {
         reason_status: 'stated',
         detail: 'It is one more service to run. (per Plan: queue rework, section Locking)',
-        anchors: [{ path: 'src/queue/lock.ts' }, { path: 'docs/plan-queue.md', symbol: 'Locking' }],
+        anchors: [{ path: 'src/queue/lock.ts' }],
       },
     ])
     expect(await shown($)).toMatch('✓ Recorded')
     expect(await shown($)).not.toMatch('Why')
+  })
+
+  test('a spec the repository keeps is an anchor, at the section the decision follows', async ($, on) => {
+    const SPEC = `${ROOT}/docs/specs/queue.md`
+    const set = stage(on, { git: gitStatus([]), replies: [verdict({ records: [FOLLOWING] })] })
+
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev('read the spec and build the locking part'),
+      claude('Built.', use('Read', { file_path: SPEC }, numbered(PLAN)), edit('src/queue/lock.ts')),
+    )
+
+    expect(set.of('remember')).toMatchObject([
+      { anchors: [{ path: 'src/queue/lock.ts' }, { path: 'docs/specs/queue.md', symbol: 'Locking' }] },
+    ])
   })
 
   test('a plan outside the working tree is no anchor: its name and its reasoning go into the record', async ($, on) => {

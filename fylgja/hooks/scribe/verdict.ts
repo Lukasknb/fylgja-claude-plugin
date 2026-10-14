@@ -5,6 +5,8 @@
  */
 
 import { isRecord } from '../payload'
+import { isAnchorable, isCode, MAX_LATE_FILES } from './anchoring'
+import type { GitState } from './anchoring'
 import { reasonStatusOf } from './facts'
 import { MAX_ALTERNATIVE_CHARS, MAX_ALTERNATIVES, MAX_ANCHORS, MAX_CONTENT_CHARS, MAX_DETAIL_CHARS } from './gate'
 import { stateFields } from './gate'
@@ -90,6 +92,16 @@ export type Seen = {
    * repository and written from its root.
    */
   places?: ReadonlyMap<string, Place>
+  /**
+   * What git said of the session's files, by `stateKey`: a file it ignores,
+   * and a document it was never given, is no anchor. A file it was not
+   * asked about is judged by its path alone.
+   */
+  gitStates?: ReadonlyMap<string, GitState>
+  /** The ids of Scribe's own records that point at no code yet: the only ones a later anchor is added to. */
+  waiting?: ReadonlySet<string>
+  /** The files the session wrote, changed or committed, by `stateKey`: the only ones a later anchor may be. */
+  changed?: ReadonlySet<string>
   /** The repository a record without anchors is about: the one most of the turn's files lie in. Null with none. */
   home?: string | null
   /** The ids of the records Scribe itself wrote in this session: the only ones it may rewrite or take back. */
@@ -104,6 +116,20 @@ export type Seen = {
   offered?: string
   /** What the developer typed in this turn: their own words. */
   typed?: string
+}
+
+/** The key what git said of a file is held under: its repository and its path there. */
+export function stateKey(place: Place): string {
+  return `${place.repo}\u0000${place.path}`
+}
+
+/** Whether a file as the session names it may be an anchor: never a plan, notes or a scratch file (`anchoring.ts`). */
+function mayAnchor(seen: Seen, path: string): boolean {
+  const place = seen.places?.get(path)
+
+  return place === undefined
+    ? isAnchorable(path, undefined)
+    : isAnchorable(place.path, seen.gitStates?.get(stateKey(place)))
 }
 
 /**
@@ -216,7 +242,7 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   }
 
   const plan = planOf(value.plan, seen.plans)
-  const named = anchorsOf(value.anchors, MAX_ANCHORS - 1, seen.paths)
+  const named = anchorsOf(value.anchors, MAX_ANCHORS - 1, seen.paths).filter(anchor => mayAnchor(seen, anchor.path))
   const held = seen.places === undefined ? { repo: null, anchors: named } : inOnePlace(named, seen.places)
   const { anchors } = held
   let repo = held.repo ?? seen.home ?? null
@@ -265,9 +291,14 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
           ? { repo, path: plan.doc.path }
           : seen.places.get(plan.doc.path)
 
-    // The plan is an anchor only where it lies in the repository the record is about.
+    // The plan is an anchor only where it lies in the repository the record
+    // is about, and only a document the repository keeps (an ADR, a spec):
+    // a plan of the work is thrown away once the work is done.
     if (
       at !== undefined &&
+      (at.repo === null || seen.places === undefined
+        ? isAnchorable(at.path, undefined)
+        : isAnchorable(at.path, seen.gitStates?.get(stateKey({ repo: at.repo, path: at.path })))) &&
       (repo === null || at.repo === null || at.repo === repo) &&
       !anchors.some(anchor => anchor.path === at.path)
     ) {
@@ -443,14 +474,19 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     const id = isRecord(entry) ? idOf(entry.id) : null
     const home = id === null ? undefined : seen.ownRepos?.get(id)
 
-    if (id === null || home === undefined || seen.places === undefined || !isRecord(entry)) {
+    if (id === null || home === undefined || seen.places === undefined || !isRecord(entry) || seen.waiting?.has(id) === false) {
       continue
     }
 
-    const placed = inOnePlace(anchorsOf(entry.paths, MAX_ANCHORS, seen.paths), seen.places)
+    // Only code the session changed, and only to a record still waiting for it: a file is added because it carries the decision out.
+    const named = anchorsOf(entry.paths, MAX_ANCHORS, seen.paths).filter(anchor => mayAnchor(seen, anchor.path))
+    const placed = inOnePlace(named, seen.places)
+    const code = placed.anchors
+      .filter(anchor => isCode(anchor.path) && (placed.repo === null || seen.changed?.has(stateKey({ repo: placed.repo, path: anchor.path })) !== false))
+      .slice(0, MAX_LATE_FILES)
 
-    if (placed.repo === home && placed.anchors.length > 0) {
-      anchored.push({ id, anchors: placed.anchors })
+    if (placed.repo === home && code.length > 0) {
+      anchored.push({ id, anchors: code })
     }
   }
 

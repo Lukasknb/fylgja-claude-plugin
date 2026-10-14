@@ -301,17 +301,18 @@ describe('what a compacted conversation is given', () => {
   test('a file added to a record the block quotes is no rewording: the context is not computed again for it', async ($, on) => {
     const engine = beneath(on)
     const placed = JSON.stringify({ outcome: 'act', records: [], anchor: [{ id: SECOND, paths: ['src/queue/retry.ts'] }] })
-    const set = await kept($, on, [TWO, placed])
+    // The cap is recorded before its code: only a record waiting for its code is given a file later.
+    const set = await kept($, on, [verdict({ records: [LOCK, { ...CAP, anchors: [] }] }), placed])
 
     await compact($, set)
     await block($)
     await turn($, set, dev('the cap lives in retry.ts too'), claude('Moved.', edit('src/queue/retry.ts')))
 
     expect(set.of('amend_memory'), 'the file was added to the record').toEqual([
-      { atom_id: SECOND, op: 'fix', anchors: [{ path: FILE }, { path: 'src/queue/retry.ts' }] },
+      { atom_id: SECOND, op: 'fix', anchors: [{ path: 'src/queue/retry.ts' }] },
     ])
     expect(engine.asks()).toBe(1)
-    expect(await block($), 'and when it is next computed, the file is there').toMatch(`Files: ${FILE}, src/queue/retry.ts`)
+    expect(await block($), 'and when it is next computed, the file is there').toMatch('Files: src/queue/retry.ts')
   })
 
   test('signing out after a compaction takes the block down, once', async ($, on) => {

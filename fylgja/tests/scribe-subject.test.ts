@@ -9,6 +9,7 @@ import {
   dev,
   edit,
   fact,
+  gitStatus,
   NOTHING,
   press,
   QUIET,
@@ -179,11 +180,12 @@ describe('a decision recorded before its code exists gets its places later', () 
   })
 
   test('the places it had are kept, and each place is added once', async ($, on) => {
-    const anchored = { ...DESIGN, anchors: [{ path: 'docs/plan-queue.md' }] }
+    const anchored = { ...DESIGN, anchors: [{ path: 'docs/specs/queue.md' }] }
     const set = stage(on, {
+      git: gitStatus([]),
       replies: [
         verdict({ records: [anchored] }),
-        later(['src/queue/lock.ts', 'docs/plan-queue.md']),
+        later(['src/queue/lock.ts', 'docs/specs/queue.md']),
         later(['src/queue/lock.ts']),
       ],
     })
@@ -192,14 +194,14 @@ describe('a decision recorded before its code exists gets its places later', () 
     await turn(
       $,
       set,
-      dev('write the plan'),
-      claude('Written.', use('Write', { file_path: '/work/repo/docs/plan-queue.md', content: '# Plan\n\nLock.' })),
+      dev('write the spec'),
+      claude('Written.', use('Write', { file_path: '/work/repo/docs/specs/queue.md', content: '# Spec\n\nLock.' })),
     )
     await turn($, set, dev('now build it'), claude('Built.', edit('src/queue/lock.ts')))
     await turn($, set, dev('and once more the same file'), claude('Done.', edit('src/queue/lock.ts')))
 
     expect(set.of('amend_memory')).toEqual([
-      { atom_id: OWN, op: 'fix', anchors: [{ path: 'docs/plan-queue.md' }, { path: 'src/queue/lock.ts' }] },
+      { atom_id: OWN, op: 'fix', anchors: [{ path: 'docs/specs/queue.md' }, { path: 'src/queue/lock.ts' }] },
     ])
   })
 

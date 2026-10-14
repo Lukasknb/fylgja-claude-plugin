@@ -256,9 +256,22 @@ card around them.
   about the repository the session has been working in: the one most of
   its files so far lie in, or the one it sits in. Only a session that
   sits in no repository and has touched no file of one records nothing.
-  A decision is often recorded before the code that carries it out
-  exists, and then points at no file. When a later turn of the same
-  session touches the files that implement it, Scribe adds them to its
+  A record never points at a plan, notes or a scratch file the session
+  wrote along the way: those are thrown away once the work is done. Git
+  tells them apart, asked once per look: a document it keeps (an ADR, a
+  committed spec, a README) is a place whatever it is called, a document
+  it was never given is none, and nothing it ignores is. New code is a
+  place before it is committed. Only where git cannot be asked does the
+  name decide: a whole word for a plan, notes, a to-do list or a draft
+  (`plan-l5-l6.md`, `NOTES.md`), or a file under `.claude/` or `scratch/`.
+  A decision or gotcha is often recorded before the code that carries
+  it out exists, and then points at no code: the opened list says `In:
+  no code yet`, and keeps saying so after the plugin is loaded again.
+  When a later turn of the same session writes, edits or commits the
+  code files that implement it (a file only read does not count; no
+  more than three for one record at a time; never a document; a
+  manifest such as `requirements.txt` counts as code), Scribe adds them
+  to its
   own record as places, without a receipt (the opened list shows them,
   and a record's view says where a place was added by somebody other
   than its author). A place that is wrong is taken off with Fix on the
@@ -411,8 +424,9 @@ card around them.
   or a markdown file that calls itself a plan, a design, a spec, an RFC, an
   ADR or a work package), that is where Scribe looks first for the reason.
   A decision whose reason is in the plan is recorded with that reason and
-  names the plan; you are not asked. A plan in the repository becomes one
-  of the record's anchors. A plan outside it will be gone for a later
+  names the plan; you are not asked. A spec, design, RFC or ADR the
+  repository keeps becomes one of the record's anchors; a plan of the
+  work does not, it is named in the reason. A plan outside it will be gone for a later
   reader, so its reasoning is copied into the record.
 - **It notes the commit the code was at.** A decision about files is
   written with the commit the working tree those files lie in is at

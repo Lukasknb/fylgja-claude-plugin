@@ -46,8 +46,11 @@ export const MAX_READ = 60
 /** `$.session.messages` answers the newest this many rows: a conversation that long may have older ones it leaves out. */
 export const MAX_ROWS = 4096
 
-/** One record a conversation kept: its id, what it is, and how it came to be listed. */
-export type SavedRecord = { id: string; kind: RecordKind; outcome: Written['outcome'] }
+/**
+ * One record a conversation kept: its id, what it is, how it came to be
+ * listed, and whether it was a decision that pointed at no code yet.
+ */
+export type SavedRecord = { id: string; kind: RecordKind; outcome: Written['outcome']; waiting?: true }
 
 /** What tells the conversation's rows apart, as they stood when it was written. */
 export type Marks = {
@@ -81,7 +84,11 @@ function savedRecordOf(value: unknown): SavedRecord | undefined {
   const kind = typeof value.kind === 'string' && KINDS.includes(value.kind) ? (value.kind as RecordKind) : undefined
   const outcome = typeof value.outcome === 'string' && OUTCOMES.includes(value.outcome) ? (value.outcome as Written['outcome']) : undefined
 
-  return kind === undefined || outcome === undefined ? undefined : { id: value.id, kind, outcome }
+  if (kind === undefined || outcome === undefined) {
+    return undefined
+  }
+
+  return value.waiting === true ? { id: value.id, kind, outcome, waiting: true } : { id: value.id, kind, outcome }
 }
 
 /** One conversation as the store holds it, or undefined when it does not read as one. */
@@ -218,5 +225,6 @@ export function recordOf(saved: SavedRecord, detail: Detail): Written {
     outcome: saved.outcome,
     replaced: null,
     isPartial: true,
+    ...(saved.waiting === true ? { waiting: true as const } : {}),
   }
 }

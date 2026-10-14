@@ -16,6 +16,7 @@ import { glyphOf } from '../glyphs'
 import { fitted, LEGENDS, roomFor, stepped } from '../listing'
 import type { Action, Line, View } from '../listing'
 import { drawn } from '../plain'
+import { isWaiting } from './anchoring'
 import type { Armed } from './band'
 import type { Written } from './types'
 import { kindName, MAX_CONTENT, MAX_OPTION, why } from './view'
@@ -49,6 +50,9 @@ export const MAX_GONE = 40
 
 /** A record's row lists no more of its places than this. */
 const MAX_PLACES = 8
+
+/** What the window says of a decision that points at no code yet. */
+export const NO_CODE = 'no code yet'
 
 export function create(): Ledger {
   return {
@@ -276,6 +280,7 @@ function opened(record: Written, isCut: boolean): Part[][] {
     drawn(anchor.symbol === undefined ? anchor.path : `${anchor.path} (${anchor.symbol})`, MAX_CONTENT),
   )
   const more = places.length - MAX_PLACES
+  const waiting = isWaiting(record)
 
   return [
     // The whole sentence, where its row had no room for it.
@@ -283,14 +288,18 @@ function opened(record: Written, isCut: boolean): Part[][] {
     ...why({ kind: record.kind, detail: record.detail ?? '', reasonStatus: record.reasonStatus }).map(row => row.parts),
     ...(rejected.length === 0 ? [] : [[{ text: 'Rejected: ', tone: 'dim' } as const, { text: rejected.join('; ') }]]),
     // One picked up after the plugin was loaded again does not say which files it concerns: nothing is said of them.
-    ...(record.isPartial === true && places.length === 0
+    // A decision that points at no code yet says so: its code is added once the session writes it.
+    ...(record.isPartial === true && places.length === 0 && !waiting
       ? []
       : [
           [
             { text: 'In: ', tone: 'dim' } as const,
-            places.length === 0
-              ? ({ text: 'no file', tone: 'dim' } as const)
-              : { text: `${places.slice(0, MAX_PLACES).join(', ')}${more > 0 ? ` and ${more} more` : ''}` },
+            ...(places.length === 0
+              ? [{ text: waiting ? NO_CODE : 'no file', tone: 'dim' } as const]
+              : [
+                  { text: `${places.slice(0, MAX_PLACES).join(', ')}${more > 0 ? ` and ${more} more` : ''}` },
+                  ...(waiting ? [{ text: ` · ${NO_CODE}`, tone: 'dim' } as const] : []),
+                ]),
           ],
         ]),
     ...(record.replaced === null ? [] : [[{ text: 'Replaces: ', tone: 'dim' } as const, { text: drawn(record.replaced, MAX_CONTENT) }]]),

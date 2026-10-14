@@ -133,4 +133,6 @@ export type Written = {
    * is taken out it is not offered to be put back.
    */
   isPartial?: true
+  /** Picked up after a reload: it was saved as a decision that points at no code yet (`anchoring.ts`). */
+  waiting?: true
 }

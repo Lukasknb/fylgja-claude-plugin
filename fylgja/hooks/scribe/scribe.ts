@@ -22,9 +22,13 @@ import { drawn } from '../plain'
 import { SCHEMA } from '../telemetry-schema'
 import { wordOf } from '../telemetry'
 import type { Report, Word } from '../telemetry'
+import { isCode, isWaiting, MAX_GIT_PATHS, statesOf } from './anchoring'
+import type { GitState } from './anchoring'
 import * as Band from './band'
 import { baseOf, isUnknownBase, rootOf } from './base'
-import type { Base, Run } from './base'
+import type { Base } from './base'
+import { gitIn } from './git'
+import type { Run } from './git'
 import { carried, listedOf, saidOf } from './carry'
 import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain } from './delta'
 import type { Landed, Offer, Row } from './delta'
@@ -45,6 +49,7 @@ import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
 import type { Draft, Fact, Place, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReason } from './verdict'
+import { stateKey } from './verdict'
 import type { Seen } from './verdict'
 import { NO_STRONG_REASON, NOT_STATED, provenanceOf, viewOf } from './view'
 import type { View } from './view'
@@ -222,6 +227,12 @@ export type Scribe = {
   filesIn: Map<string, number>
   /** The working tree each folder seen so far lies in; null for a folder in none. */
   trees: Map<string, Tree | null>
+  /**
+   * What git said of the files of `places`, by `stateKey`: a file it ignores
+   * and a document it was never given are no anchors. A file is asked about
+   * once; an untracked document again, since it may be added.
+   */
+  gitStates: Map<string, GitState>
   /** What the developer has stated in the session so far: reasons, constraints, standing preferences. */
   stated: string[]
   /** Records that were not written because the turn touched no file of any repository. */
@@ -282,6 +293,12 @@ export type Scribe = {
    * line writes it: what a commit there holds.
    */
   edited: Map<string, Set<string>>
+  /**
+   * Every file the session wrote, changed or committed, by `stateKey`: the
+   * only files a later anchor may be. One it merely read is not where a
+   * decision was carried out.
+   */
+  changedPlaces: Set<string>
   /** Commits made since the last look, each with the files it holds: asked about once, at the next look. */
   commitsToPair: { repo: string; files: string[] }[]
   /** The repository an agent of the session last changed a file in: where a commit it makes belongs. */
@@ -520,6 +537,7 @@ export function create(options: Options): Scribe {
     places: new Map(),
     filesIn: new Map(),
     trees: new Map(),
+    gitStates: new Map(),
     stated: [],
     unplaced: 0,
     spoken: [],
@@ -537,6 +555,7 @@ export function create(options: Options): Scribe {
     offers: [],
     editedRepos: new Set(),
     edited: new Map(),
+    changedPlaces: new Set(),
     commitsToPair: [],
     agentRepo: null,
     lateProposed: 0,
@@ -622,6 +641,7 @@ export function startOver(scribe: Scribe): void {
   scribe.paths = []
   scribe.lookedUp.clear()
   scribe.places.clear()
+  scribe.gitStates.clear()
   scribe.filesIn.clear()
   scribe.stated = []
   scribe.spoken = []
@@ -637,6 +657,7 @@ export function startOver(scribe: Scribe): void {
   scribe.offers = []
   scribe.editedRepos.clear()
   scribe.edited.clear()
+  scribe.changedPlaces.clear()
   scribe.commitsToPair = []
   scribe.agentRepo = null
   scribe.proposals = []
@@ -731,7 +752,12 @@ function save(host: ScribeHost, scribe: Scribe): void {
       return
     }
 
-    const now: SavedRecord[] = scribe.written.map(({ id, kind, outcome }) => ({ id, kind, outcome }))
+    const now: SavedRecord[] = scribe.written.map(one => ({
+      id: one.id,
+      kind: one.kind,
+      outcome: one.outcome,
+      ...(isWaiting(one) ? { waiting: true as const } : {}),
+    }))
     // The list of a conversation it went on from never takes the place of one this conversation already has.
     const base = isTheirs && own !== undefined ? own.records : (scribe.waiting ?? own?.records ?? [])
     const waiting = base.filter(one => !now.some(record => record.id === one.id))
@@ -1766,6 +1792,10 @@ type Budget = { steps: number; until: number; seen: Seen; isLastTry?: true; look
  */
 async function lone(host: ScribeHost, scribe: Scribe): Promise<Budget> {
   const inTree = scribe.plans.docs.flatMap(doc => (doc.path === null ? [] : [doc.path]))
+
+  // A record put right here is held to the same places as one of a look.
+  await askGit(host, scribe)
+
   const now = await host.now()
 
   scribe.wakeTimes = scribe.wakeTimes.filter(at => now - at < HOUR_MS)
@@ -1778,6 +1808,7 @@ async function lone(host: ScribeHost, scribe: Scribe): Promise<Budget> {
       saidNoReason: false,
       paths: new Set([...scribe.places.keys(), ...inTree]),
       places: scribe.places,
+      gitStates: scribe.gitStates,
       facts: new Map(),
     },
     isLastTry: true,
@@ -1896,10 +1927,17 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft, isByHand 
   }
 
   const { content } = draft
+  // The places it had are kept, and the ones the rewrite names added: the server replaces the list it is sent.
+  const had = own.anchors ?? []
+  const anchors = [...had, ...draft.anchors.filter(anchor => !had.some(one => one.path === anchor.path && one.symbol === anchor.symbol))].slice(
+    0,
+    MAX_ANCHORS,
+  )
   const args: Record<string, unknown> = {
     atom_id: own.id,
     op: 'fix',
     content,
+    ...(anchors.length === had.length ? {} : { anchors }),
     ...(draft.detail === '' ? {} : { detail: draft.detail }),
     ...(draft.alternatives.length === 0 ? {} : { alternatives: draft.alternatives }),
     ...(draft.reasonStatus === null ? {} : { reason_status: draft.reasonStatus }),
@@ -1925,6 +1963,7 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft, isByHand 
     // As Fylgja now holds it: a part the change did not send stays as it was.
     detail: draft.detail === '' ? own.detail : draft.detail,
     alternatives: draft.alternatives.length === 0 ? own.alternatives : draft.alternatives,
+    anchors,
     outcome: 'updated',
     replaced: null,
   }
@@ -2109,6 +2148,72 @@ async function opposedBy(
 }
 
 /**
+ * Asks git about the session's files it has not yet said enough of: which
+ * of them it ignores and which it was never given, so that neither becomes
+ * a record's anchor (`anchoring.ts`). One run per working tree, no more
+ * files than `MAX_GIT_PATHS` in all, each run as `git.ts` runs git. A run that fails says nothing: the name alone then decides.
+ */
+async function askGit(host: ScribeHost, scribe: Scribe): Promise<void> {
+  const byRoot = new Map<string, Place[]>()
+  const asked = new Set<string>()
+
+  for (const [file, place] of scribe.places) {
+    const key = stateKey(place)
+    const state = scribe.gitStates.get(key)
+
+    // Only the full path says where the tree begins.
+    if (
+      asked.size >= MAX_GIT_PATHS ||
+      !file.startsWith('/') ||
+      !file.endsWith(`/${place.path}`) ||
+      state === 'tracked' ||
+      state === 'ignored' ||
+      // Untracked code is a place all the same; only a document is asked again, since it may be added.
+      (state === 'untracked' && isCode(place.path)) ||
+      asked.has(key)
+    ) {
+      continue
+    }
+
+    const root = file.slice(0, file.length - place.path.length - 1)
+
+    byRoot.set(root, [...(byRoot.get(root) ?? []), place])
+    asked.add(key)
+  }
+
+  // Each tree at once, none waited for past its limit: a git that hangs costs the look a moment, never the turn.
+  await Promise.all(
+    [...byRoot].map(async ([root, places]) => {
+      const paths = places.map(one => one.path)
+      const ran = await gitIn(host.run, host.after, root, [
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=all',
+        '--ignored=traditional',
+        '--',
+        ...paths,
+      ])
+      const printed = ran?.exitCode === 0 ? ran.stdout : undefined
+
+      if (printed === undefined) {
+        return
+      }
+
+      const states = statesOf(printed, paths)
+
+      for (const place of places) {
+        const state = states.get(place.path)
+
+        if (state !== undefined) {
+          scribe.gitStates.set(stateKey(place), state)
+        }
+      }
+    }),
+  )
+}
+
+/**
  * Adds places to one of Scribe's own records of this session: files a later
  * turn touched that carry out a decision recorded before they existed. The
  * record's own anchors are kept and the new ones added, up to what the
@@ -2122,7 +2227,8 @@ async function anchorMore(
 ): Promise<void> {
   const own = scribe.written.find(one => one.id === id)
 
-  if (own === undefined || !scribe.mine.has(id)) {
+  // Only a record still waiting for its code: one that has it is not given more by a guess.
+  if (own === undefined || !scribe.mine.has(id) || !isWaiting(own)) {
     return
   }
 
@@ -2145,6 +2251,9 @@ async function anchorMore(
   if (outcome === 'fixed' || outcome === 'unchanged') {
     scribe.lateAnchors += all.length - had.length
     scribe.written = scribe.written.map(one => (one.id === id ? { ...one, anchors: all } : one))
+    // The window's "In:" line now names the code, and the list is saved as no longer waiting for it.
+    save(host, scribe)
+    host.redraw()
   }
 }
 
@@ -2840,6 +2949,7 @@ function noteEdits(scribe: Scribe, who: Identity, files: readonly string[], plac
       const shown = relativeTo(who.root, file) ?? file
 
       scribe.edited.set(place.repo, new Set([...(scribe.edited.get(place.repo) ?? []), shown]))
+      scribe.changedPlaces.add(stateKey(place))
       scribe.editedRepos.add(place.repo)
     }
   }
@@ -3645,10 +3755,12 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
       const plans = planBlock(scribe.plans.docs, scribe.wakes)
       const past = scribe.past.map((block, at) => (at === scribe.past.length - 1 ? { ...block, cache: true as const } : block))
       const allowed = new Set(scribe.places.keys())
-      // Scribe's own records of the session that point at no file yet, and the first commit that has some to place.
+      // Scribe's own decisions of the session that point at no code yet, and the first commit that has some to place.
+      await askGit(host, scribe)
+
       const unplaced = new Map(
         scribe.written.flatMap(one =>
-          scribe.mine.has(one.id) && (one.anchors ?? []).length === 0 && typeof one.repo === 'string'
+          scribe.mine.has(one.id) && isWaiting(one) && typeof one.repo === 'string'
             ? [[one.id, one] as const]
             : [],
         ),
@@ -3675,6 +3787,9 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
         typed: seen.developer,
         paths: allowed,
         places: scribe.places,
+        gitStates: scribe.gitStates,
+        waiting: new Set(unplaced.keys()),
+        changed: scribe.changedPlaces,
         // A turn that touched no file itself (the developer steering, agents
         // doing the work) is about the repository the session has been
         // working in: the one most of its files so far lie in, or its own.

@@ -8,18 +8,10 @@
  * once, or answers anything but a whole sha, leaves both out.
  */
 
-import { limited } from './time'
+import { gitIn } from './git'
+import type { Ran, Run } from './git'
 import type { After } from './time'
 import type { Anchor, Place } from './types'
-
-/** How long each of the two git commands may take. They run side by side. */
-export const GIT_TIMEOUT_MS = 1500
-
-/** What a command printed and how it ended, as `$.process.run` answers. */
-export type Ran = { exitCode: number; stdout: string }
-
-/** Runs a command by its argument vector, with no shell; rejects when it cannot start or outlives `timeoutMs`. */
-export type Run = (argv: readonly string[], timeoutMs: number) => Promise<Ran>
 
 /** What `remember` is told: the commit, and whether an anchored file was changed. */
 export type Base = { base_sha: string; base_dirty?: boolean }
@@ -63,17 +55,11 @@ export function rootOf(
 /**
  * The commit the working tree at `root` is at and whether any of `paths` is
  * changed there, or undefined when the commit cannot be read. Whether the
- * files are changed is left out when only that cannot be read.
- *
- * git is asked not to take its index lock (`--no-optional-locks`), so a
- * commit the developer is making at the same moment is never in its way;
- * to read the paths as they are written (`--literal-pathspecs`); and not to
- * start the file monitor a repository's settings may name.
+ * files are changed is left out when only that cannot be read. git is run
+ * as `git.ts` runs it, the two commands side by side.
  */
 export async function baseOf(run: Run, after: After, root: string, paths: readonly string[]): Promise<Base | undefined> {
-  const git = ['git', '--no-optional-locks', '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-C', root]
-  const asked = (argv: readonly string[]): Promise<Ran | undefined> =>
-    limited(after, run([...git, ...argv], GIT_TIMEOUT_MS), GIT_TIMEOUT_MS).catch(() => undefined)
+  const asked = (args: readonly string[]): Promise<Ran | undefined> => gitIn(run, after, root, args)
   const [head, status] = await Promise.all([
     asked(['rev-parse', '--verify', '--quiet', 'HEAD']),
     paths.length === 0 ? Promise.resolve(undefined) : asked(['status', '--porcelain', '--untracked-files=all', '--', ...paths]),
