@@ -173,7 +173,7 @@ describe('Scribe asks why', () => {
 
   test('two questions left unanswered end the asking for the session', async ($, on) => {
     const ask = (n: number) =>
-      verdict({ records: [decision({ content: `Use option ${n}.`, detail: '', reason_status: 'not_stated' })], question: WHY })
+      verdict({ records: [decision({ content: `Keep ${n} upload workers.`, detail: '', reason_status: 'not_stated' })], question: WHY })
     const set = stage(on, { replies: [ask(1), ask(2), ask(3)] })
 
     await $.session.start(START)
@@ -182,7 +182,7 @@ describe('Scribe asks why', () => {
     await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
     await turn($, set, ...TALK)
 
-    expect(await shown($)).toMatch('? Why: Use option 2.')
+    expect(await shown($)).toMatch('? Why: Keep 2 upload workers.')
 
     // Typed past, untouched.
     await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
@@ -194,7 +194,7 @@ describe('Scribe asks why', () => {
 
   test('no session is asked more than four questions', async ($, on) => {
     const ask = (n: number) =>
-      verdict({ records: [decision({ content: `Use option ${n}.`, detail: '', reason_status: 'not_stated' })], question: WHY })
+      verdict({ records: [decision({ content: `Keep ${n} upload workers.`, detail: '', reason_status: 'not_stated' })], question: WHY })
     const set = stage(on, { replies: [ask(1), ask(2), ask(3), ask(4), ask(5)] })
 
     await $.session.start(START)
@@ -329,7 +329,7 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
 
   test('where the question cannot be asked, the decision is written beside the old one, never as its replacement', async ($, on) => {
     const unexplained = (n: number) =>
-      verdict({ records: [decision({ content: `Use option ${n}.`, detail: '', reason_status: 'not_stated' })], question: WHY })
+      verdict({ records: [decision({ content: `Keep ${n} upload workers.`, detail: '', reason_status: 'not_stated' })], question: WHY })
     const set = stage(on, {
       replies: [unexplained(1), unexplained(2), verdict({ records: [decision({ content: 'Use B.', supersedes: idOf(5) })] })],
       tools: { recall: () => answer({ facts: [PRIOR] }) },
@@ -346,8 +346,8 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
 
     expect(await shown($)).not.toMatch('replaces')
     expect(set.of('remember').map(args => [args.content, args.supersedes])).toEqual([
-      ['Use option 1.', undefined],
-      ['Use option 2.', undefined],
+      ['Keep 1 upload workers.', undefined],
+      ['Keep 2 upload workers.', undefined],
       ['Use B.', undefined],
     ])
   })

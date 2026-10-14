@@ -302,16 +302,15 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(naming?.system).toMatch('names something by a label that only the session it came from knows')
     expect(naming?.system).toMatch('Take what it stands for from the session and from nowhere else')
     expect(naming?.system).toMatch('If the session does not show what a label stands for, drop the record.')
-    expect(naming?.prompt).toMatch('refused:leans_on_conversation')
+    expect(naming?.prompt, 'the plugin catches the label itself, in the server\'s words').toMatch(
+      'refused:leans_on_conversation — "the P2 flag" only means something inside the conversation it came from',
+    )
     expect(naming?.prompt, 'the session the record was taken from is handed over').toMatch('SESSION-TEXT: P2 is the partial-sync flag')
     expect(naming?.prompt.match(/^<<< /gm)?.length, 'all three are fenced as data').toBe(3)
     expect(
       set.of('remember').map(args => [args.content, args.detail, args.alternatives]),
-      'the second write names the thing in the sentence, the reason and the alternative, each longer than it was',
-    ).toEqual([
-      [BEHIND.content, BEHIND.detail, BEHIND.alternatives],
-      [NAMED.content, NAMED.detail, NAMED.alternatives],
-    ])
+      'only the record put right is sent: it names the thing in the sentence, the reason and the alternative',
+    ).toEqual([[NAMED.content, NAMED.detail, NAMED.alternatives]])
     expect(await shown($)).toMatch('✓ Recorded · Reopening a closed thread on an ERP update goes behind the partial-sync flag.')
   })
 
@@ -337,7 +336,7 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(naming?.prompt, 'the turn in hand').toMatch('put reopening behind P2, not option B')
     expect(naming?.prompt, 'and no earlier line that does not mention it').not.toMatch('UNRELATED-TEXT')
     expect(naming?.prompt.match(/^<<< /gm)?.length, 'fenced as data, as one session').toBe(3)
-    expect(set.of('remember').map(args => args.content)).toEqual([BEHIND.content, NAMED.content])
+    expect(set.of('remember').map(args => args.content), 'the leaning wording is never sent').toEqual([NAMED.content])
     expect(await shown($)).toMatch('✓ Recorded · Reopening a closed thread on an ERP update goes behind the partial-sync flag.')
   })
 

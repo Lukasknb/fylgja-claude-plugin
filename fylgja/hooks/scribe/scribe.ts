@@ -34,6 +34,8 @@ import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain
 import type { Landed, Offer, Row } from './delta'
 import { changedLine, factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
+import { leaningOf, leaningRefusal } from './labels'
+import type { Leaning } from './labels'
 import * as Ledger from './ledger'
 import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
 import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
@@ -394,7 +396,13 @@ export type Scribe = {
   waitingFrom: string | undefined
   /** How many turns had ended when the plugin was loaded. */
   loadedAt: number
+  /** Records the plugin itself did not write (`letGo`), and why the first since this was last cleared was not. */
+  letGo: number
+  letGoBy: DropReason | undefined
 }
+
+/** Why the plugin itself did not write a record: one word of the report's fixed list. */
+export type DropReason = (typeof SCHEMA.events.look.first_drop_reason.oneOf)[number]
 
 /** The keys kept on this machine. */
 export const STORE = {
@@ -592,6 +600,8 @@ export function create(options: Options): Scribe {
     waiting: undefined,
     waitingFrom: undefined,
     loadedAt: 0,
+    letGo: 0,
+    letGoBy: undefined,
   }
 }
 
@@ -1830,7 +1840,8 @@ async function lone(host: ScribeHost, scribe: Scribe): Promise<Budget> {
  * right, by what the record says or by losing the reason. A refusal
  * that is the server's own trouble is tried once more at
  * the next turn's end, as it is. This spends the wake's own model calls and
- * time, and none when the wake has used them up.
+ * time, and none when the wake has used them up. A label only the session
+ * knew is looked for before anything is sent at all (`named`).
  */
 async function written(
   host: ScribeHost,
@@ -1852,6 +1863,93 @@ async function written(
     return undefined
   }
 
+  // A label only the session knew is caught here, before anything is sent.
+  const leaning = leaningOf(draft, sessionOf(budget))
+
+  return leaning === undefined
+    ? await sent(host, scribe, who, draft, budget, prior)
+    : await named(host, scribe, who, draft, budget, leaning, prior)
+}
+
+/**
+ * A record that names something by a label only the session knew, put
+ * right once from the session the way one the server refused for it is,
+ * before anything is sent. A sure label, one the session itself set up as
+ * a label ("L4" where it listed "L1 —", "L2 —"), that is still there
+ * afterwards lets the record go, counted. A likely one ("Phase 2", "the
+ * stack's L4" where the session never set it up) never does: the record is
+ * sent as the model left it, or as it was.
+ */
+async function named(
+  host: ScribeHost,
+  scribe: Scribe,
+  who: Identity,
+  draft: Draft,
+  budget: Budget,
+  leaning: Leaning,
+  prior?: Fact,
+): Promise<Written | undefined> {
+  const left = budget.until - (await host.now())
+  const refusal = leaningRefusal(leaning.label)
+  let better: Draft | undefined
+
+  if (budget.steps > 0 && left > 0 && budget.window !== undefined) {
+    budget.steps -= 1
+    scribe.corrections += 1
+
+    if (budget.isLastTry === true) {
+      scribe.wakeTimes.push(await host.now())
+    }
+
+    const answer = await correct(host, {
+      model: scribe.model,
+      record: handedOver(draft),
+      refusal,
+      timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
+      session: budget.window,
+    })
+
+    better = answer === 'drop' || answer === undefined ? undefined : correctedOf(draft, answer, 'wording', budget.seen, refusal)
+  }
+
+  const isMended = better !== undefined && leaningOf(better, sessionOf(budget))?.isSure !== true
+
+  if (leaning.isSure && !isMended) {
+    letGo(scribe, 'label_stayed')
+
+    return undefined
+  }
+
+  return await sent(host, scribe, who, isMended && better !== undefined ? better : draft, budget, prior)
+}
+
+/** The session's lines a wake holds, which a label is held against; none outside a wake. */
+function sessionOf(budget: Budget): readonly string[] {
+  return budget.window === undefined ? [] : [...budget.window.earlier, ...budget.window.recent]
+}
+
+/** A record as the model that puts it right is handed it. */
+function handedOver(draft: Draft): Record<string, unknown> {
+  return {
+    kind: draft.kind,
+    content: draft.content,
+    detail: draft.detail,
+    reason_status: draft.reasonStatus,
+    alternatives: draft.alternatives,
+    anchors: draft.anchors,
+    triggers: draft.triggers,
+  }
+}
+
+/** `draft` sent, and put right once when Fylgja refuses it for something a rewording can mend (`written`). */
+async function sent(
+  host: ScribeHost,
+  scribe: Scribe,
+  who: Identity,
+  draft: Draft,
+  budget: Budget,
+  prior?: Fact,
+): Promise<Written | undefined> {
   const first = await send(host, scribe, who, draft, prior)
   const part = first.written === undefined ? teaches(first.code, first.refusal) : undefined
 
@@ -1886,22 +1984,16 @@ async function written(
 
   const answer = await correct(host, {
     model: scribe.model,
-    record: {
-      kind: draft.kind,
-      content: draft.content,
-      detail: draft.detail,
-      reason_status: draft.reasonStatus,
-      alternatives: draft.alternatives,
-      anchors: draft.anchors,
-      triggers: draft.triggers,
-    },
+    record: handedOver(draft),
     refusal: first.refusal ?? '',
     timeoutMs: Math.min(STEP_TIMEOUT_MS, left),
     ...((part === 'wording' || part === 'cause') && budget.window !== undefined ? { session: budget.window } : {}),
     ...(part === 'cause' ? { isAboutACause: true } : {}),
   })
   const better = answer === 'drop' || answer === undefined ? undefined : correctedOf(draft, answer, part, budget.seen, first.refusal)
-  const second = better === undefined ? undefined : (await send(host, scribe, who, better, prior)).written
+  // What surely leans on the session after it was put right is not sent at all.
+  const second =
+    better === undefined || leaningOf(better, sessionOf(budget))?.isSure === true ? undefined : (await send(host, scribe, who, better, prior)).written
 
   if (second === undefined) {
     lose(scribe, first.code)
@@ -1918,11 +2010,27 @@ async function written(
  *
  * @param isByHand the developer asked for the change with a key: any record
  *   of the session that stands may be rewritten then, and is theirs after
+ * @param lines the session, as the wake read it: what a label is held against
  */
-async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft, isByHand = false): Promise<Written | undefined> {
+async function rewrite(
+  host: ScribeHost,
+  scribe: Scribe,
+  draft: Draft,
+  isByHand = false,
+  lines: readonly string[] = [],
+): Promise<Written | undefined> {
   const own = scribe.written.find(one => one.id === draft.updates)
 
   if (own === undefined || (!isByHand && !scribe.mine.has(own.id))) {
+    return undefined
+  }
+
+  // The model's rewording is held to the same rule as its first wording,
+  // where it surely leans on the session; what the developer wrote
+  // themselves is theirs.
+  if (!isByHand && leaningOf(draft, lines)?.isSure === true) {
+    letGo(scribe, 'label_stayed')
+
     return undefined
   }
 
@@ -2287,6 +2395,10 @@ async function apply(
     }
   }
 
+  for (let n = 0; n < (verdict.aboutWork ?? 0); n += 1) {
+    letGo(scribe, 'about_work')
+  }
+
   for (const [index, draft] of verdict.records.entries()) {
     const isAskedOf = question?.record === index
     const prior = isAskedOf && question.form === 'reversal' ? facts.get(question.prior) : undefined
@@ -2297,7 +2409,7 @@ async function apply(
 
     // Scribe's own record of this session, as the decision now stands: rewritten in place, with no key and no second record.
     if (draft.updates !== null) {
-      const own = await rewrite(host, scribe, checked.draft)
+      const own = await rewrite(host, scribe, checked.draft, false, sessionOf(budget))
 
       if (own !== undefined) {
         Band.receive(band, [own])
@@ -2870,6 +2982,18 @@ function earlierLines(scribe: Scribe): string[] {
     .filter(line => line.trim() !== '' && !/^(?:<<<|>>>|Earlier wake \d+:|\[your verdict then\])/.test(line))
 }
 
+/**
+ * A record the plugin itself did not write: the model said it is about how
+ * the work is organised, or it still named something by a label only the
+ * session knew. Counted for the window of what was kept and for the look's
+ * report, by that reason alone.
+ */
+function letGo(scribe: Scribe, reason: DropReason): void {
+  scribe.letGo += 1
+  scribe.letGoBy ??= reason
+  lose(scribe, reason)
+}
+
 /** A record lost for good after Fylgja refused it, counted under the rule it was refused by. */
 function lose(scribe: Scribe, code: string): void {
   scribe.dropped += 1
@@ -3389,9 +3513,10 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: numb
   let isWhole = false
   const tally: Tally = { ending: 'stopped', noReply: undefined, steps: 0, lookups: 0, usage: undefined, proposed: 0 }
   const began = performance.now()
-  const { wrote, refused } = scribe
+  const { wrote, refused, letGo: before } = scribe
 
   scribe.refusedBy = undefined
+  scribe.letGoBy = undefined
 
   try {
     isWhole = await looked(host, scribe, who, { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut, tally })
@@ -3420,6 +3545,8 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: numb
       ...(scribe.refusedBy === undefined
         ? {}
         : { first_refusal_code: wordOf(SCHEMA.events.look.first_refusal_code.oneOf, scribe.refusedBy, 'other') }),
+      drafts_dropped: scribe.letGo - before,
+      ...(scribe.letGoBy === undefined ? {} : { first_drop_reason: scribe.letGoBy }),
       calls_missed: missedBy(host),
     })
 

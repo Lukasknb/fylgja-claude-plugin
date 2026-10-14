@@ -11,6 +11,7 @@ import { reasonStatusOf } from './facts'
 import { MAX_ALTERNATIVE_CHARS, MAX_ALTERNATIVES, MAX_ANCHORS, MAX_CONTENT_CHARS, MAX_DETAIL_CHARS } from './gate'
 import { stateFields } from './gate'
 import type { Part } from './gate'
+import { proseOf } from './labels'
 import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
@@ -202,6 +203,21 @@ function planOf(value: unknown, plans: readonly PlanDoc[]): { doc: PlanDoc; head
       }
 }
 
+/**
+ * Whether `detail` only asks: every sentence of it a question, code spans
+ * and quotations aside. A question gives no cause ("Isn't the absence rule
+ * separate from partial confirmation?"), however much it sounds like one,
+ * and is not written down as a reason.
+ */
+export function isAQuestion(detail: string): boolean {
+  const said = proseOf(detail)
+    .split(/(?<=[.!?])\s+/)
+    .map(part => part.trim().replace(/["'”“)\s]+$/, ''))
+    .filter(part => part !== '')
+
+  return said.length > 0 && said.every(part => part.endsWith('?'))
+}
+
 function reasonOf(asked: ReasonStatus | null, detail: string, saidNoReason: boolean): { status: ReasonStatus; detail: string } {
   // "No particular reason" is the developer's to say; the model's word for
   // it stands only when their own words in this turn say so too.
@@ -209,8 +225,8 @@ function reasonOf(asked: ReasonStatus | null, detail: string, saidNoReason: bool
     return { status: 'no_strong_reason', detail }
   }
 
-  // A reason nobody gave is not written down as one.
-  if (asked === 'not_stated' || asked === 'no_strong_reason' || detail === '') {
+  // A reason nobody gave is not written down as one, and a question is none.
+  if (asked === 'not_stated' || asked === 'no_strong_reason' || detail === '' || isAQuestion(detail)) {
     return { status: 'not_stated', detail: '' }
   }
 
@@ -228,6 +244,11 @@ export const OFFERED_SHARE = 0.35
 /** No sentence longer than this is sent at all; up to it, the server says what is wrong and it may be put right. */
 const MAX_SENT_CONTENT = 1000
 
+/** Whether the model said a record of its verdict is about how the work of this session is organised. */
+function isAboutTheWork(value: unknown): boolean {
+  return isRecord(value) && value.about === 'work'
+}
+
 /** A record as the plugin will write it, or undefined when it is no record. */
 export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   if (!isRecord(value) || typeof value.kind !== 'string' || !KINDS.has(value.kind)) {
@@ -238,6 +259,14 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   const content = sentence(value.content)
 
   if (content === '' || content.length > MAX_SENT_CONTENT) {
+    return undefined
+  }
+
+  // How the work of this session is organised is no record. Only the model
+  // can tell it from a team's rule about how changes ship, which words alone
+  // cannot ("Schema changes ship in a separate PR so the expand migration
+  // deploys first" is a decision), so its word decides.
+  if (isAboutTheWork(value)) {
     return undefined
   }
 
@@ -498,6 +527,9 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     stated: sentences(value.stated, MAX_STATED, MAX_STATED_CHARS),
     anchored,
     proposed: Array.isArray(value.anchor) ? value.anchor.length : 0,
+    aboutWork: (Array.isArray(value.records) ? value.records : [])
+      .slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS)
+      .filter(isAboutTheWork).length,
   }
 }
 

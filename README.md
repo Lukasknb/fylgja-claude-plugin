@@ -100,7 +100,17 @@ at a time.
   a workaround, a departure from the plan, a correction of yours, a gotcha
   that cost time: written to Fylgja at once, with the reason, what was
   rejected, and the files it concerns. Not naming, formatting, routine edits
-  or status. A record points only at files the session itself opened, at
+  or status, and not how the work of the task in hand is organised: which
+  branch, pull request or layer of a stack this change goes in, how it is
+  split into commits, what comes next (a team's standing rule about how
+  changes ship is a decision, and is kept). A record names things by what
+  they are: one that uses a label the session itself set up ("L4" after
+  the session listed "L1 —", "L2 —", "L3 —") is put right once from the
+  session before it is sent, or not written; one that only looks like a
+  label ("Phase 2", "Option B", "as discussed", where the session never set
+  them up) is put right once and kept either way. A reason that only asks
+  a question is no reason. What was not kept is counted in the window of
+  what was kept. A record points only at files the session itself opened, at
   most twelve of them. It is about the repository those files lie in, not
   the folder the session started in: a repository checked out inside
   another, a worktree and a checkout next door are each their own (the
@@ -561,9 +571,9 @@ cost line for these requests, so here is what they are.
   requests out of the same four: one to look for a decision's reason in
   what you wrote, one to say whether a new decision goes against a
   recorded one (only when Fylgja holds something on its subject), and
-  one to put right a record the server refused. That last one is small
-  too, except for a record refused because it names something by a label
-  only the session knew: then it carries up to 16,000 characters of the
+  one to put right a record the server refused, or one the plugin caught
+  naming something by a label. That last one is small too, except for a
+  record that names something by a label only the session knew: then it carries up to 16,000 characters of the
   session, to say what the label stands for.
 - **At most, per turn:** 4 requests of at most about 31,000 input tokens
   each (123,000 characters: the instruction, up to 24,000 characters of
@@ -692,7 +702,7 @@ The events, each with every key it may carry. Any key may be left out.
 | Event | Sent when | Keys |
 |-|-|-|
 | `session_started` | a session begins | `is_interactive`, `is_signed_in`, `is_scribe_on` (yes/no each) |
-| `look` | Scribe has looked at what happened, at a turn's end or after you answered a question of Claude's | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `calls_missed`; `first_refusal_code` (a refusal code, below) |
+| `look` | Scribe has looked at what happened, at a turn's end or after you answered a question of Claude's | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `drafts_dropped`, `calls_missed`; `first_refusal_code` (a refusal code, below); `first_drop_reason` (about_work, label_stayed) |
 | `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no) |
 | `question` | a question of Scribe's was held back by a rule, came up, or was answered | `stage` (held_back, shown, answered); `form` (reason, reversal, holds); `held_back_by` (turn_asked, asked_before, session_share, unanswered); `key` (option, own_words, no_reason, skip, still_holds, no_longer_holds, replaces, different, told_claude, expired, withdrawn); `ms_until_answered` (number) |
 | `window` | you asked for the window, with the mark or a command | `view` (kept, search); `opened_by` (click, command); `outcome` (opened, not_placed, failed); `records_listed` (number) |

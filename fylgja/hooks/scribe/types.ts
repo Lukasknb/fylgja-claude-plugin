@@ -67,6 +67,8 @@ export type Verdict = {
   anchored?: { id: string; anchors: Anchor[] }[]
   /** How many such pairings the model proposed, before any was checked. */
   proposed?: number
+  /** How many records the model said are about how the work of the session is organised: none of them is written. */
+  aboutWork?: number
 }
 
 /** A record as Fylgja returned it, as much as the band shows. Its texts are held as received and made safe where drawn. */

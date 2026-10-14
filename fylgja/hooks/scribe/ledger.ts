@@ -233,9 +233,11 @@ export const TROUBLE = {
 
 export const WAITING = 'Asking Fylgja…'
 
-/** Why a record was not kept, by the rule Fylgja refused it by; any other rule is said by its name. */
+/** Why a record was not kept: the rule Fylgja refused it by, or why the plugin itself let it go; any other rule is said by its name. */
 const NOT_KEPT: Readonly<Record<string, string>> = {
   leans_on_conversation: 'wording leaned on this conversation',
+  label_stayed: 'named something by a label only this conversation knew',
+  about_work: 'about how this work was organised, not the code',
 }
 
 /**

@@ -516,15 +516,15 @@ describe('the window lists what Scribe kept', () => {
   })
 
   test('what was not kept is said in one closing line of the window, by why, and nowhere above the prompt', async ($, on) => {
-    const refusal = 'refused:leans_on_conversation — "option B" only means something inside the conversation it came from.'
-    const leaning = decision({ content: 'Go with option B for the retry queue.', detail: 'It was simpler.', anchors: [{ path: FILE }] })
+    const refusal = 'refused:leans_on_conversation — "P2" only means something inside the conversation it came from.'
+    const leaning = decision({ content: 'Put the retry queue behind P2.', detail: 'It was simpler.', anchors: [{ path: FILE }] })
 
     frame(on)
     const set = stage(on, {
       replies: [verdict({ records: [LOCK, leaning] }), JSON.stringify({ drop: true })],
       tools: {
         remember: (args: Record<string, unknown>) =>
-          String(args.content).startsWith('Go with option B')
+          String(args.content).startsWith('Put the retry queue behind P2')
             ? { content: [{ type: 'text', text: refusal }], isError: true }
             : answer({ atom_id: FIRST, outcome: 'created', supersede: 'not_requested', note: null }),
       },
@@ -546,6 +546,31 @@ describe('the window lists what Scribe kept', () => {
       '2 not kept — wording leaned on this conversation · 1 not kept — Fylgja turned it down (too_long)',
     )
     expect(Ledger.notKept(new Map())).toBeUndefined()
+
+    await ui.unmount()
+  })
+
+  test('a record the plugin itself let go is counted in the same line, by why: work organisation, or a label that stayed', async ($, on) => {
+    const branch = decision({ about: 'work', content: 'Absence handling is split out into a follow-up PR.', anchors: [{ path: FILE }] })
+    const slot = decision({ about: 'code', content: "The stack's L4 keeps the old retry behaviour.", anchors: [{ path: FILE }] })
+
+    frame(on)
+    const set = stage(on, { replies: [verdict({ records: [LOCK, branch, slot] }), JSON.stringify({ drop: true })] })
+
+    await $.session.start(START)
+    await turn($, set, dev('split the retry work'), claude('- L1: the lock\n- L4: the retries', edit(FILE)))
+
+    expect(set.of('remember').map(args => args.content), 'neither is sent').toEqual([LOCK.content])
+    expect(await shown($)).not.toMatch('not kept')
+
+    await press($, 'ok')
+    await $.command.run(COMMAND)
+
+    const ui = await pane($)
+
+    expect(await ui.lines()).toContain(
+      '1 not kept — about how this work was organised, not the code · 1 not kept — named something by a label only this conversation knew',
+    )
 
     await ui.unmount()
   })

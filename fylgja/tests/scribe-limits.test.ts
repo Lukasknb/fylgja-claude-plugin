@@ -768,7 +768,7 @@ describe('a conversation that is rewritten or started over', () => {
     let id = 'aaaaaaaa-0000-4000-8000-000000000001'
     const ask = (n: number) =>
       verdict({
-        records: [decision({ content: `Use option ${n}.`, detail: '', reason_status: 'not_stated' })],
+        records: [decision({ content: `Keep ${n} upload workers.`, detail: '', reason_status: 'not_stated' })],
         question: { form: 'reason', record: 0, options: ['a', 'b'] },
       })
     const set = stage(on, { replies: [ask(1), ask(2), ask(3), ask(4)], sessionId: () => id })

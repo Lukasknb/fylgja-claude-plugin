@@ -450,6 +450,20 @@ describe('each event is noted where the thing happens, and sent when the turn en
     nothingPrivateIn(set)
   })
 
+  test('a record the plugin let go itself is counted by why, first reason first, and none of its words', async ($, on) => {
+    const work = decision({ about: 'work', content: 'Advisory locks go into a follow-up PR.' })
+    const slot = decision({ content: "The stack's L4 keeps Postgres advisory locks." })
+    const set = stage(on, { replies: [verdict({ records: [work, slot] }), '{"drop":true}'] })
+
+    await $.session.start(START)
+    await turn($, set, dev('split it up'), claude('- L1: the lock\n- L4: its callers', edit(FILE)))
+
+    expect(set.of('remember')).toEqual([])
+    expect(propsOf(set, 'look')).toMatchObject([{ ending: 'verdict', drafts_written: 0, drafts_dropped: 2, first_drop_reason: 'about_work' }])
+    expect(JSON.stringify(set.reports)).not.toMatch(/follow-up|stack|L4/)
+    nothingPrivateIn(set)
+  })
+
   for (const [what, words, code] of [
     ['a code this plugin does not list', 'refused:quota_of_tuesdays — try on a Wednesday', 'other'],
     ['no code at all', 'it could not be done', 'none'],
