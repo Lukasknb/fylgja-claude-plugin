@@ -13,6 +13,7 @@ import {
   rowOf,
   step,
   scene,
+  SESSION,
   token,
   UNSEEN,
   userMessage,
@@ -25,6 +26,8 @@ const NOTE = token('note', 'Another pasted label', NOTE_ID)
 const at = (...points: number[]) => String.fromCodePoint(...points)
 
 const FOUND = () => answer({ records: [meetingRecord()] })
+/** A lookup that answers with the meeting under the title it has when asked. */
+const FOUND_AS = (title: () => string) => () => answer({ records: [meetingRecord({ title: title() })] })
 const UNCONFIRMED = '[◉ meeting · 45ada8aa]'
 const VERIFIED = '[◉ "Engineering Retrospective" · 2026-09-30]'
 
@@ -376,6 +379,178 @@ describe('what is known, and for how long', () => {
       expect(started.calls.length).toBe(2)
     })
   }
+
+  // Where an organization manages Claude Code, the classic start of a
+  // cleared, resumed or branched conversation does not reach the plugin;
+  // the conversation's id changes all the same.
+  for (const what of ['a clear', 'a resume'] as const) {
+    test(`after ${what} Claude Code says nothing of, the changed id alone starts over: the row is unconfirmed, then looked up again`, async ($, on) => {
+      let id = idOf(1)
+      let title = 'Engineering Retrospective'
+      const started = scene(on, { resolve: FOUND_AS(() => title), sessionId: () => id })
+      await $.session.start(SESSION)
+      const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+      await asked($, started)
+
+      expect(await ui.find({ text: `engine: ${VERIFIED}` })).toBeDefined()
+
+      title = 'Renamed since'
+      id = what === 'a clear' ? idOf(2) : idOf(3)
+      await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } })
+
+      expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'nothing carries over').toBeDefined()
+
+      await asked($, started)
+
+      expect(await ui.find({ text: 'engine: [◉ "Renamed since" · 2026-09-30]' })).toBeDefined()
+      expect(started.calls.length).toBe(2)
+    })
+  }
+
+  test('the classic start and the changed id start over once, whichever is seen first', async ($, on) => {
+    let id = idOf(1)
+    const started = scene(on, { resolve: FOUND, sessionId: () => id })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+    await asked($, started)
+
+    // The classic start first: it starts over and looks the row up again, and the prompt after it finds the id it knows.
+    id = idOf(2)
+    await $.classic.SessionStart({ source: 'clear', session_id: id })
+
+    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'started over').toBeDefined()
+
+    await asked($, started)
+
+    expect(await ui.find({ text: `engine: ${VERIFIED}` }), 'looked up again').toBeDefined()
+    expect(started.calls.length).toBe(2)
+
+    await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } })
+    await asked($, started)
+
+    expect(await ui.find({ text: `engine: ${VERIFIED}` }), 'what the new conversation knows stays').toBeDefined()
+    expect(started.calls.length).toBe(2)
+
+    // The id first: the prompt starts over, and the classic start that comes after it drops nothing the new conversation learned.
+    id = idOf(3)
+    await $.prompt.submit({ text: 'and on', wait: false, origin: { kind: 'composer' } })
+
+    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'started over').toBeDefined()
+
+    await asked($, started)
+
+    expect(started.calls.length).toBe(3)
+
+    await $.classic.SessionStart({ source: 'clear', session_id: id })
+    await asked($, started)
+
+    expect(await ui.find({ text: `engine: ${VERIFIED}` }), 'what the new conversation knows stays').toBeDefined()
+    expect(started.calls.length).toBe(3)
+  })
+
+  test('a classic start that comes before the id the session reads has moved on starts over once', async ($, on) => {
+    let id = idOf(1)
+    const started = scene(on, { resolve: FOUND, sessionId: () => id })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+    await asked($, started)
+
+    await $.classic.SessionStart({ source: 'clear', session_id: idOf(2) })
+
+    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'started over').toBeDefined()
+
+    await asked($, started)
+
+    expect(started.calls.length).toBe(2)
+
+    // The session still reads the id it had: that is the conversation just left, not another one.
+    await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } })
+    await asked($, started)
+
+    expect(await ui.find({ text: `engine: ${VERIFIED}` }), 'what the new conversation knows stays').toBeDefined()
+
+    id = idOf(2)
+    await $.prompt.submit({ text: 'and on', wait: false, origin: { kind: 'composer' } })
+    await asked($, started)
+
+    expect(await ui.find({ text: `engine: ${VERIFIED}` }), 'nor once the id has caught up').toBeDefined()
+    expect(started.calls.length).toBe(2)
+  })
+
+  test('a resume back to the conversation before, seen by its id alone, starts over again', async ($, on) => {
+    let id = idOf(1)
+    const started = scene(on, { resolve: FOUND, sessionId: () => id })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+    await asked($, started)
+
+    for (const [next, calls] of [[idOf(2), 2], [idOf(1), 3]] as const) {
+      id = next
+      await $.prompt.submit({ text: 'where were we', wait: false, origin: { kind: 'composer' } })
+
+      expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), `started over for ${next}`).toBeDefined()
+
+      await asked($, started)
+
+      expect(started.calls.length).toBe(calls)
+    }
+  })
+
+  test('a classic start of one conversation, then a return to the one before seen by its id alone, starts over each time', async ($, on) => {
+    let id = idOf(1)
+    const started = scene(on, { resolve: FOUND, sessionId: () => id })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+    await asked($, started)
+
+    id = idOf(2)
+    await $.classic.SessionStart({ source: 'resume', session_id: id })
+
+    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` })).toBeDefined()
+
+    await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } })
+    await asked($, started)
+
+    expect(started.calls.length).toBe(2)
+
+    id = idOf(1)
+    await $.prompt.submit({ text: 'back again', wait: false, origin: { kind: 'composer' } })
+
+    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'started over for the one before').toBeDefined()
+
+    await asked($, started)
+
+    expect(started.calls.length).toBe(3)
+  })
+
+  test('an id that cannot be read starts nothing over and holds no prompt back; the next one read does', async ($, on) => {
+    let id = idOf(1)
+    let isReadable = true
+    const started = scene(on, {
+      resolve: FOUND,
+      sessionId: () => {
+        if (!isReadable) {
+          throw new Error('no id today')
+        }
+
+        return id
+      },
+    })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
+    await asked($, started)
+
+    id = idOf(2)
+    isReadable = false
+
+    expect(await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } })).toMatchObject({ text: 'next' })
+    expect(await ui.find({ text: `engine: ${VERIFIED}` })).toBeDefined()
+
+    isReadable = true
+    await $.prompt.submit({ text: 'and on', wait: false, origin: { kind: 'composer' } })
+
+    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'started over').toBeDefined()
+  })
 
   test('an answer asked for before a clear is not kept after it', async ($, on) => {
     let delay = 500

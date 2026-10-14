@@ -8,7 +8,7 @@ import { HELD_DROPPED, MAX_HELD } from '../hooks/scribe/scribe'
 import type { Written } from '../hooks/scribe/types'
 import { GIVEN_UP } from '../hooks/scribe/prompt'
 import { answer, idOf, NEEDS_SIGN_IN } from './fixtures'
-import { claude, decision, dev, fact, finish, MARK, NOTHING, press, pressTwice, QUIET, ROOT, send, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { claude, decision, dev, EMPTY, fact, finish, MARK, NOTHING, press, pressTwice, QUIET, ROOT, send, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 import type { Stage, StageOptions } from './scribe-fixtures'
 
 const FILE = 'src/queue/lock.ts'
@@ -491,6 +491,33 @@ describe('what a compacted conversation is given', () => {
       expect([...set.kept.values()].some(value => JSON.stringify(value).includes('Redis lock')), 'and no word of a record is on this machine').toBe(false)
     })
   }
+
+  // Where an organization manages Claude Code, the classic start of the new conversation never reaches the plugin.
+  test('after a /clear Claude Code says nothing of, the changed id alone starts over: the context is asked for again and lists nothing', async ($, on) => {
+    let id = idOf(201)
+    const engine = beneath(on)
+    const set = stage(on, { replies: [TWO, NOTHING], sessionId: () => id })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'ok')
+    await compact($, set)
+
+    expect(await block($)).toBe(BOTH)
+
+    id = idOf(202)
+    set.rows.splice(0, set.rows.length)
+
+    expect(await context($), 'the next time it is asked for').toEqual(OWN)
+    expect(engine.asks()).toBe(2)
+    // A new conversation does not change who is signed in: the mark stays.
+    expect(await shown($)).toBe(`${EMPTY}${MARK}`)
+
+    await turn($, set, ...MORE)
+    await compact($, set)
+
+    expect(await context($), 'nor after a compaction of the new conversation').toEqual(OWN)
+  })
 })
 
 describe('what Scribe holds across a compaction', () => {

@@ -12,7 +12,7 @@ import { ARMED_KEY, PANE, RINGLESS } from '../hooks/window'
 import { answer, idOf, NEEDS_SIGN_IN } from './fixtures'
 import { all, frame, pane, ringOn, scrolled } from './window-fixtures'
 import type { Node } from './window-fixtures'
-import { claude, decision, dev, edit, EMPTY, MARK, NOTHING, press, pressTwice, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
+import { claude, decision, dev, edit, EMPTY, MARK, NOTHING, press, pressTwice, QUIET, shown, stage, START, turn, typing, verdict } from './scribe-fixtures'
 
 const FILE = 'src/queue/lock.ts'
 const WORK = [dev('lock the retry queue with redis, and cap the retries'), claude('Done.', edit(FILE))]
@@ -312,6 +312,42 @@ describe('the mark opens the window', () => {
     const { seen } = await opened($, on)
 
     await $.classic.SessionStart({ source: 'clear' })
+
+    expect(seen.closes).toEqual([PANE])
+
+    await $.command.run(COMMAND)
+
+    const ui = await pane($)
+
+    expect(await ui.lines(), 'and what it listed was the conversation’s before').toContain(Ledger.QUIET.empty)
+
+    await ui.unmount()
+  })
+
+  test('a conversation that goes on under another id closes it, though Claude Code says nothing of its start', async ($, on) => {
+    let id = idOf(301)
+    const { seen } = await opened($, on, { sessionId: () => id })
+
+    // The command is the first thing of the new conversation the plugin sees.
+    id = idOf(302)
+    await $.command.run(COMMAND)
+
+    expect(seen.closes).toEqual([PANE])
+
+    const ui = await pane($)
+
+    expect(await ui.lines(), 'and what it listed was the conversation’s before').toContain(Ledger.QUIET.empty)
+
+    await ui.unmount()
+  })
+
+  test('typing into the box of a conversation under another id closes it, beside the edit', async ($, on) => {
+    let id = idOf(301)
+    const { seen, set } = await opened($, on, { sessionId: () => id })
+
+    id = idOf(303)
+    await typing($, set, 'w')
+    await set.clock.settle()
 
     expect(seen.closes).toEqual([PANE])
 

@@ -903,8 +903,9 @@ async function identityOf(host: ScribeHost, scribe: Scribe): Promise<Identity | 
     hasShown: hasShown === true,
   }
 
-  // The same session after a `/clear` has had its questions and its tells;
-  // a new one starts with none.
+  // A `/clear`, a resume or a fork goes on under another session id, and
+  // starts with no questions or tells. A start over under the same id (one
+  // Claude Code raised before its id moved on) keeps the ones it has had.
   if (carry?.sessionId === sessionId) {
     Object.assign(band, carry.tally)
   } else if (carry !== undefined) {
@@ -2551,15 +2552,14 @@ export async function agentStepped(
  * Puts a look behind the one under way, so that one runs at a time: two at
  * once would read the same rows as new. Each reads where the rows not yet
  * seen begin when its own turn comes, so it has what the look before it
- * left and nothing that look went through. One that waited through the
- * conversation starting over is not run.
+ * left and nothing that look went through. One whose conversation started
+ * over since `epoch`, the one it was begun in, is not run.
  *
  * A look always ends, by its own limits; one that somehow did not is waited
  * for no longer than two looks may take, and then no longer stands in the
  * way of the ones behind it.
  */
-function inTurn(host: ScribeHost, scribe: Scribe, look: () => Promise<void>): Promise<void> {
-  const { epoch } = scribe
+function inTurn(host: ScribeHost, scribe: Scribe, epoch: number, look: () => Promise<void>): Promise<void> {
   const run = (): Promise<void> => (epoch === scribe.epoch ? look() : Promise.resolve())
   const mine = (scribe.looking === null ? Promise.resolve() : within(host, scribe.looking, 2 * WAKE_DEADLINE_MS)).then(run)
   const ended = mine.catch(() => undefined)
@@ -2604,6 +2604,7 @@ export async function stepping(host: ScribeHost, scribe: Scribe): Promise<void> 
     return
   }
 
+  const { epoch } = scribe
   const who = await reader(host, scribe)
 
   if (who === null) {
@@ -2614,7 +2615,7 @@ export async function stepping(host: ScribeHost, scribe: Scribe): Promise<void> 
 
   const cut = scribe.cut.signal
 
-  await inTurn(host, scribe, () => look(host, scribe, who, cut))
+  await inTurn(host, scribe, epoch, () => look(host, scribe, who, epoch, cut))
 }
 
 /**
@@ -2647,6 +2648,8 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   scribe.cut?.abort()
   scribe.cut = null
 
+  // The conversation the turn was in: one that starts over while Scribe gets ready is not looked at under it.
+  const { epoch } = scribe
   let isRead = true
 
   try {
@@ -2672,7 +2675,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
       return
     }
 
-    await inTurn(host, scribe, () => look(host, scribe, who))
+    await inTurn(host, scribe, epoch, () => look(host, scribe, who, epoch))
   } finally {
     if (isRead) {
       scribe.hasAnsweredInTurn = false
@@ -2700,7 +2703,7 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
  *   it leaves its rows unread and the answer as one no look was begun for:
  *   the turn's end looks at them as if this look had never been tried.
  */
-async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: AbortSignal): Promise<void> {
+async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: number, cut?: AbortSignal): Promise<void> {
   const isInside = cut !== undefined
 
   if (cut?.aborted === true) {
@@ -2708,6 +2711,12 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: Abort
   }
 
   const rows = await host.rows()
+
+  // Started over while the rows were read: they, and `who`, may be another conversation's.
+  if (epoch !== scribe.epoch) {
+    return
+  }
+
   const from = startOf(scribe, rows)
   const { held, compactions } = scribe
   // What a compaction took away unread comes first: it is older than every row that is there now.
@@ -2724,7 +2733,7 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: Abort
     }
   }
 
-  const { epoch, turn } = scribe
+  const { turn } = scribe
   const hadAsked = scribe.band.hasAskedThisTurn
   // What a look inside a turn puts back when it does not go all the way.
   const found: Found = {
@@ -2743,7 +2752,7 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, cut?: Abort
   let isWhole = false
 
   try {
-    isWhole = await looked(host, scribe, who, { rows, from, unseen, compactions, seen, isAnswered, found, cut })
+    isWhole = await looked(host, scribe, who, { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut })
   } finally {
     if (isInside && !isWhole && epoch === scribe.epoch) {
       if (compactions === scribe.compactions) {
@@ -2819,6 +2828,8 @@ type Found = Pick<Scribe, 'consumed' | 'mark' | 'seam' | 'hasActed' | 'hasPrompt
 
 /** What a look has in hand once it has read the rows. */
 type Sight = {
+  /** The conversation the look was begun in: what it comes to is let go once that one has started over. */
+  epoch: number
   rows: readonly Row[]
   from: number
   /** The rows this look reads: what a compaction took away unread, then the rows from `from` on. */
@@ -2837,7 +2848,7 @@ type Sight = {
  * what the verdict held with every call to Fylgja getting through.
  */
 async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Sight): Promise<boolean> {
-  const { rows, from, unseen, compactions, seen, isAnswered, found, cut } = sight
+  const { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut } = sight
   const isInside = cut !== undefined
   // Whether the turn has ended since: read anew each time, as it changes while this waits.
   const isStopped = (): boolean => cut?.aborted === true
@@ -2970,6 +2981,14 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
   }
 
   const now = await host.now()
+
+  // The conversation started over while the files were looked up: what
+  // these rows hold is the one before's, and nothing of it goes into the
+  // new one or to a model.
+  if (epoch !== scribe.epoch) {
+    return false
+  }
+
   // What the developer decided without typing: an answer to a question put
   // to them, a plan approved, a plan or a call turned down with a word. Kept
   // with their prompts, each once, and enough to make the turn theirs: a
@@ -3018,8 +3037,6 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
     scribe.wakeTimes.push(now)
 
     try {
-      const { epoch } = scribe
-
       // The look is under way from here: the mark says it is reading.
       host.mark()
 

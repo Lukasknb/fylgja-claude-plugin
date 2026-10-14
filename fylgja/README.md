@@ -865,6 +865,13 @@ that id.
   conversation Claude Code saves, so there is nothing to pick up again.
   What such a conversation still knows of your decisions is what its
   own rows and its summary hold; the records are in Fylgja.
+- **Where an organization manages Claude Code.** There Claude Code does
+  not run a plugin's hooks on the start of a cleared, resumed or branched
+  conversation. The plugin starts over all the same, when it next sees
+  the conversation under another id: as you type, send a prompt or open
+  its window, and before the context is given to Claude. The titles of
+  the rows on screen are then asked when the next turn begins. Who is
+  signed in is not asked again: a new conversation does not change it.
 
 ### Turning Scribe off
 

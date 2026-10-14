@@ -80,6 +80,8 @@ export type SceneOptions = {
   connect?: (clock: MockClock) => Record<string, unknown> | Promise<Record<string, unknown>>
   /** What `resolve` answers. Without it, and for any other tool, the call rejects. */
   resolve?: (args: Record<string, unknown>, clock: MockClock) => unknown
+  /** The conversation's id, read on every call; the test session's own without it. */
+  sessionId?: () => string
 }
 
 /**
@@ -125,6 +127,12 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
   // plugin looks at both before it trusts Fylgja's connection.
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('fs.stat', () => ({ deny: 'no such file' }))
+
+  if (options.sessionId !== undefined) {
+    const id = options.sessionId
+
+    on('session.id', () => ({ value: id() }))
+  }
 
   on('mcp.connect', async () => {
     connects += 1

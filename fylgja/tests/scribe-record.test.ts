@@ -469,6 +469,53 @@ describe('Scribe records', () => {
     expect(set.of('recall').every(args => args.repo === REPO)).toBe(true)
   })
 
+  test('after a resume Claude Code says nothing of, its first prompt starts over: what is written after it carries the new id', async ($, on) => {
+    let id = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const set = stage(on, {
+      replies: [verdict({ records: [decision()] }), verdict({ records: [decision({ content: 'Use B.' })] })],
+      sessionId: () => id,
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    id = 'cccccccc-0000-4000-8000-000000000003'
+    set.rows.length = 0
+    await turn($, set, ...TALK)
+
+    expect(set.of('remember').map(args => args.session_id)).toEqual([
+      'aaaaaaaa-0000-4000-8000-000000000001',
+      'cccccccc-0000-4000-8000-000000000003',
+    ])
+  })
+
+  test('a look at a turn’s end that the conversation starts over under, while it looks up the files, asks no model and writes nothing', async ($, on) => {
+    let id = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const set = stage(on, {
+      replies: [verdict({ records: [decision()] })],
+      sessionId: () => id,
+      tools: {
+        recall: async (_args, clock) => {
+          await clock.sleep(500)
+
+          return answer({ repo: REPO, facts: [] })
+        },
+      },
+    })
+
+    await $.session.start(START)
+
+    const ended = turn($, set, ...TALK)
+
+    await set.clock.settle()
+    id = 'dddddddd-0000-4000-8000-000000000004'
+    await $.prompt.submit({ text: 'where were we', wait: false, origin: { kind: 'composer' } })
+    await set.clock.advance(500)
+    await ended
+
+    expect(set.asked, 'no model is asked about the conversation that was left').toEqual([])
+    expect(set.of('remember')).toEqual([])
+  })
+
   test('records written after the conversation started over carry the session’s id as it is then', async ($, on) => {
     let id = 'aaaaaaaa-0000-4000-8000-000000000001'
     const set = stage(on, {

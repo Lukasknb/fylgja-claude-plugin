@@ -3,8 +3,8 @@ import type { Engine } from 'claude-code/testing'
 
 import { standsIn } from '../hooks/project'
 import { TWIN_STATUS } from '../hooks/session'
-import { answer, MEETING_ID, meetingRecord, token } from './fixtures'
-import { claude, decision, dev, edit, ROOT, stage, START, step, turn, verdict } from './scribe-fixtures'
+import { answer, idOf, MEETING_ID, meetingRecord, token } from './fixtures'
+import { claude, decision, dev, edit, ROOT, send, stage, START, step, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 
 const WORK = [dev('make the mailer retry'), claude('Retrying three times now.', edit('src/mail/send.ts'))]
@@ -196,6 +196,32 @@ describe('a project that leaves Fylgja to the plugin', () => {
     await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
 
     expect(set.calls.length).toBe(calls)
+    expect(set.statuses.at(-1)).toBe(TWIN_STATUS)
+  })
+
+  // Where Claude Code passes its classic start over, the id alone says the conversation is another.
+  test('a conversation resumed from a project with such an entry, seen by its id alone, stays out from its first step on', async ($, on) => {
+    let cwd = ROOT
+    let id = idOf(1)
+    const set = stage(on, {
+      declared: DECLARED,
+      files: { '/elsewhere/.mcp.json': entry('plugin:fylgja:fylgja', theirs('https://kb.example/mcp')) },
+      tools: RESOLVING,
+      cwdNow: () => cwd,
+      sessionId: () => id,
+    })
+
+    await $.session.start(START)
+    await chip($, set)
+
+    const calls = set.calls.length
+
+    cwd = '/elsewhere/repo'
+    id = idOf(2)
+    await send($, REFERENCE)
+    await chip($, set)
+
+    expect(set.calls.length, 'the reference is not asked about there').toBe(calls)
     expect(set.statuses.at(-1)).toBe(TWIN_STATUS)
   })
 })

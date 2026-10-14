@@ -187,6 +187,15 @@ function refresh($: EngineInterface, session: Session.Session, scribe: Scribe.Sc
   }
 }
 
+/** The conversation's id, or undefined where it cannot be read. */
+async function idOf($: EngineInterface): Promise<string | undefined> {
+  try {
+    return await $.session.id()
+  } catch {
+    return undefined
+  }
+}
+
 /** The mark's own key: pressing the mark opens the window of what was kept. */
 const MARK_KEY = 'kept'
 
@@ -274,14 +283,138 @@ async function fitFound($: EngineInterface, scribe: Scribe.Scribe, win: Win): Pr
 async function closeWindow($: EngineInterface, scribe: Scribe.Scribe, win: Win): Promise<void> {
   Ledger.closed(scribe.ledger)
   Search.closed(win.search)
-  // The mark is a key again.
-  $.ui.invalidate('ui.render')
+
+  // The mark is a key again, when it is next drawn if not now.
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // The window is closed all the same.
+  }
 
   try {
     await $.ui.close({ id: PANE })
   } catch {
     // Kept open by another plugin's hook: it is theirs to say, and the next press closes it.
     noted(scribe, win, true)
+  }
+}
+
+/**
+ * Which conversation what the plugin holds is of, by its id: a /clear, a
+ * resume or a branch goes on under another id in the same session.
+ *
+ * `seen` is a conversation started over because its id was seen to change
+ * before Claude Code said that it began; its own start then drops nothing
+ * more. `left` is the id Claude Code's own start moved on from, while the
+ * id read from the session may still be that one: read then, it is not
+ * another conversation.
+ */
+type Conversation = { id: string | undefined; seen: string | undefined; left: string | undefined }
+
+/** Everything the plugin holds of the conversation it is in. */
+type Held = { session: Session.Session; draft: Draft.Draft; scribe: Scribe.Scribe; win: Win; conversation: Conversation }
+
+/**
+ * What was known of the conversation before is dropped: the references
+ * looked up, the draft, what Scribe held of it and the context that listed
+ * its records. The rows that are still on screen, or come back, are drawn
+ * again and have their references noted for the next hook that may ask
+ * Fylgja. Who is signed in stands: a new conversation does not change it.
+ *
+ * What is held is dropped first, all of it. Then Claude Code is asked to
+ * draw again, each ask on its own, so one it turns down leaves the others.
+ * It never fails.
+ */
+async function startOver($: EngineInterface, held: Held): Promise<void> {
+  const { session, draft, scribe, win } = held
+  const wasListed = scribe.noted !== undefined
+
+  Session.startOver(session)
+  Draft.startOver(draft)
+  // The context of a compacted conversation listed its records; the one that begins now lists none.
+  scribe.noted = undefined
+  Scribe.startOver(scribe)
+
+  if (wasListed) {
+    try {
+      $.ui.invalidate('prompt.context')
+    } catch {
+      // Asked for again after the next compaction, when it is all there is to list.
+    }
+  }
+
+  // What the window listed was the conversation's before. The search view stays up, and lets go of what it found when it is next looked at.
+  if (scribe.ledger.isOpen) {
+    await closeWindow($, scribe, win)
+  }
+
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // The rows are drawn again when Claude Code next draws them.
+  }
+}
+
+/**
+ * Starts over when the conversation is another than the one last seen.
+ * Claude Code says that a cleared, resumed or branched conversation began
+ * only through a classic hook, and passes that hook over where an
+ * organization manages it; the id it reads changes all the same. It is read
+ * where the conversation is next touched: the box typed into, a prompt
+ * sent, its context asked for, a command of the plugin's.
+ */
+async function caughtUp($: EngineInterface, held: Held): Promise<boolean> {
+  const id = await idOf($)
+  const { conversation } = held
+  const before = conversation.id
+
+  if (id === undefined || id === conversation.left) {
+    return false
+  }
+
+  if (id === before) {
+    // The id read has caught up with the one Claude Code's start gave.
+    conversation.left = undefined
+
+    return false
+  }
+
+  conversation.id = id
+
+  // The first id read is the conversation the plugin started in.
+  if (before === undefined) {
+    return false
+  }
+
+  conversation.seen = id
+
+  // A resumed conversation may be another directory's: its project is looked at before Fylgja is next asked anything.
+  try {
+    Session.located(held.session, await $.session.cwd())
+  } catch {
+    // Looked at again when the session is next found to have moved.
+  }
+
+  await startOver($, held)
+
+  return true
+}
+
+/**
+ * After a start over, in a hook that Claude Code waits on: who is signed in,
+ * and the references the rows on screen noted, are asked about for a
+ * moment. A start over anywhere else leaves them to the next such hook.
+ */
+async function vouch($: EngineInterface, held: Held): Promise<void> {
+  const live = open()
+
+  try {
+    const host = hostOf($, held.session, live)
+
+    await briefly(host.after, flush(host, held.session), SHORT_WAIT_MS)
+  } finally {
+    close(live)
+    refresh($, held.session, held.scribe)
   }
 }
 
@@ -336,8 +469,8 @@ const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
  * reference pasted into the prompt box is shown there as a short chip, and
  * the one hook that sees a prompt on its way to Claude puts the reference
  * back exactly as it was pasted. That hook only works on the text in hand:
- * it asks nothing of Fylgja or of Claude Code. Claude opens a reference with
- * Fylgja's tools when it chooses to.
+ * it asks nothing of Fylgja, and of Claude Code only which conversation it
+ * is in. Claude opens a reference with Fylgja's tools when it chooses to.
  *
  * The one lookup, a reference's title for its chip in the message row, is
  * noted by the row that shows it and asked by the next hook Claude Code
@@ -386,12 +519,14 @@ export function register(on: On, options: PluginOptions = {}): void {
   const lines: string[] = []
   // The calls to Fylgja of a look that outlived the hook it began in.
   const calls = line<Caller>()
+  const held: Held = { session, draft, scribe, win, conversation: { id: undefined, seen: undefined, left: undefined } }
 
   on('session.start', async ($, e, next) => {
     Session.startOver(session)
     Session.located(session, e.cwd)
     Session.revet(session)
     Scribe.started(scribe, e.isInteractive, e.surface)
+    held.conversation.id = (await idOf($)) ?? held.conversation.id
 
     const started = await next(e)
     const live = open()
@@ -435,6 +570,10 @@ export function register(on: On, options: PluginOptions = {}): void {
   // Typed by the developer, so the window opens. It answers with no line of
   // its own: a command's line is read by Claude, and the window says it all.
   on('command.run', { command: 'fylgja-kept' }, async $ => {
+    if (await caughtUp($, held)) {
+      await vouch($, held)
+    }
+
     await openKept($, scribe, win)
 
     return {}
@@ -448,6 +587,10 @@ export function register(on: On, options: PluginOptions = {}): void {
   // of its own either: what was found is the developer's to read, not Claude's.
   on('command.run', { command: 'fylgja-search' }, async ($, e) => {
     const query = Search.queryOf(e.args)
+
+    if (await caughtUp($, held)) {
+      await vouch($, held)
+    }
 
     Ledger.closed(scribe.ledger)
     win.which = 'search'
@@ -475,40 +618,34 @@ export function register(on: On, options: PluginOptions = {}): void {
     return {}
   })
 
-  // A cleared, resumed or branched conversation starts over without a fresh
-  // session start: what was known is dropped, and the rows that are still
-  // on screen, or come back, have their references asked about again.
+  // A cleared, resumed or branched conversation, as Claude Code says it
+  // began where it runs this hook, under the id the event names: it starts
+  // over unless the change of its id was seen first. Who is signed in is
+  // asked again either way, along with the rows on screen, while the hook
+  // is waited on, so that costs the mark nothing. Where Claude Code passes
+  // this event over, the change of the id alone starts it over (see
+  // `caughtUp`).
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
-    Session.startOver(session)
+    const { conversation } = held
+    const id = e.session_id === '' ? undefined : e.session_id
+    const isSeen = id !== undefined && id === conversation.seen
+
+    conversation.seen = undefined
+
+    if (id !== undefined && id !== conversation.id) {
+      conversation.left = conversation.id
+      conversation.id = id
+    }
+
     Session.revet(session)
-    Draft.startOver(draft)
 
-    // The context of a compacted conversation listed its records; the one that begins now lists none.
-    if (scribe.noted !== undefined) {
-      scribe.noted = undefined
-      $.ui.invalidate('prompt.context')
+    if (!isSeen) {
+      await startOver($, held)
     }
-
-    Scribe.startOver(scribe)
-
-    // What the window listed was the conversation's before. The search view stays up, and lets go of what it found when it is next looked at.
-    if (scribe.ledger.isOpen) {
-      await closeWindow($, scribe, win)
-    }
-
-    $.ui.invalidate('ui.render')
 
     const started = await next(e)
-    const live = open()
 
-    try {
-      const host = hostOf($, session, live)
-
-      await briefly(host.after, flush(host, session), SHORT_WAIT_MS)
-    } finally {
-      close(live)
-      refresh($, session, scribe)
-    }
+    await vouch($, held)
 
     return started
   }).catch(($, e, next) => next(e))
@@ -574,6 +711,9 @@ export function register(on: On, options: PluginOptions = {}): void {
   // signed out, with Scribe off and in a session that kept nothing there is
   // no such block, and whatever comes from beneath is handed on as it came.
   on('prompt.context', async ($, e, next) => {
+    // A conversation that began since the records were listed lists none of them.
+    await caughtUp($, held)
+
     const below = await next(e)
     const live = open()
 
@@ -589,6 +729,9 @@ export function register(on: On, options: PluginOptions = {}): void {
   }).catch(($, e, next) => next(e))
 
   on('prompt.edit', async ($, e, next) => {
+    // Typing is not held for it: the conversation starts over beside the edit, if it is another one.
+    void caughtUp($, held)
+
     const box = await next(e)
 
     // Whether the developer is typing; what waits above the prompt comes up
@@ -623,10 +766,14 @@ export function register(on: On, options: PluginOptions = {}): void {
 
   // A prompt entered at the prompt box only; no other prompt passed through
   // it, so no other holds a chip. Everything before `next` is work on the
-  // text in hand, so the prompt is never made to wait; if it fails, the
-  // prompt goes on as it was entered. Nothing is forgotten here: a prompt
-  // brought back into the box has its chips, and is sent with its references.
-  on('prompt.submit', ($, e, next) => {
+  // text in hand and a read of the conversation's id, so the prompt is
+  // never made to wait on Fylgja; if it fails, the prompt goes on as it was
+  // entered. Nothing is forgotten here: a prompt brought back into the box
+  // has its chips, and is sent with its references. The first prompt of
+  // another conversation is the first of what Scribe holds of it.
+  on('prompt.submit', async ($, e, next) => {
+    await caughtUp($, held)
+
     if (e.origin.kind !== 'composer') {
       // A prompt sent from the person's phone or browser is theirs too.
       if (isOwnPrompt(e.origin)) {
