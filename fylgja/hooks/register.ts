@@ -807,10 +807,8 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     if (!isSeen) {
       await startOver($, held)
-
-      if (id !== undefined) {
-        Scribe.followed(scribe, id)
-      }
+      // What the conversation that begins kept before is picked up from its own log: none after a `/clear`.
+      Scribe.followed(scribe, id, e.source === 'clear' || e.source === 'resume' || e.source === 'fork' ? e.source : undefined)
     }
 
     const started = await next(e)

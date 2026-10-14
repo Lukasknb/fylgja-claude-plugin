@@ -866,8 +866,17 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
 - **Kept on this machine, by Scribe:** the ids of at most 500 records you
   marked `Knew this`, two counters for holding back after ignored offers,
   whether Scribe is switched off, and whether it has shown anything yet.
-  Ids, numbers and switches; never a word of a prompt, a reply, a file, a
-  plan or a record. The plugin writes no file of its own. Scribe writes
+  And a session log of each conversation, so that a plugin loaded again
+  for it (`/reload-plugins`, `claude --resume`, a background job) goes on
+  where it was: the records Scribe kept, as Fylgja holds them, the
+  question waiting, what waits to be sent, the paths of the files the
+  session touched, how far Scribe has read, and hashes of your prompts.
+  Never a word of a prompt, a reply, a plan or a file's contents, and
+  nothing of it is sent anywhere. It is in the plugin's own store
+  (`~/.claude/plugins/store/fylgja*.json`, keys `scribe.log.*` and
+  `scribe.logs`), for at most 25 conversations and 30 days; the plugin's
+  README says what it holds and how to clear it. The plugin writes no
+  file of its own. Scribe writes
   five kinds of line to Claude Code's debug log, each at most once a
   session or an hour and each made of fixed words and a count: that its
   calls were refused, that the hour's share of looks is used up, that

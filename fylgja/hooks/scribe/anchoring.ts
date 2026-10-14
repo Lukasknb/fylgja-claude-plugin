@@ -177,23 +177,7 @@ export function codeAnchors(anchors: readonly Anchor[] | undefined): Anchor[] {
 /** The kinds of record that are about code, and so wait for it: a correction is about how Claude works, and waits for nothing. */
 const ABOUT_CODE: ReadonlySet<string> = new Set(['decision', 'gotcha'])
 
-/**
- * Whether a record is waiting for its code: a decision or a gotcha that
- * points at no code yet. A record picked up again after a reload says so
- * only where it was saved so, since its anchors are not known then.
- */
-export function isWaiting(record: {
-  kind: string
-  anchors?: readonly Anchor[]
-  isPartial?: true
-  waiting?: true
-  outcome?: string
-}): boolean {
-  if (!ABOUT_CODE.has(record.kind) || record.outcome === 'withdrawn') {
-    return false
-  }
-
-  return record.isPartial === true && (record.anchors ?? []).length === 0
-    ? record.waiting === true
-    : codeAnchors(record.anchors).length === 0
+/** Whether a record is waiting for its code: a decision or a gotcha that points at no code yet. */
+export function isWaiting(record: { kind: string; anchors?: readonly Anchor[]; outcome?: string }): boolean {
+  return ABOUT_CODE.has(record.kind) && record.outcome !== 'withdrawn' && codeAnchors(record.anchors).length === 0
 }

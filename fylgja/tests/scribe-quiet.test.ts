@@ -629,7 +629,7 @@ describe('Scribe fails quietly', () => {
 })
 
 describe('what Scribe keeps', () => {
-  test('after a whole session, the machine holds ids, counters and switches, and nothing anyone wrote', async ($, on) => {
+  test('after a whole session, the machine holds ids, counters, switches and the records the session kept, and nothing anyone said', async ($, on) => {
     const reasonless = decision({ content: 'Use SECRET-CONTENT-B.', detail: '', reason_status: 'not_stated' })
     const set = stage(on, {
       replies: [
@@ -654,23 +654,27 @@ describe('what Scribe keeps', () => {
     await turn($, set, dev('SECRET-PROMPT-THREE'), claude('SECRET-REPLY-THREE', edit(FILE)))
     await set.clock.advance(30_000)
 
-    expect([...set.kept.keys()].sort()).toEqual([
+    const log = [...set.kept.keys()].filter(key => key.startsWith('scribe.log.'))
+
+    expect([...set.kept.keys()].filter(key => !log.includes(key)).sort()).toEqual([
       'fylgja.account',
       'scribe.hasShown',
       'scribe.known',
-      `scribe.list.${SESSION_ID}`,
-      'scribe.lists',
+      'scribe.logs',
+      'scribe.salt',
       'scribe.skip',
       'scribe.typedPast',
     ])
+    expect(log.map(key => key.slice(0, key.lastIndexOf('.'))), 'one entry of this conversation\'s log').toEqual([`scribe.log.${SESSION_ID}`])
     expect(set.kept.get('scribe.known')).toEqual([idOf(1)])
-    // Which records the conversation kept: their ids and fixed words, under the conversation's own key.
-    expect((set.kept.get(`scribe.list.${SESSION_ID}`) as { records: unknown[] }).records).toEqual([
-      { id: idOf(101), kind: 'decision', outcome: 'created', waiting: true },
-      { id: idOf(102), kind: 'decision', outcome: 'created', waiting: true },
-    ])
-    expect(set.kept.get('scribe.lists')).toEqual([SESSION_ID])
-    expect(JSON.stringify([...set.kept.entries()])).not.toMatch('SECRET')
+
+    const kept = JSON.stringify([...set.kept.entries()])
+
+    // The records the session kept, as Fylgja holds them: so a plugin loaded again lists them and goes on with them.
+    expect(kept).toMatch('SECRET-CONTENT-A')
+    expect(kept).toMatch('SECRET-DETAIL')
+    // Never a prompt, a reply, what Fylgja returned of anybody else's records, or what it offered.
+    expect(kept).not.toMatch(/SECRET-PROMPT|SECRET-REPLY|SECRET-FACT|SECRET-ORG/)
     expect(set.logged.length, 'the debug log got its one line').toBe(1)
     expect(JSON.stringify(set.logged)).not.toMatch('SECRET')
     expect(JSON.stringify(set.statuses)).not.toMatch('SECRET')

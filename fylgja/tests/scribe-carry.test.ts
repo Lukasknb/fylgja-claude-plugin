@@ -480,16 +480,15 @@ describe('what a compacted conversation is given', () => {
   })
 
   for (const source of ['resume', 'fork'] as const) {
-    test(`after a ${source} the context lists nothing: which records a session kept is not held anywhere but in the running plugin`, async ($, on) => {
+    test(`after a ${source} into another conversation the context lists nothing: what this one kept is its own`, async ($, on) => {
       beneath(on)
       const set = await kept($, on)
 
       await compact($, set)
       await block($)
-      await $.classic.SessionStart({ source })
+      await $.classic.SessionStart({ source, session_id: idOf(203) })
 
       expect(await context($)).toEqual(OWN)
-      expect([...set.kept.values()].some(value => JSON.stringify(value).includes('Redis lock')), 'and no word of a record is on this machine').toBe(false)
     })
   }
 

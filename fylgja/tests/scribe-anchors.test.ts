@@ -5,7 +5,7 @@ import { isAnchorable, isCode, isWaiting, isWorkingFile, statesOf } from '../hoo
 import { GIT_TIMEOUT_MS } from '../hooks/scribe/git'
 import { NO_CODE } from '../hooks/scribe/ledger'
 import { idOf } from './fixtures'
-import { claude, decision, dev, edit, gitStatus, NOTHING, ROOT, SESSION_ID, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { claude, decision, dev, edit, gitStatus, NOTHING, ROOT, stage, START, turn, use, verdict } from './scribe-fixtures'
 import { frame, pane } from './window-fixtures'
 
 const PLAN_FILE = 'docs/partial-confirmations/plan-l5-l6.md'
@@ -40,9 +40,6 @@ async function keptLines($: Engine): Promise<string[]> {
   return lines
 }
 
-const savedRecords = (set: { kept: Map<string, unknown> }) =>
-  (set.kept.get(`scribe.list.${SESSION_ID}`) as { records: unknown[] } | undefined)?.records
-
 describe('a plan or notes file is no place for a decision', () => {
   test('a decision anchored to the plan it was made in is written without it, and waits for its code', async ($, on) => {
     frame(on)
@@ -54,7 +51,11 @@ describe('a plan or notes file is no place for a decision', () => {
     expect(set.of('remember').length).toBe(1)
     expect(set.of('remember')[0]?.anchors, 'a plan git was never given is not where the decision lives').toBeUndefined()
     expect(await keptLines($)).toContain(`In: ${NO_CODE}`)
-    expect(savedRecords(set), 'saved as waiting for its code').toEqual([{ id: OWN, kind: 'decision', outcome: 'created', waiting: true }])
+
+    await set.clock.settle()
+    await $.session.start(START)
+
+    expect(await keptLines($), 'and still waits for it once the plugin is loaded again').toContain(`In: ${NO_CODE}`)
   })
 
   test('where git cannot be run, the plan is told by its name', async ($, on) => {
@@ -95,7 +96,11 @@ describe('a plan or notes file is no place for a decision', () => {
       { atom_id: OWN, op: 'fix', anchors: [{ path: OUTBOX }] },
     ])
     expect(await keptLines($)).toContain(`In: ${OUTBOX}`)
-    expect(savedRecords(set), 'no longer waiting').toEqual([{ id: OWN, kind: 'decision', outcome: 'created' }])
+
+    await set.clock.settle()
+    await $.session.start(START)
+
+    expect(await keptLines($), 'and names it once the plugin is loaded again').toContain(`In: ${OUTBOX}`)
   })
 
   test('an unrelated edit, a document, a file only read and more than three files are not taken as its place', async ($, on) => {

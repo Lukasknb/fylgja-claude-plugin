@@ -9,9 +9,12 @@
  * pressing "Tell Claude", which puts a note in the prompt box and sends
  * nothing.
  *
- * What it holds of the session and of records is held in the running plugin
- * alone. What it keeps on the machine is ids, counters and two switches,
- * among them the ids of the records each conversation kept (`saved.ts`).
+ * What it holds of the session is held in the running plugin. What it
+ * keeps on the machine is ids, counters and two switches, and the session
+ * log (`journal.ts`): of each conversation, the records it kept, the
+ * question waiting for an answer, what waits to be sent and how far it has
+ * read, so that the plugin loaded afresh for the conversation goes on
+ * where it was. Never a word of a prompt, a reply, a file or a plan.
  */
 
 import type { Doing } from '../companion'
@@ -44,12 +47,11 @@ import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
 import type { Block } from './prompt'
 import { relativeTo, repoNameOf } from './repo'
-import { INDEX, indexed, indexOf, keyOf, marksOf, MAX_READ, MAX_RECORDS, MAX_SAVED, nearest, PREFIX, recordOf, savedOf } from './saved'
-import type { Saved, SavedRecord } from './saved'
+import * as Journal from './journal'
 import { cleared } from './staged'
 import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
-import type { Draft, Fact, Place, Verdict, Written } from './types'
+import type { Commit, Deferred, Doubted, Draft, Fact, Place, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReason } from './verdict'
 import { stateKey } from './verdict'
 import type { Seen } from './verdict'
@@ -133,16 +135,36 @@ type Identity = { sessionId: string; repo: string | null; root: string }
 /** A working tree on this machine: where it begins, and the repository it is a checkout of, as `owner/name`. */
 type Tree = { root: string; repo: string }
 
-/** A commit made in the session's own repository: its sha, the files it holds as paths from that repository's root, and the rule they were reported by. */
-type Commit = { sha: string; paths: string[]; rule: Word<'commit', 'rule'> }
-
-/** A recorded decision whose code changed, waiting its turn; `asks` is false once another of its batch was asked about. */
-type Doubted = { fact: Fact; repo: string; asks: boolean }
-
-/** Something to do on Fylgja that could not be done when it was asked for, kept for the next turn. */
-type Deferred = ({ tool: string; args: Record<string, unknown> } | { draft: Draft; against?: string }) & {
-  /** The turn it was put off in, when it is not to be done before a later one ends. */
-  notIn?: number
+/**
+ * What this load of the plugin has written of the conversation in hand to
+ * the session log (`journal.ts`): its own entry of that conversation's log.
+ */
+type Log = {
+  /** This load's own id: each conversation's entry it writes is under it. */
+  writer: string
+  /** The conversation the entry is of; undefined until one is picked up or written. */
+  conv: string | undefined
+  /** The entry's lines as last written. */
+  lines: string[]
+  /** What they say. */
+  book: Journal.Book
+  /** The marks of the rows, and the conversation, turn and compaction they were read at: read again only when one of those moved on. */
+  marks: { epoch: number; turn: number; compactions: number; marks: Journal.Marks } | undefined
+  /** The marks the index last had from this load for the conversation, and when; `''` and 0 for none yet. */
+  indexed: string
+  indexedAt: number
+  /** How many rows the conversation had when the index was last told of it, and when its log was picked up. */
+  indexedCount: number
+  base: number
+  /** The entries of earlier loads of this conversation, read when it was picked up: let go once this load's own is written. */
+  predecessors: string[]
+  /** The store's keys as they were when the log was picked up, for letting the oldest go once; undefined when that is done. */
+  toPrune: string[] | undefined
+  /** The hash of each prompt the developer sent, by the prompt: each is taken once. */
+  hashes: Map<string, string>
+  /** Whether the session changed since it was last written, and whether a write is under way. */
+  isDirty: boolean
+  isWriting: boolean
 }
 
 export type Options = { isOn: boolean }
@@ -383,17 +405,31 @@ export type Scribe = {
   /** Those lost for good, by the rule Fylgja refused them by: said in the window of what was kept, and nowhere else. */
   lost: Map<string, number>
   /**
-   * The conversation the plugin was loaded for: the one whose records an
-   * earlier load kept are picked up again (see `recover`). Undefined until
-   * the session starts, and when its id cannot be read.
+   * The conversation the plugin was loaded for: only for it is the log of a
+   * conversation it goes on from looked for by its rows (see `recover`).
+   * Undefined until the session starts, and when its id cannot be read.
    */
   loadedFor: string | undefined
-  /** Whether those records are still to be picked up in the conversation in hand, are being, or need not be. */
+  /** Whether the log of the conversation in hand is still to be picked up, is being, or need not be. */
   recovery: 'pending' | 'running' | 'done'
-  /** The records an earlier load kept that wait to be listed again; undefined until they are looked for. */
-  waiting: SavedRecord[] | undefined
-  /** The conversation those records were kept under: this one's own, or one it went on from, until this one's own is written. */
-  waitingFrom: string | undefined
+  /** What this load wrote of the conversation to the session log. */
+  log: Log
+  /**
+   * The conversation whose log is picked up, as Claude Code named it when it
+   * started over; null where nothing is (a `/clear`), undefined where the id
+   * read from the session says.
+   */
+  replayFor: string | null | undefined
+  /** This machine's salt for the hashes the log keeps (`Journal.keyedHashOf`); undefined until read from the store. */
+  salt: string | undefined
+  /**
+   * Records picked up from the log that have not been asked of Fylgja yet:
+   * each is, once, before Scribe changes it, since it may have been changed
+   * or removed elsewhere since it was logged (`verified`).
+   */
+  unverified: Set<string>
+  /** Records whose places Fylgja could not be asked for: their logged places are never sent. */
+  unsurePlaces: Set<string>
   /** How many turns had ended when the plugin was loaded. */
   loadedAt: number
   /** Records the plugin itself did not write (`letGo`), and why the first since this was last cleared was not. */
@@ -411,15 +447,21 @@ export const STORE = {
   typedPast: 'scribe.typedPast',
   skip: 'scribe.skip',
   hasShown: 'scribe.hasShown',
-  /** The index of the conversations whose records are kept, each under `PREFIX` and its id (`saved.ts`). */
-  lists: INDEX,
+  /** The index of the conversations logged, each under `Journal.PREFIX`, its id and a load's (`journal.ts`). */
+  logs: Journal.INDEX,
+  /** This machine's salt for the hashes the log keeps. */
+  salt: 'scribe.salt',
 } as const
 
-/** No more records are asked of Fylgja at once when an earlier load's are picked up: they share the session's allowance of calls. */
-const OPEN_WIDTH = 4
-
-/** How long a turn's end waits for them before it looks. */
+/** How long a turn's end waits for the log to be picked up before it looks. */
 const RECOVER_WAIT_MS = 1500
+
+/** The index is told of a conversation's rows no oftener than this, once it is told from the one it went on from. */
+const INDEX_EVERY_MS = 600_000
+
+/** No more records taken out are logged than this, the newest; nor more places of files than `MAX_LOGGED_PLACES`. */
+const MAX_LOGGED_GONE = 20
+const MAX_LOGGED_PLACES = 150
 
 /** A receipt nobody touched goes after this long. */
 export const RECEIPT_MS = 20_000
@@ -597,8 +639,11 @@ export function create(options: Options): Scribe {
     lost: new Map(),
     loadedFor: undefined,
     recovery: 'done',
-    waiting: undefined,
-    waitingFrom: undefined,
+    log: freshLog(Journal.writerId()),
+    replayFor: undefined,
+    salt: undefined,
+    unverified: new Set(),
+    unsurePlaces: new Set(),
     loadedAt: 0,
     letGo: 0,
     letGoBy: undefined,
@@ -612,11 +657,12 @@ export function create(options: Options): Scribe {
  * session's counts if it turns out to be the same session.
  *
  * The records Scribe kept go with the rest. A developer who cleared the
- * conversation meant to, and a resumed or branched one lists its own: no
- * word of a record is ever stored, and they are in Fylgja all the same.
- * Only where the conversation goes on under the id the plugin was loaded
- * for are the ids an earlier load kept looked for again (`recover`). A
- * compaction is not such a start; see `compacted`.
+ * conversation meant to, and they are in Fylgja all the same. What the
+ * conversation that begins kept before is picked up from its own log
+ * (`recover`): a conversation resumed has one, a cleared one has none. Only
+ * where the conversation goes on under the id the plugin was loaded for is
+ * the one it went on from looked for by its rows. A compaction is not such
+ * a start; see `compacted`.
  */
 export function startOver(scribe: Scribe): void {
   const { kept } = scribe.band
@@ -627,8 +673,10 @@ export function startOver(scribe: Scribe): void {
 
   scribe.epoch += 1
   scribe.recovery = 'pending'
-  scribe.waiting = undefined
-  scribe.waitingFrom = undefined
+  leftLog(scribe.log)
+  scribe.replayFor = undefined
+  scribe.unverified.clear()
+  scribe.unsurePlaces.clear()
   scribe.identity = undefined
   scribe.band = { ...Band.create(), kept }
   // The records it listed were the conversation's before. Whether it is open is Claude Code's to say, and is not changed here.
@@ -698,6 +746,8 @@ export function isOff(scribe: Scribe): boolean {
 /** A session began: whether a person is at it, and whether it draws where the band is. */
 export function started(scribe: Scribe, isInteractive: boolean, surface: string | null): void {
   startOver(scribe)
+  // A load of its own: its entries are its own, and what an earlier one wrote is picked up like any other's.
+  scribe.log.writer = Journal.writerId()
   scribe.carry = undefined
   scribe.isGranted = false
   scribe.hasAsked = false
@@ -721,140 +771,369 @@ export function loaded(scribe: Scribe, id: string | undefined): void {
 }
 
 /**
- * The conversation went on under the id `id` before any turn ended since the
- * plugin was loaded, and was started over for it. Where Claude Code reads
- * out the id of the conversation a background job resumed before the job's
- * own, that is still the conversation the plugin was loaded for: its records
- * are looked for again under the id it goes on with, by its rows. A
- * `/clear` has none of the rows before, so nothing is found for it.
+ * The conversation was started over for the one under the id `id`: as
+ * Claude Code said it began (`source`), or because its id was seen to
+ * change. That conversation's own log is what is picked up, by the id
+ * Claude Code named, which the id read from the session may lag behind. A
+ * `/clear` picks up nothing at all: the developer cleared on purpose.
+ *
+ * Where it went on before any turn ended since the plugin was loaded,
+ * Claude Code may have read out the id of the conversation a background job
+ * resumed before the job's own: that is still the conversation the plugin
+ * was loaded for, and the one it goes on from is looked for by its rows.
  */
-export function followed(scribe: Scribe, id: string): void {
-  if (scribe.loadedFor !== undefined && scribe.turn === scribe.loadedAt) {
+export function followed(scribe: Scribe, id: string | undefined, source?: 'clear' | 'resume' | 'fork'): void {
+  if (id !== undefined && scribe.loadedFor !== undefined && scribe.turn === scribe.loadedAt) {
     scribe.loadedFor = id
   }
+
+  scribe.replayFor = source === 'clear' ? null : id
+  scribe.log.conv = id
+}
+
+/** A load's log before it has picked up or written anything. */
+function freshLog(writer: string): Log {
+  return {
+    writer,
+    conv: undefined,
+    lines: [],
+    book: Journal.emptyBook(),
+    marks: undefined,
+    indexed: '',
+    indexedAt: 0,
+    indexedCount: 0,
+    base: 0,
+    predecessors: [],
+    toPrune: undefined,
+    hashes: new Map(),
+    isDirty: false,
+    isWriting: false,
+  }
+}
+
+/** The conversation the log was of is left: what this load wrote of it stays in the store, and its next entry is another conversation's. */
+function leftLog(log: Log): void {
+  Object.assign(log, { ...freshLog(log.writer), hashes: log.hashes, isDirty: log.isDirty, isWriting: log.isWriting })
+}
+
+/** The session as it is logged: what it kept, and what it is in the middle of (`journal.ts`). */
+function nowOf(scribe: Scribe): Journal.Now {
+  const { band, log } = scribe
+  const pending = [band.current, ...band.queue].filter(
+    (item): item is Band.Question => item?.kind === 'question' && !(item.form === 'holds' && item.said !== undefined),
+  )
+  const prompts = [...scribe.prompts].map(prompt => {
+    const hash = log.hashes.get(prompt) ?? Journal.keyedHashOf(scribe.salt ?? '', prompt)
+
+    log.hashes.set(prompt, hash)
+
+    return hash
+  })
+
+  for (const prompt of log.hashes.keys()) {
+    if (!scribe.prompts.has(prompt)) {
+      log.hashes.delete(prompt)
+    }
+  }
+
+  return {
+    records: scribe.written.map(one => (scribe.mine.has(one.id) ? { ...one, isMine: true as const } : one)),
+    groups: {
+      recorded: scribe.recorded,
+      asked: scribe.asked,
+      gone: scribe.ledger.gone.slice(-MAX_LOGGED_GONE),
+      band: {
+        pending,
+        told: [...band.told],
+        asked: [...band.asked],
+        questions: band.questions,
+        unanswered: band.unanswered,
+        doubted: scribe.doubted,
+      },
+      deferred: scribe.deferred,
+      cursor: {
+        consumed: scribe.consumed,
+        mark: scribe.mark === undefined ? null : Journal.keyedHashOf(scribe.salt ?? '', scribe.mark),
+        seam: scribe.seam === undefined ? null : scribe.seam.slice(-Journal.MAX_SEAM).map(mark => Journal.keyedHashOf(scribe.salt ?? '', mark)),
+        hasPrompt: scribe.hasPrompt,
+        hasActed: scribe.hasActed,
+        compactions: scribe.compactions,
+        hasCompacted: scribe.hasCompacted,
+        prompts: prompts.slice(-Journal.MAX_PROMPT_HASHES),
+      },
+      work: {
+        commits: [...scribe.commits].slice(-Journal.MAX_LIST),
+        toAttach: scribe.toAttach,
+        index: scribe.index,
+        created: [...scribe.created],
+        edited: [...scribe.edited].map(([repo, files]) => [repo, [...files]]),
+        editedRepos: [...scribe.editedRepos],
+        changedPlaces: [...scribe.changedPlaces].slice(-Journal.MAX_LIST),
+        commitsToPair: scribe.commitsToPair,
+        agentRepo: scribe.agentRepo,
+        own: [...scribe.own].slice(-Journal.MAX_LIST),
+        takesPaths: scribe.takesPaths,
+        takesBase: scribe.takesBase,
+        filesIn: [...scribe.filesIn],
+      },
+      places: [...scribe.places].slice(-MAX_LOGGED_PLACES),
+      counts: {
+        dropped: scribe.dropped,
+        lost: [...scribe.lost],
+        letGo: scribe.letGo,
+        unplaced: scribe.unplaced,
+        wakes: scribe.wakes,
+        wakeTimes: scribe.wakeTimes,
+        denied: [...scribe.denied],
+      },
+    },
+  }
+}
+
+/** Whether there is nothing of the conversation worth a log: Scribe has neither read it nor kept anything of it. */
+function isBlank(now: Journal.Now): boolean {
+  const { groups } = now
+
+  return (
+    now.records.length === 0 &&
+    groups.cursor.consumed < 0 &&
+    groups.gone.length === 0 &&
+    groups.band.pending.length === 0 &&
+    groups.deferred.length === 0 &&
+    groups.work.toAttach.length === 0
+  )
 }
 
 /**
- * Writes which records this conversation kept, as `saved.ts` keeps them:
- * their ids and fixed words, under a key of the conversation's own, with
- * the marks of its rows. Those an earlier load kept that are not listed yet
- * stay with them, whatever kept them from being listed. The rows are read
- * first, so that the conversation's own entry is read and written with
- * nothing between. Not waited for, and never fails.
+ * Writes what changed in the session to its log, after whatever is being
+ * written now, and never more than one write at a time: changes made
+ * meanwhile go in the write after it. Not waited for, and never fails: a
+ * write that did not go through is tried again with the next change.
  */
-function save(host: ScribeHost, scribe: Scribe): void {
+function logged(host: ScribeHost, scribe: Scribe): void {
+  const { log } = scribe
+
+  log.isDirty = true
+
+  if (log.isWriting) {
+    return
+  }
+
+  log.isWriting = true
+
+  void (async () => {
+    // Nothing of it runs in the hook that changed the session.
+    await Promise.resolve()
+
+    while (log.isDirty) {
+      log.isDirty = false
+      await pruned(host, scribe).catch(() => undefined)
+      await logOnce(host, scribe).catch(() => undefined)
+    }
+  })().finally(() => {
+    log.isWriting = false
+  })
+}
+
+/** The marks of the conversation's rows; read again only once a turn ended, it was compacted or it is another conversation. */
+async function marksFor(host: ScribeHost, scribe: Scribe): Promise<Journal.Marks> {
+  const { log } = scribe
+  const known = log.marks
+
+  if (known !== undefined && known.epoch === scribe.epoch && known.turn === scribe.turn && known.compactions === scribe.compactions) {
+    return known.marks
+  }
+
+  const marks = Journal.marksOf(await host.rows().catch(() => []), scribe.salt ?? '')
+
+  log.marks = { epoch: scribe.epoch, turn: scribe.turn, compactions: scribe.compactions, marks }
+
+  return marks
+}
+
+/**
+ * One write of the log: a line of what changed since the last, appended to
+ * this load's entry of the conversation, or the entry written again as one
+ * line when it would be too long. Nothing is written for a conversation
+ * whose log is not picked up yet, since this load's own entry would then be
+ * taken for all it ever kept. What is written is taken as the session
+ * stands when the write begins: a start over while it is on its way does
+ * not stop it, since it is that conversation's. Once this load's entry is
+ * there, the entries of earlier loads it was picked up from go.
+ *
+ * The index is told of the conversation when this load first writes it,
+ * while its rows have not yet gone past those it was picked up with (a
+ * fork is told from its siblings by them), and then once every
+ * `INDEX_EVERY_MS` at most: a turn's end is one write of the store.
+ */
+async function logOnce(host: ScribeHost, scribe: Scribe): Promise<void> {
+  const { log, epoch } = scribe
   const who = scribe.identity
-  const key = who === null || who === undefined ? undefined : keyOf(who.sessionId)
+  // The conversation Claude Code named when it started over, which the id read from the session may lag behind.
+  const conv = log.conv ?? who?.sessionId
+  const key = conv === undefined ? undefined : Journal.keyOf(conv, log.writer)
 
-  if (who === null || who === undefined || key === undefined) {
+  if (who === null || who === undefined || conv === undefined || key === undefined || scribe.recovery !== 'done') {
     return
   }
 
-  const { epoch } = scribe
-  const write = async (): Promise<void> => {
-    const marks = marksOf(await host.rows().catch(() => []))
-    // What waits was kept under another conversation, and this one's own is not written yet by this load.
-    const isTheirs = scribe.waitingFrom !== undefined && scribe.waitingFrom !== who.sessionId
-    // Not looked for yet, or found elsewhere: what the store holds for this conversation is read, with nothing between it and the write.
-    const own = (scribe.waiting === undefined && scribe.recovery !== 'done') || isTheirs ? savedOf(await host.stored(key)) : undefined
-
-    if (epoch !== scribe.epoch) {
-      return
-    }
-
-    const now: SavedRecord[] = scribe.written.map(one => ({
-      id: one.id,
-      kind: one.kind,
-      outcome: one.outcome,
-      ...(isWaiting(one) ? { waiting: true as const } : {}),
-    }))
-    // The list of a conversation it went on from never takes the place of one this conversation already has.
-    const base = isTheirs && own !== undefined ? own.records : (scribe.waiting ?? own?.records ?? [])
-    const waiting = base.filter(one => !now.some(record => record.id === one.id))
-    const records = [...waiting, ...now].slice(-MAX_RECORDS)
-
-    if (records.length === 0) {
-      await host.unstore(key)
-
-      return
-    }
-
-    await host.store(key, { id: who.sessionId, at: await host.now(), ...marks, records })
-
-    if (epoch === scribe.epoch) {
-      scribe.waitingFrom = who.sessionId
-    }
-
-    // The oldest are let go. Another session may write the index meanwhile: then only its pruning is lost.
-    const { index, dropped } = indexed(indexOf(await host.stored(INDEX)), who.sessionId)
-
-    await host.store(INDEX, index)
-    await Promise.all(dropped.flatMap(id => keyOf(id) ?? []).map(one => host.unstore(one)))
-    await pruned(host, key)
+  // Read once a machine and a load, and in the store before anything is hashed with it.
+  if (scribe.salt === undefined && ((await saltFor(host, scribe)) === undefined || epoch !== scribe.epoch)) {
+    return
   }
 
-  void write().catch(() => undefined)
-}
+  log.conv = conv
 
-/** Runs `work` on each of `items`, no more than `width` at a time; the results in order. */
-async function pooled<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = []
-  let next = 0
-  const lane = async (): Promise<void> => {
-    while (next < items.length) {
-      const at = next
+  const now = nowOf(scribe)
+  const { lines: before, book: was } = log
+  const known = log.marks?.marks
 
-      next += 1
-      results[at] = await work(items[at] as T)
-    }
+  if (before.length === 0 && isBlank(now)) {
+    return
   }
 
-  await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane))
+  const at = await host.now()
+  // Rows read after a start over would be the next conversation's: the marks it last had stand.
+  const marks = epoch === scribe.epoch ? await marksFor(host, scribe) : (known ?? { tie: null, seed: null, count: 0 })
+  const isMarked = JSON.stringify(marks) !== log.indexed
+  const isIndexDue =
+    epoch === scribe.epoch &&
+    (log.indexed === '' || (isMarked && (log.indexedCount <= log.base || at - log.indexedAt >= INDEX_EVERY_MS)))
+  let { patch, book } = Journal.next(was, now, at, before.length === 0)
+  let lines = patch === undefined ? before : [...before, JSON.stringify(patch)]
 
-  return results
+  if (patch === undefined && !isIndexDue) {
+    return
+  }
+
+  if (lines.length > Journal.MAX_LINES || lines.reduce((sum, line) => sum + line.length, 0) > Journal.MAX_SEGMENT_CHARS) {
+    ;({ patch, book } = Journal.next(was, now, at, true))
+    lines = patch === undefined ? [] : [JSON.stringify(patch)]
+  }
+
+  const segment: Journal.Segment = { conv, writer: log.writer, at, ...marks, lines }
+
+  await host.store(key, segment)
+
+  // Started over meanwhile: what was written was the conversation before's, and this load's log is the next one's now.
+  if (epoch !== scribe.epoch) {
+    return
+  }
+
+  log.lines = lines
+  log.book = book
+
+  const earlier = log.predecessors
+
+  log.predecessors = []
+  await Promise.all(earlier.map(one => host.unstore(one)))
+
+  if (isIndexDue) {
+    const entries = Journal.entriesOf(await host.stored(Journal.INDEX)).filter(one => one.conv !== conv)
+
+    await host.store(Journal.INDEX, [...entries, Journal.entryOf(segment, JSON.stringify(segment).length)])
+    log.indexed = JSON.stringify(marks)
+    log.indexedAt = at
+    log.indexedCount = marks.count
+  }
 }
 
 /**
- * Lets go of the conversations past the newest `MAX_SAVED` by when they were
- * written, among them any the index lost, never the one just written. Read
- * only when there are more keys than that.
+ * Lets the oldest logged conversations go, once a load: those the index
+ * says were written longest ago (`Journal.retained`), never the one in hand,
+ * and whatever the plugin kept before the session log. A conversation whose
+ * entries the index lost is read and listed again, a few a load.
  */
-async function pruned(host: ScribeHost, mine: string): Promise<void> {
-  const keys = (await host.keys()).filter(key => key.startsWith(PREFIX))
+async function pruned(host: ScribeHost, scribe: Scribe): Promise<void> {
+  const { log } = scribe
+  const keys = log.toPrune
 
-  if (keys.length <= MAX_SAVED) {
+  if (keys === undefined) {
     return
   }
 
-  const all = await Promise.all(keys.map(async key => ({ key, at: savedOf(await host.stored(key))?.at ?? 0 })))
-  const old = all
-    .filter(one => one.key !== mine)
-    .sort((one, two) => two.at - one.at)
-    .slice(MAX_SAVED - 1)
+  log.toPrune = undefined
 
-  await Promise.all(old.map(one => host.unstore(one.key)))
-}
+  const byConv = new Map<string, string[]>()
 
-/** The conversations kept on this machine, read from their own keys: those the index lists first, newest first, then any it lost. */
-async function savedAll(host: ScribeHost): Promise<Saved[]> {
-  const listed = indexOf(await host.stored(INDEX)).flatMap(id => keyOf(id) ?? []).toReversed()
-  const keys = [...new Set([...listed, ...(await host.keys()).filter(key => key.startsWith(PREFIX)).toReversed()])]
+  for (const key of keys) {
+    const parts = Journal.partsOf(key)
 
-  return (await Promise.all(keys.slice(0, MAX_READ).map(async key => savedOf(await host.stored(key))))).flatMap(one => one ?? [])
+    if (parts !== undefined) {
+      byConv.set(parts.conv, [...(byConv.get(parts.conv) ?? []), key])
+    }
+  }
+
+  const listed = Journal.entriesOf(await host.stored(Journal.INDEX))
+  const known = new Set(listed.map(one => one.conv))
+  const lost = [...byConv.keys()].filter(conv => !known.has(conv)).slice(0, Journal.MAX_ORPHANS)
+  const found = await Promise.all(
+    lost.map(async conv => {
+      const values = await Promise.all((byConv.get(conv) ?? []).map(key => host.stored(key)))
+      const segments = values.flatMap(value => Journal.segmentOf(value) ?? [])
+      const newest = segments.reduce<Journal.Segment | undefined>((best, one) => (best === undefined || one.at > best.at ? one : best), undefined)
+
+      return newest === undefined ? [] : [Journal.entryOf(newest, values.reduce<number>((sum, value) => sum + JSON.stringify(value ?? '').length, 0))]
+    }),
+  )
+  const own = log.conv ?? ''
+  const entries = [...listed.filter(one => byConv.has(one.conv) || one.conv === own), ...found.flat()]
+  const { kept, dropped } = Journal.retained(entries, await host.now(), new Set([own]))
+  const gone = [...keys.filter(Journal.isLegacy), ...dropped.flatMap(conv => byConv.get(conv) ?? [])]
+
+  await Promise.all(gone.map(key => host.unstore(key)))
+
+  if (gone.length > 0 || kept.length !== listed.length || found.flat().length > 0) {
+    // What this load writes of its own conversation meanwhile is listed again by its next write to the index.
+    await host.store(Journal.INDEX, kept)
+  }
 }
 
 /**
- * Picks up the records an earlier load of the plugin kept in this
- * conversation, when the plugin was loaded afresh for it: Claude Code
- * started a plugin again whose copy it lost, or the conversation was moved
- * to the background and goes on in a job of its own. They are found by the
- * conversation's id, or by the rows of the nearest one it went on from
- * (`saved.ts`), and asked of Fylgja, `OPEN_WIDTH` at a time; only a record
- * Fylgja says is not there is let go. They are listed before the ones
- * written since, and none of them is Scribe's own to rewrite or take back.
- * Any other answer, or a call that did not get through, leaves that record
- * waiting, and kept on this machine, for the next try: the session's start,
- * the window opened, a turn's end. Never fails.
+ * This machine's salt for the hashes of the session log: read from the
+ * store, or made and kept there the first time. Where two sessions make one
+ * at once, the one the store holds afterwards is the one both use.
+ * Undefined while the store cannot be read.
+ */
+async function saltFor(host: ScribeHost, scribe: Scribe): Promise<string | undefined> {
+  if (scribe.salt !== undefined) {
+    return scribe.salt
+  }
+
+  try {
+    let salt = Journal.saltOf(await host.stored(STORE.salt))
+
+    if (salt === undefined) {
+      await host.store(STORE.salt, Journal.newSalt())
+      salt = Journal.saltOf(await host.stored(STORE.salt))
+    }
+
+    scribe.salt = salt
+
+    return salt
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Picks up what Scribe kept in the conversation in hand, from its log: the
+ * session started (the plugin loaded afresh, a `--resume`, a `--continue`,
+ * or a background job that goes on with a conversation as a fork), or the
+ * conversation started over into another one. Its own log, under its id,
+ * whenever it has one. Otherwise, only where it is the conversation the
+ * plugin was loaded for, the log of the one it goes on from, found by its
+ * rows (`Journal.nearest`): a fork picks up what the conversation it was
+ * forked from kept, and a `/clear` finds nothing. Nothing is asked of
+ * Fylgja for it.
+ *
+ * What it picks up stands before what this load holds already, and goes
+ * on: records can be rewritten, taken back and given their files as if no
+ * load had come between, the question waiting comes up again, what waited
+ * to be sent is sent at the next turn's end, and the next look reads from
+ * where the last one stopped. Tried again at the next turn's end, or when
+ * the window is opened, while the conversation's rows cannot be read yet.
+ * Never fails.
  */
 export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
   if (scribe.recovery !== 'pending') {
@@ -867,10 +1146,11 @@ export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
   scribe.recovery = 'running'
 
   try {
-    if (isOff(scribe) || !scribe.isInteractive || scribe.loadedFor === undefined || (await host.sessionId()) !== scribe.loadedFor) {
+    if (isOff(scribe) || !scribe.isInteractive || scribe.replayFor === null) {
       return
     }
 
+    const id = scribe.replayFor ?? (await host.sessionId())
     const rows = await host.rows()
 
     // A conversation with no rows yet has kept nothing; one whose rows are not read yet is looked at again later.
@@ -880,58 +1160,65 @@ export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
       return
     }
 
-    const held = new Set([...scribe.written, ...scribe.ledger.gone].map(one => one.id))
-    const from = scribe.waiting === undefined ? nearest(await savedAll(host), scribe.loadedFor, rows) : undefined
-    const wanted = scribe.waiting ?? (from?.records ?? []).filter(one => !held.has(one.id))
-
-    if (epoch !== scribe.epoch) {
-      return
-    }
-
-    scribe.waitingFrom ??= from?.id
-    scribe.waiting = wanted
-
-    if (wanted.length === 0) {
-      return
-    }
-
     const who = await identityOf(host, scribe)
 
     if (who === null || epoch !== scribe.epoch) {
+      return
+    }
+
+    // The salt every hash of the log is keyed with: a log is neither read nor written without it.
+    if ((await saltFor(host, scribe)) === undefined) {
       state = 'pending'
 
       return
     }
 
-    // Each record comes back, is let go because Fylgja says it is not there, or waits.
-    const back = await pooled(wanted, OPEN_WIDTH, async (one): Promise<Written | 'gone' | 'waits'> => {
-      try {
-        const { answer, refusal } = await tried(host, scribe, 'open', { ref: one.id })
-        const detail = answer === undefined ? undefined : detailOf(answer, one.id)
+    const keys = await host.keys()
+    const ofConv = (conv: string): string[] => keys.filter(key => Journal.partsOf(key)?.conv === conv)
+    const own = ofConv(id)
+    let picked = own
 
-        return detail !== undefined ? recordOf(one, detail) : answer === undefined && failureOf('open', refusal ?? '') === 'not_found' ? 'gone' : 'waits'
-      } catch {
-        return 'waits'
-      }
-    })
+    if (own.length === 0 && id === scribe.loadedFor) {
+      const from = Journal.nearest(
+        Journal.entriesOf(await host.stored(Journal.INDEX)).filter(one => one.conv !== id),
+        rows,
+        scribe.salt ?? '',
+      )
+
+      picked = from === undefined ? [] : ofConv(from.conv)
+    }
+
+    const read = await Promise.all(picked.map(async key => ({ key, segment: Journal.segmentOf(await host.stored(key)) })))
+    const now = await host.now()
 
     if (epoch !== scribe.epoch) {
       return
     }
 
-    const standing = new Set(scribe.written.map(one => one.id))
-    const found = back.flatMap(one => (typeof one === 'string' || standing.has(one.id) ? [] : [one]))
+    const folded = Journal.fold(read.flatMap(one => one.segment ?? []))
+    const { log } = scribe
 
-    scribe.waiting = wanted.filter((_, at) => back[at] === 'waits')
-    state = scribe.waiting.length > 0 ? 'pending' : 'done'
-    scribe.written = [...found, ...scribe.written].slice(-MAX_LISTED)
-    // Said already: the model is not to write them again.
-    scribe.recorded = [...found.map(one => ({ id: null, content: one.content })), ...scribe.recorded].slice(-MAX_LISTED)
+    // A conversation it went on from keeps its question and its writes that wait: they are that one's to ask and send.
+    if (picked !== own) {
+      delete folded.groups.deferred
 
-    if (found.length > 0) {
-      host.mark()
-      host.redraw()
+      if (folded.groups.band !== undefined) {
+        folded.groups.band = { ...folded.groups.band, pending: [] }
+      }
     }
+
+    restore(host, scribe, folded, rows)
+    log.conv = id
+    log.lines = []
+    log.book = Journal.bookOf(folded)
+    log.base = rows.length
+    // An entry written lately may be another window's that still runs: only what no load has written for a while is let go.
+    log.predecessors = read.flatMap(one =>
+      picked === own && one.key !== Journal.keyOf(id, log.writer) && (one.segment === undefined || now - one.segment.at >= Journal.LIVE_MS)
+        ? [one.key]
+        : [],
+    )
+    log.toPrune = keys
   } catch {
     state = 'pending'
   } finally {
@@ -940,9 +1227,213 @@ export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
     }
   }
 
-  // Kept under this conversation's own id from here on, those still waiting with them, so a later load finds them by it.
-  if (epoch === scribe.epoch && (scribe.waiting?.length ?? 0) + scribe.written.filter(one => one.isPartial === true).length > 0) {
-    save(host, scribe)
+  // Written under this conversation's own id from here on, so a later load finds it by that.
+  if (epoch === scribe.epoch && scribe.recovery === 'done') {
+    logged(host, scribe)
+  }
+}
+
+/**
+ * Puts what a log holds into the session, before what this load already
+ * holds of it. A record the session holds already stays as it holds it.
+ */
+function restore(host: ScribeHost, scribe: Scribe, folded: Journal.Folded, rows: readonly Row[]): void {
+  const { groups } = folded
+  const standing = new Set(scribe.written.map(one => one.id))
+  const back = folded.records.filter(one => !standing.has(one.id))
+
+  scribe.written = [...back.map(({ at: _at, since: _since, isMine: _isMine, ...record }) => record), ...scribe.written].slice(-MAX_LISTED)
+
+  for (const one of back) {
+    scribe.unverified.add(one.id)
+
+    if (one.isMine === true) {
+      scribe.mine.add(one.id)
+    }
+  }
+
+  if (groups.recorded !== undefined) {
+    const now = new Set(scribe.recorded.map(one => one.content))
+
+    scribe.recorded = [...groups.recorded.filter(one => !now.has(one.content)), ...scribe.recorded].slice(-MAX_LISTED)
+  }
+
+  if (groups.asked !== undefined) {
+    scribe.asked = [...new Set([...groups.asked, ...scribe.asked])].slice(-MAX_LISTED)
+  }
+
+  if (groups.gone !== undefined) {
+    const held = new Set([...scribe.written, ...scribe.ledger.gone].map(one => one.id))
+
+    scribe.ledger.gone = [...groups.gone.filter(one => !held.has(one.id)), ...scribe.ledger.gone].slice(-Ledger.MAX_GONE)
+  }
+
+  if (groups.band !== undefined) {
+    restoreBand(scribe, groups.band)
+  }
+
+  if (groups.deferred !== undefined) {
+    // The turn each was put off in is over.
+    scribe.deferred = [...groups.deferred.map(({ notIn: _notIn, ...one }) => one), ...scribe.deferred].slice(-MAX_DEFERRED)
+  }
+
+  if (groups.cursor !== undefined) {
+    restoreCursor(scribe, groups.cursor, rows)
+  }
+
+  if (groups.work !== undefined) {
+    restoreWork(scribe, groups.work)
+  }
+
+  for (const [file, place] of groups.places ?? []) {
+    if (!scribe.places.has(file)) {
+      scribe.places.set(file, place)
+    }
+  }
+
+  if (groups.counts !== undefined) {
+    const { counts } = groups
+
+    scribe.dropped = Math.max(scribe.dropped, counts.dropped)
+    scribe.letGo = Math.max(scribe.letGo, counts.letGo)
+    scribe.unplaced = Math.max(scribe.unplaced, counts.unplaced)
+    scribe.wakes = Math.max(scribe.wakes, counts.wakes)
+    scribe.wakeTimes = [...new Set([...counts.wakeTimes, ...scribe.wakeTimes])]
+
+    for (const [code, lost] of counts.lost) {
+      scribe.lost.set(code, Math.max(scribe.lost.get(code) ?? 0, lost))
+    }
+
+    for (const [id, one] of counts.denied) {
+      if (!scribe.denied.has(id)) {
+        scribe.denied.set(id, one)
+      }
+    }
+
+    for (const id of [...scribe.denied.keys()].slice(0, -MAX_DENIED)) {
+      scribe.denied.delete(id)
+    }
+  }
+
+  if (back.length > 0 || (groups.band?.pending.length ?? 0) > 0) {
+    settle(host, scribe)
+  }
+}
+
+/** The question that waited comes up again, untouched, and the session's share of questions is as it was. */
+function restoreBand(scribe: Scribe, asking: Journal.Asking): void {
+  const { band } = scribe
+  const ids = new Set(scribe.written.map(one => one.id))
+  // A question about why a record was decided goes with the record.
+  const waiting = asking.pending.filter(item => item.form !== 'reason' || ids.has(item.id))
+
+  band.told = new Set([...asking.told, ...band.told])
+  band.asked = new Set([...asking.asked, ...band.asked])
+  band.questions = Math.max(band.questions, asking.questions)
+  band.unanswered = Math.max(band.unanswered, asking.unanswered)
+
+  // Claude is not working here, so it is shown as it was; otherwise it waits its turn as any question does.
+  if (band.current === null && !band.isWorking && waiting.length > 0) {
+    band.current = waiting[0] ?? null
+    band.queue = [...waiting.slice(1), ...band.queue].slice(0, Band.MAX_QUEUE)
+  } else {
+    band.queue = [...waiting, ...band.queue].slice(0, Band.MAX_QUEUE)
+  }
+
+  scribe.doubted = [...asking.doubted.filter(one => !scribe.doubted.some(had => had.fact.id === one.fact.id)), ...scribe.doubted].slice(
+    -MAX_DOUBTED,
+  )
+}
+
+/**
+ * The next look reads from where the last one stopped: only where no look
+ * of this load has read anything yet, and the rows still go on from there
+ * (`startOf` checks the mark). The developer's prompts are found again
+ * among the rows by their hashes, so their words are told from every other
+ * row's, and a reason they gave before is still looked for there.
+ */
+function restoreCursor(scribe: Scribe, cursor: Journal.Cursor, rows: readonly Row[]): void {
+  // The rows' own marks, by the hash the log keeps of each.
+  const marks = new Map(rows.flatMap(row => {
+    const mark = markOf(row)
+
+    return mark === undefined ? [] : [[Journal.keyedHashOf(scribe.salt ?? '', mark), mark] as const]
+  }))
+  const mark = cursor.mark === null ? undefined : marks.get(cursor.mark)
+
+  // A cursor whose last row is not among the rows any more points into another list: the rows are read as if none were known.
+  if (scribe.consumed === -1 && scribe.held.length === 0 && (cursor.consumed === 0 || mark !== undefined)) {
+    scribe.consumed = cursor.consumed
+    scribe.mark = mark
+    scribe.seam = cursor.seam?.flatMap(one => marks.get(one) ?? [])
+  }
+
+  scribe.hasPrompt ||= cursor.hasPrompt
+  scribe.hasActed ||= cursor.hasActed
+  scribe.compactions = Math.max(scribe.compactions, cursor.compactions)
+  scribe.hasCompacted ||= cursor.hasCompacted
+
+  const hashes = new Set(cursor.prompts)
+  const found: string[] = []
+
+  for (const row of rows) {
+    const text = row.role === 'user' && row.text !== '' ? plain(row.text) : ''
+
+    if (text !== '' && !scribe.prompts.has(text) && !found.includes(text) && hashes.has(Journal.keyedHashOf(scribe.salt ?? '', text))) {
+      found.push(text)
+    }
+  }
+
+  if (found.length === 0) {
+    return
+  }
+
+  const since = scribe.spoken
+
+  scribe.prompts = new Set([...found, ...scribe.prompts])
+  scribe.spoken = []
+
+  for (const text of [...found, ...since]) {
+    spoke(scribe, text)
+  }
+
+  for (const old of scribe.prompts) {
+    if (scribe.prompts.size <= MAX_PROMPTS) {
+      break
+    }
+
+    scribe.prompts.delete(old)
+  }
+}
+
+/** What the session did to its repositories and the commits it saw, joined to what this load holds. */
+function restoreWork(scribe: Scribe, work: Journal.Work): void {
+  const isFresh = scribe.index.named?.length === 0 && !scribe.index.hasStaged && scribe.index.whole === false && scribe.index.isAway === false
+
+  for (const sha of work.commits) {
+    scribe.commits.add(sha)
+  }
+
+  scribe.toAttach = [...work.toAttach.filter(one => !scribe.toAttach.some(had => had.sha === one.sha)), ...scribe.toAttach].slice(
+    -MAX_PENDING_COMMITS,
+  )
+  scribe.index = isFresh ? work.index : scribe.index
+  scribe.created = new Set([...work.created, ...scribe.created])
+
+  for (const [repo, files] of work.edited) {
+    scribe.edited.set(repo, new Set([...files, ...(scribe.edited.get(repo) ?? [])]))
+  }
+
+  scribe.editedRepos = new Set([...work.editedRepos, ...scribe.editedRepos])
+  scribe.changedPlaces = new Set([...work.changedPlaces, ...scribe.changedPlaces])
+  scribe.commitsToPair = [...work.commitsToPair, ...scribe.commitsToPair].slice(-MAX_PENDING_COMMITS)
+  scribe.agentRepo ??= work.agentRepo
+  scribe.own = new Set([...work.own, ...scribe.own].slice(-MAX_OWN))
+  scribe.takesPaths &&= work.takesPaths
+  scribe.takesBase &&= work.takesBase
+
+  for (const [repo, files] of work.filesIn) {
+    scribe.filesIn.set(repo, Math.max(scribe.filesIn.get(repo) ?? 0, files))
   }
 }
 
@@ -1442,6 +1933,105 @@ function defer(scribe: Scribe, work: Deferred): void {
   scribe.deferred = [...scribe.deferred, work].slice(-MAX_DEFERRED)
 }
 
+/** Whether Fylgja turned a change down because the record is not there, or is not this person's to change. */
+function isGone(refusal: string | undefined): boolean {
+  return failureOf('amend_memory', refusal ?? '') === 'not_found'
+}
+
+/**
+ * A record Fylgja says is gone, or is not this person's to change: it is
+ * let go from the session and its log, so it does not come back with the
+ * next load, and its question goes with it.
+ */
+function vanished(host: ScribeHost, scribe: Scribe, id: string): void {
+  scribe.written = scribe.written.filter(one => one.id !== id)
+  scribe.mine.delete(id)
+  scribe.recorded = scribe.recorded.filter(one => one.id !== id)
+  scribe.unverified.delete(id)
+  scribe.unsurePlaces.delete(id)
+  withdraw(host, scribe, id)
+  logged(host, scribe)
+  host.mark()
+  host.redraw()
+}
+
+/**
+ * Makes sure a record picked up from the log is as Fylgja holds it now,
+ * before Scribe changes it: it may have been reworded, given places or
+ * removed elsewhere since it was logged. Asked once a record and a load
+ * (`open` for its words, `recall` for its places); what Fylgja says takes
+ * the place of what was logged. Whether the record still stands: false
+ * when Fylgja says it is not there, and it is let go (`vanished`). Where
+ * its places could not be asked, its logged ones are never sent
+ * (`unsurePlaces`); where Fylgja could not be asked at all, it is asked
+ * again at the next change.
+ */
+async function verified(host: ScribeHost, scribe: Scribe, id: string): Promise<boolean> {
+  const own = scribe.written.find(one => one.id === id)
+
+  if (!scribe.unverified.has(id) || own === undefined) {
+    return own !== undefined
+  }
+
+  let opened: Tried
+
+  try {
+    opened = await tried(host, scribe, 'open', { ref: id })
+  } catch {
+    scribe.unsurePlaces.add(id)
+
+    return true
+  }
+
+  const detail = opened.answer === undefined ? undefined : detailOf(opened.answer, id)
+
+  if (detail === undefined) {
+    if (opened.answer === undefined && failureOf('open', opened.refusal ?? '') === 'not_found') {
+      vanished(host, scribe, id)
+
+      return false
+    }
+
+    scribe.unsurePlaces.add(id)
+
+    return true
+  }
+
+  const paths = (own.anchors ?? []).map(anchor => anchor.path).slice(0, MAX_LOOKUP_PATHS)
+  const asked =
+    typeof own.repo !== 'string'
+      ? undefined
+      : await call(
+          host,
+          scribe,
+          'recall',
+          paths.length > 0 ? { repo: own.repo, paths, limit: MOST_RECALLED } : { repo: own.repo, query: detail.sentence.slice(0, 300) },
+        ).catch(() => undefined)
+  const places = asked === undefined ? undefined : factsOf(asked).find(fact => fact.id === id)?.anchors
+  const now: Written = {
+    ...own,
+    content: detail.sentence,
+    reasonStatus: detail.reasonStatus ?? own.reasonStatus,
+    detail: detail.reason,
+    alternatives: detail.alternatives,
+    ...(places === undefined ? {} : { anchors: places }),
+  }
+
+  scribe.written = scribe.written.map(one => (one.id === id ? now : one))
+  scribe.recorded = scribe.recorded.map(one => (one.id === id ? { id, content: now.content } : one))
+  scribe.unverified.delete(id)
+
+  if (places === undefined) {
+    scribe.unsurePlaces.add(id)
+  } else {
+    scribe.unsurePlaces.delete(id)
+  }
+
+  logged(host, scribe)
+
+  return true
+}
+
 /**
  * A change to a record the developer asked for. Whether it was made.
  *
@@ -1459,6 +2049,10 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
       // The server's own trouble, not the change's: once more, later, as it is.
       if (PASSING.includes(codeOf(refusal) ?? '')) {
         defer(scribe, { tool: 'amend_memory', args })
+      }
+
+      if (isGone(refusal) && typeof args.atom_id === 'string') {
+        vanished(host, scribe, args.atom_id)
       }
     }
 
@@ -1605,7 +2199,7 @@ async function send(
     scribe.mine.add(written.id)
   }
 
-  save(host, scribe)
+  logged(host, scribe)
 
   return { written, code: undefined, refusal: undefined, isTaken: true }
 }
@@ -1647,20 +2241,14 @@ function expire(host: ScribeHost, scribe: Scribe, band: Band.Band, serial: numbe
  * and then let go; what there is no time for waits for the next turn.
  */
 async function flush(host: ScribeHost, scribe: Scribe, who: Identity): Promise<void> {
-  const waiting = scribe.deferred
   const startedAt = await host.now()
 
-  scribe.deferred = []
-
-  for (const [at, work] of waiting.entries()) {
+  for (const work of [...scribe.deferred]) {
     if (work.notIn === scribe.turn) {
-      defer(scribe, work)
       continue
     }
 
     if ((await host.now()) - startedAt > FLUSH_BUDGET_MS) {
-      scribe.deferred = [...waiting.slice(at), ...scribe.deferred].slice(-MAX_DEFERRED)
-
       break
     }
 
@@ -1677,6 +2265,9 @@ async function flush(host: ScribeHost, scribe: Scribe, who: Identity): Promise<v
       }
     } finally {
       scribe.isRetrying = false
+      // Done with, whatever came of it: the log says so at once, so a load that follows does not send it again.
+      scribe.deferred = scribe.deferred.filter(one => one !== work)
+      logged(host, scribe)
     }
   }
 }
@@ -2019,11 +2610,14 @@ async function rewrite(
   isByHand = false,
   lines: readonly string[] = [],
 ): Promise<Written | undefined> {
-  const own = scribe.written.find(one => one.id === draft.updates)
+  const found = scribe.written.find(one => one.id === draft.updates)
 
-  if (own === undefined || (!isByHand && !scribe.mine.has(own.id))) {
+  if (found === undefined || (!isByHand && !scribe.mine.has(found.id)) || !(await verified(host, scribe, found.id))) {
     return undefined
   }
+
+  // As Fylgja holds it now.
+  const own = scribe.written.find(one => one.id === found.id) ?? found
 
   // The model's rewording is held to the same rule as its first wording,
   // where it surely leans on the session; what the developer wrote
@@ -2037,10 +2631,11 @@ async function rewrite(
   const { content } = draft
   // The places it had are kept, and the ones the rewrite names added: the server replaces the list it is sent.
   const had = own.anchors ?? []
-  const anchors = [...had, ...draft.anchors.filter(anchor => !had.some(one => one.path === anchor.path && one.symbol === anchor.symbol))].slice(
-    0,
-    MAX_ANCHORS,
-  )
+  // Places Fylgja could not be asked for are never sent: the list sent replaces the one it holds.
+  const isUnsure = scribe.unsurePlaces.has(own.id)
+  const anchors = isUnsure
+    ? had
+    : [...had, ...draft.anchors.filter(anchor => !had.some(one => one.path === anchor.path && one.symbol === anchor.symbol))].slice(0, MAX_ANCHORS)
   const args: Record<string, unknown> = {
     atom_id: own.id,
     op: 'fix',
@@ -2050,16 +2645,15 @@ async function rewrite(
     ...(draft.alternatives.length === 0 ? {} : { alternatives: draft.alternatives }),
     ...(draft.reasonStatus === null ? {} : { reason_status: draft.reasonStatus }),
   }
-  let outcome: unknown
-
-  try {
-    outcome = (await tried(host, scribe, 'amend_memory', args)).answer?.outcome
-  } catch {
-    outcome = undefined
-  }
+  const done = await tried(host, scribe, 'amend_memory', args).catch(() => undefined)
+  const outcome = done?.answer?.outcome
 
   if (outcome !== 'fixed' && outcome !== 'unchanged') {
     scribe.refused += 1
+
+    if (done?.answer === undefined && isGone(done?.refusal)) {
+      vanished(host, scribe, own.id)
+    }
 
     return undefined
   }
@@ -2078,7 +2672,7 @@ async function rewrite(
 
   scribe.written = scribe.written.map(one => (one.id === own.id ? now : one))
   scribe.recorded = scribe.recorded.map(one => (one.id === own.id ? { id: one.id, content } : one))
-  save(host, scribe)
+  logged(host, scribe)
 
   if (draft.reasonStatus !== 'not_stated') {
     withdraw(host, scribe, own.id)
@@ -2101,22 +2695,22 @@ async function rewrite(
  *   session that stands may be taken back then
  */
 async function takeBack(host: ScribeHost, scribe: Scribe, id: string, isByHand = false): Promise<Written | undefined> {
-  const own = scribe.written.find(one => one.id === id)
+  const found = scribe.written.find(one => one.id === id)
 
-  if (own === undefined || (!isByHand && !scribe.mine.has(id))) {
+  if (found === undefined || (!isByHand && !scribe.mine.has(id)) || !(await verified(host, scribe, id))) {
     return undefined
   }
 
-  let outcome: unknown
+  // As Fylgja holds it now: what is shelved to be put back is that.
+  const own = scribe.written.find(one => one.id === id) ?? found
+  const done = await tried(host, scribe, 'amend_memory', { atom_id: id, op: 'remove' }).catch(() => undefined)
 
-  try {
-    outcome = (await tried(host, scribe, 'amend_memory', { atom_id: id, op: 'remove' })).answer?.outcome
-  } catch {
-    outcome = undefined
-  }
-
-  if (outcome !== 'removed') {
+  if (done?.answer?.outcome !== 'removed') {
     scribe.refused += 1
+
+    if (done?.answer === undefined && isGone(done?.refusal)) {
+      vanished(host, scribe, id)
+    }
 
     return undefined
   }
@@ -2125,14 +2719,11 @@ async function takeBack(host: ScribeHost, scribe: Scribe, id: string, isByHand =
   scribe.mine.delete(id)
   scribe.recorded = scribe.recorded.filter(one => one.id !== id)
   withdraw(host, scribe, id)
-  save(host, scribe)
 
   const gone: Written = { ...own, outcome: 'withdrawn', replaced: null }
 
-  // One picked up after a load again is not known whole, and is not sent back as if it were.
-  if (own.isPartial !== true) {
-    Ledger.shelve(scribe.ledger, gone)
-  }
+  Ledger.shelve(scribe.ledger, gone)
+  logged(host, scribe)
 
   return gone
 }
@@ -2333,10 +2924,17 @@ async function anchorMore(
   id: string,
   anchors: readonly Draft['anchors'][number][],
 ): Promise<void> {
-  const own = scribe.written.find(one => one.id === id)
+  const found = scribe.written.find(one => one.id === id)
 
   // Only a record still waiting for its code: one that has it is not given more by a guess.
-  if (own === undefined || !scribe.mine.has(id) || !isWaiting(own)) {
+  if (found === undefined || !scribe.mine.has(id) || !isWaiting(found) || !(await verified(host, scribe, id))) {
+    return
+  }
+
+  const own = scribe.written.find(one => one.id === id) ?? found
+
+  // Given its places elsewhere meanwhile, or places Fylgja could not be asked for: none is added by a guess.
+  if (!isWaiting(own) || scribe.unsurePlaces.has(id)) {
     return
   }
 
@@ -2348,19 +2946,18 @@ async function anchorMore(
     return
   }
 
-  let outcome: unknown
+  const done = await tried(host, scribe, 'amend_memory', { atom_id: id, op: 'fix', anchors: all }).catch(() => undefined)
+  const outcome = done?.answer?.outcome
 
-  try {
-    outcome = (await tried(host, scribe, 'amend_memory', { atom_id: id, op: 'fix', anchors: all })).answer?.outcome
-  } catch {
-    outcome = undefined
+  if (done?.answer === undefined && isGone(done?.refusal)) {
+    vanished(host, scribe, id)
   }
 
   if (outcome === 'fixed' || outcome === 'unchanged') {
     scribe.lateAnchors += all.length - had.length
     scribe.written = scribe.written.map(one => (one.id === id ? { ...one, anchors: all } : one))
     // The window's "In:" line now names the code, and the list is saved as no longer waiting for it.
-    save(host, scribe)
+    logged(host, scribe)
     host.redraw()
   }
 }
@@ -2751,7 +3348,11 @@ export async function stepped(
   )
 }
 
-/** What tells one row from another, without holding it: enough to notice that the rows were rewritten. */
+/**
+ * What tells one row from another: enough to notice that the rows were
+ * rewritten. Held in the running plugin; the session log keeps a keyed hash
+ * of it (`nowOf`), and finds the row again by that (`restoreCursor`).
+ */
 function markOf(row: Row | undefined): string | undefined {
   return row === undefined ? undefined : `${row.role}|${row.text.length}|${row.toolUses.length}|${row.text.slice(0, 80)}`
 }
@@ -2905,6 +3506,7 @@ export function compacted(
     rows_held: held.length,
     rows_dropped: all.length - held.length,
   })
+  logged(host, scribe)
 }
 
 /**
@@ -3418,11 +4020,6 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     // What an earlier load kept in this conversation is listed, and known to the look, before the look writes anything; for a moment at most.
     await within(host, recover(host, scribe), RECOVER_WAIT_MS)
 
-    // The marks of a conversation that kept records follow its rows, so a fork of it later is told from its siblings.
-    if (scribe.written.length > 0) {
-      save(host, scribe)
-    }
-
     if (scribe.looking !== null) {
       await within(host, scribe.looking, INSIDE_WAIT_MS)
     }
@@ -3441,6 +4038,9 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
     if (isRead) {
       scribe.hasAnsweredInTurn = false
     }
+
+    // How far the conversation was read, and the marks of its rows as the turn left them, so a fork of it later is told from its siblings.
+    logged(host, scribe)
   }
 }
 
@@ -3586,6 +4186,8 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: numb
     if (isInside && turn === scribe.turn && !hadAsked && scribe.band.hasAskedThisTurn) {
       scribe.hasAskedInside = true
     }
+
+    logged(host, scribe)
   }
 }
 
@@ -4125,6 +4727,9 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
     host.status(undefined)
   }
 
+  // The prompt is the developer's: its hash goes in the log, beside the question it took down. Nothing of it is waited for.
+  logged(host, scribe)
+
   if (wasQuiet) {
     return
   }
@@ -4222,7 +4827,7 @@ async function pressedReceipt(host: ScribeHost, scribe: Scribe, key: string): Pr
     shown.records = shown.records.filter(one => one !== written)
     scribe.written = scribe.written.filter(one => one.id !== written.id)
     touched(scribe, written.id)
-    save(host, scribe)
+    logged(host, scribe)
     band.receipt = shown.records.length === 0 ? null : shown
 
     // Only a record Fylgja took out can be put back: one whose removal failed, or waits to be tried again, is not offered.
@@ -4283,7 +4888,7 @@ async function putBack(host: ScribeHost, scribe: Scribe, gone: Written): Promise
 
   // Among the session's records it reads as put back too, whatever id Fylgja gave it.
   scribe.written = scribe.written.map(one => (one.id === back.id ? back : one))
-  save(host, scribe)
+  logged(host, scribe)
 
   return back
 }
@@ -4627,6 +5232,7 @@ export async function pressed(host: ScribeHost, scribe: Scribe, key: string): Pr
   }
 
   settle(host, scribe)
+  logged(host, scribe)
 }
 
 /** Enter was pressed in the band's field. */
@@ -4676,6 +5282,7 @@ export async function entered(host: ScribeHost, scribe: Scribe, key: string, val
   }
 
   settle(host, scribe)
+  logged(host, scribe)
 }
 
 /** What the band shows now; undefined for nothing, and always while Scribe is off. */
@@ -4827,6 +5434,7 @@ export async function ledgerPressed(host: ScribeHost, scribe: Scribe, key: strin
   // The count the mark shows follows what stands.
   host.mark()
   host.redraw()
+  logged(host, scribe)
 }
 
 /**
@@ -4896,4 +5504,5 @@ export async function ledgerEntered(host: ScribeHost, scribe: Scribe, value: str
 
   Ledger.settled(ledger)
   host.redraw()
+  logged(host, scribe)
 }

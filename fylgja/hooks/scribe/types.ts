@@ -1,8 +1,11 @@
 /**
- * The shapes Scribe's files hand each other. Everything here holds text of
- * the session or of a record, so none of it is ever stored or logged: it
- * lives in the running plugin and goes when the session does.
+ * The shapes Scribe's files hand each other. Most hold text of the session
+ * or of a record: none of it is ever written to a log or sent anywhere but
+ * Fylgja. What Scribe kept in a conversation is also kept on this machine,
+ * in the session log (`journal.ts`), so a plugin loaded again picks it up.
  */
+
+import type { Word } from '../telemetry'
 
 /** Whether a decision's reason is known: given, never asked or answered, or asked and there is none. */
 export type ReasonStatus = 'stated' | 'not_stated' | 'no_strong_reason'
@@ -129,12 +132,16 @@ export type Written = {
    * that one because the question whether it replaces it went unanswered.
    */
   against?: string
-  /**
-   * Picked up from Fylgja after the plugin was loaded again (`saved.ts`):
-   * the files it concerns and its triggers are not known here, so once it
-   * is taken out it is not offered to be put back.
-   */
-  isPartial?: true
-  /** Picked up after a reload: it was saved as a decision that points at no code yet (`anchoring.ts`). */
-  waiting?: true
+}
+
+/** A commit made in the session's own repository: its sha, the files it holds as paths from that repository's root, and the rule they were reported by. */
+export type Commit = { sha: string; paths: string[]; rule: Word<'commit', 'rule'> }
+
+/** A recorded decision whose code changed, waiting its turn; `asks` is false once another of its batch was asked about. */
+export type Doubted = { fact: Fact; repo: string; asks: boolean }
+
+/** Something to do on Fylgja that could not be done when it was asked for, kept for the next turn. */
+export type Deferred = ({ tool: string; args: Record<string, unknown> } | { draft: Draft; against?: string }) & {
+  /** The turn it was put off in, when it is not to be done before a later one ends. */
+  notIn?: number
 }

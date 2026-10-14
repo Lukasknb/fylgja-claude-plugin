@@ -202,14 +202,15 @@ describe('Scribe reads the plan the session works from', () => {
     expect(set.of('remember')).toEqual([])
   })
 
-  test('nothing of a plan is kept on the machine', async ($, on) => {
+  test('nothing of a plan is kept on the machine: only the record written from it, in the session log', async ($, on) => {
     const set = stage(on, { replies: [verdict({ records: [FOLLOWING] })] })
 
     await $.session.start(START)
     await turn($, set, dev('write the plan'), claude('Written.', wrote(IN_TREE)))
     await set.clock.advance(30_000)
 
-    expect(JSON.stringify([...set.kept.entries()])).not.toMatch(/PLAN-SECRET-REASON|queue rework|Locking/)
+    expect(JSON.stringify([...set.kept.entries()])).not.toMatch(/PLAN-SECRET-REASON|Redlock was rejected|Rollout/)
+    expect(JSON.stringify([...set.kept.entries()]), 'the record, as Fylgja holds it').toMatch('per Plan: queue rework, section Locking')
     expect(JSON.stringify([set.toasts, set.statuses])).not.toMatch(/PLAN-SECRET-REASON|queue rework/)
   })
 

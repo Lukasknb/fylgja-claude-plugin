@@ -289,21 +289,16 @@ function opened(record: Written, isCut: boolean): Part[][] {
     ...(isCut ? [[{ text: drawn(record.content, MAX_CONTENT) }]] : []),
     ...why({ kind: record.kind, detail: record.detail ?? '', reasonStatus: record.reasonStatus }).map(row => row.parts),
     ...(rejected.length === 0 ? [] : [[{ text: 'Rejected: ', tone: 'dim' } as const, { text: rejected.join('; ') }]]),
-    // One picked up after the plugin was loaded again does not say which files it concerns: nothing is said of them.
     // A decision that points at no code yet says so: its code is added once the session writes it.
-    ...(record.isPartial === true && places.length === 0 && !waiting
-      ? []
-      : [
-          [
-            { text: 'In: ', tone: 'dim' } as const,
-            ...(places.length === 0
-              ? [{ text: waiting ? NO_CODE : 'no file', tone: 'dim' } as const]
-              : [
-                  { text: `${places.slice(0, MAX_PLACES).join(', ')}${more > 0 ? ` and ${more} more` : ''}` },
-                  ...(waiting ? [{ text: ` · ${NO_CODE}`, tone: 'dim' } as const] : []),
-                ]),
-          ],
-        ]),
+    [
+      { text: 'In: ', tone: 'dim' } as const,
+      ...(places.length === 0
+        ? [{ text: waiting ? NO_CODE : 'no file', tone: 'dim' } as const]
+        : [
+            { text: `${places.slice(0, MAX_PLACES).join(', ')}${more > 0 ? ` and ${more} more` : ''}` },
+            ...(waiting ? [{ text: ` · ${NO_CODE}`, tone: 'dim' } as const] : []),
+          ]),
+    ],
     ...(record.replaced === null ? [] : [[{ text: 'Replaces: ', tone: 'dim' } as const, { text: drawn(record.replaced, MAX_CONTENT) }]]),
   ]
 }

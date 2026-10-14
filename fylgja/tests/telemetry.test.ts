@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { verdictFor } from '../hooks/scribe/grant'
-import { PREFIX } from '../hooks/scribe/saved'
+import { PREFIX } from '../hooks/scribe/journal'
 import { STORE } from '../hooks/scribe/scribe'
 import * as Telemetry from '../hooks/telemetry'
 import type { Door } from '../hooks/telemetry'
