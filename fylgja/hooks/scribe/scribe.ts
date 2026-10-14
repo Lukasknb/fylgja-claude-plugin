@@ -10,10 +10,12 @@
  * nothing.
  *
  * What it holds of the session and of records is held in the running plugin
- * alone. What it keeps on the machine is ids, counters and two switches.
+ * alone. What it keeps on the machine is ids, counters and two switches,
+ * among them the ids of the records each conversation kept (`saved.ts`).
  */
 
 import type { Doing } from '../companion'
+import { detailOf } from '../hits'
 import type { View as Listed } from '../listing'
 import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
@@ -34,6 +36,8 @@ import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
 import type { Block } from './prompt'
 import { relativeTo, repoNameOf } from './repo'
+import { INDEX, indexed, indexOf, keyOf, marksOf, MAX_READ, MAX_RECORDS, MAX_SAVED, nearest, PREFIX, recordOf, savedOf } from './saved'
+import type { Saved, SavedRecord } from './saved'
 import { cleared } from './staged'
 import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
@@ -73,6 +77,10 @@ export type ScribeHost = LoopHost & {
   stored: (key: string) => Promise<unknown>
   /** `$.store.set`. */
   store: (key: string, value: unknown) => Promise<void>
+  /** `$.store.delete`. */
+  unstore: (key: string) => Promise<void>
+  /** `$.store.keys`. */
+  keys: () => Promise<string[]>
   /** `$.session.id`. */
   sessionId: () => Promise<string>
   /** `$.session.repo`. */
@@ -345,6 +353,20 @@ export type Scribe = {
   dropped: number
   /** Those lost for good, by the rule Fylgja refused them by: said in the window of what was kept, and nowhere else. */
   lost: Map<string, number>
+  /**
+   * The conversation the plugin was loaded for: the one whose records an
+   * earlier load kept are picked up again (see `recover`). Undefined until
+   * the session starts, and when its id cannot be read.
+   */
+  loadedFor: string | undefined
+  /** Whether those records are still to be picked up in the conversation in hand, are being, or need not be. */
+  recovery: 'pending' | 'running' | 'done'
+  /** The records an earlier load kept that wait to be listed again; undefined until they are looked for. */
+  waiting: SavedRecord[] | undefined
+  /** The conversation those records were kept under: this one's own, or one it went on from, until this one's own is written. */
+  waitingFrom: string | undefined
+  /** How many turns had ended when the plugin was loaded. */
+  loadedAt: number
 }
 
 /** The keys kept on this machine. */
@@ -354,7 +376,15 @@ export const STORE = {
   typedPast: 'scribe.typedPast',
   skip: 'scribe.skip',
   hasShown: 'scribe.hasShown',
+  /** The index of the conversations whose records are kept, each under `PREFIX` and its id (`saved.ts`). */
+  lists: INDEX,
 } as const
+
+/** No more records are asked of Fylgja at once when an earlier load's are picked up: they share the session's allowance of calls. */
+const OPEN_WIDTH = 4
+
+/** How long a turn's end waits for them before it looks. */
+const RECOVER_WAIT_MS = 1500
 
 /** A receipt nobody touched goes after this long. */
 export const RECEIPT_MS = 20_000
@@ -527,6 +557,11 @@ export function create(options: Options): Scribe {
     corrections: 0,
     dropped: 0,
     lost: new Map(),
+    loadedFor: undefined,
+    recovery: 'done',
+    waiting: undefined,
+    waitingFrom: undefined,
+    loadedAt: 0,
   }
 }
 
@@ -537,10 +572,11 @@ export function create(options: Options): Scribe {
  * session's counts if it turns out to be the same session.
  *
  * The records Scribe kept go with the rest. A developer who cleared the
- * conversation meant to, and the records of a session that is resumed or
- * branched are not on this machine to be picked up again: no word of a
- * record is ever stored. They are in Fylgja all the same. A compaction is
- * not such a start; see `compacted`.
+ * conversation meant to, and a resumed or branched one lists its own: no
+ * word of a record is ever stored, and they are in Fylgja all the same.
+ * Only where the conversation goes on under the id the plugin was loaded
+ * for are the ids an earlier load kept looked for again (`recover`). A
+ * compaction is not such a start; see `compacted`.
  */
 export function startOver(scribe: Scribe): void {
   const { kept } = scribe.band
@@ -550,6 +586,9 @@ export function startOver(scribe: Scribe): void {
   }
 
   scribe.epoch += 1
+  scribe.recovery = 'pending'
+  scribe.waiting = undefined
+  scribe.waitingFrom = undefined
   scribe.identity = undefined
   scribe.band = { ...Band.create(), kept }
   // The records it listed were the conversation's before. Whether it is open is Claude Code's to say, and is not changed here.
@@ -625,6 +664,238 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   scribe.created.clear()
   scribe.own.clear()
   scribe.isInteractive = isInteractive && (surface === 'terminal' || surface === 'desktop')
+}
+
+/**
+ * The plugin was loaded for the conversation `id`: on the session's start,
+ * which is also how Claude Code starts a plugin again whose copy it lost
+ * and how a conversation moved to the background goes on. What an earlier
+ * load kept for it is picked up by `recover`.
+ */
+export function loaded(scribe: Scribe, id: string | undefined): void {
+  scribe.loadedFor = id
+  scribe.loadedAt = scribe.turn
+}
+
+/**
+ * The conversation went on under the id `id` before any turn ended since the
+ * plugin was loaded, and was started over for it. Where Claude Code reads
+ * out the id of the conversation a background job resumed before the job's
+ * own, that is still the conversation the plugin was loaded for: its records
+ * are looked for again under the id it goes on with, by its rows. A
+ * `/clear` has none of the rows before, so nothing is found for it.
+ */
+export function followed(scribe: Scribe, id: string): void {
+  if (scribe.loadedFor !== undefined && scribe.turn === scribe.loadedAt) {
+    scribe.loadedFor = id
+  }
+}
+
+/**
+ * Writes which records this conversation kept, as `saved.ts` keeps them:
+ * their ids and fixed words, under a key of the conversation's own, with
+ * the marks of its rows. Those an earlier load kept that are not listed yet
+ * stay with them, whatever kept them from being listed. The rows are read
+ * first, so that the conversation's own entry is read and written with
+ * nothing between. Not waited for, and never fails.
+ */
+function save(host: ScribeHost, scribe: Scribe): void {
+  const who = scribe.identity
+  const key = who === null || who === undefined ? undefined : keyOf(who.sessionId)
+
+  if (who === null || who === undefined || key === undefined) {
+    return
+  }
+
+  const { epoch } = scribe
+  const write = async (): Promise<void> => {
+    const marks = marksOf(await host.rows().catch(() => []))
+    // What waits was kept under another conversation, and this one's own is not written yet by this load.
+    const isTheirs = scribe.waitingFrom !== undefined && scribe.waitingFrom !== who.sessionId
+    // Not looked for yet, or found elsewhere: what the store holds for this conversation is read, with nothing between it and the write.
+    const own = (scribe.waiting === undefined && scribe.recovery !== 'done') || isTheirs ? savedOf(await host.stored(key)) : undefined
+
+    if (epoch !== scribe.epoch) {
+      return
+    }
+
+    const now: SavedRecord[] = scribe.written.map(({ id, kind, outcome }) => ({ id, kind, outcome }))
+    // The list of a conversation it went on from never takes the place of one this conversation already has.
+    const base = isTheirs && own !== undefined ? own.records : (scribe.waiting ?? own?.records ?? [])
+    const waiting = base.filter(one => !now.some(record => record.id === one.id))
+    const records = [...waiting, ...now].slice(-MAX_RECORDS)
+
+    if (records.length === 0) {
+      await host.unstore(key)
+
+      return
+    }
+
+    await host.store(key, { id: who.sessionId, at: await host.now(), ...marks, records })
+
+    if (epoch === scribe.epoch) {
+      scribe.waitingFrom = who.sessionId
+    }
+
+    // The oldest are let go. Another session may write the index meanwhile: then only its pruning is lost.
+    const { index, dropped } = indexed(indexOf(await host.stored(INDEX)), who.sessionId)
+
+    await host.store(INDEX, index)
+    await Promise.all(dropped.flatMap(id => keyOf(id) ?? []).map(one => host.unstore(one)))
+    await pruned(host, key)
+  }
+
+  void write().catch(() => undefined)
+}
+
+/** Runs `work` on each of `items`, no more than `width` at a time; the results in order. */
+async function pooled<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = []
+  let next = 0
+  const lane = async (): Promise<void> => {
+    while (next < items.length) {
+      const at = next
+
+      next += 1
+      results[at] = await work(items[at] as T)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane))
+
+  return results
+}
+
+/**
+ * Lets go of the conversations past the newest `MAX_SAVED` by when they were
+ * written, among them any the index lost, never the one just written. Read
+ * only when there are more keys than that.
+ */
+async function pruned(host: ScribeHost, mine: string): Promise<void> {
+  const keys = (await host.keys()).filter(key => key.startsWith(PREFIX))
+
+  if (keys.length <= MAX_SAVED) {
+    return
+  }
+
+  const all = await Promise.all(keys.map(async key => ({ key, at: savedOf(await host.stored(key))?.at ?? 0 })))
+  const old = all
+    .filter(one => one.key !== mine)
+    .sort((one, two) => two.at - one.at)
+    .slice(MAX_SAVED - 1)
+
+  await Promise.all(old.map(one => host.unstore(one.key)))
+}
+
+/** The conversations kept on this machine, read from their own keys: those the index lists first, newest first, then any it lost. */
+async function savedAll(host: ScribeHost): Promise<Saved[]> {
+  const listed = indexOf(await host.stored(INDEX)).flatMap(id => keyOf(id) ?? []).toReversed()
+  const keys = [...new Set([...listed, ...(await host.keys()).filter(key => key.startsWith(PREFIX)).toReversed()])]
+
+  return (await Promise.all(keys.slice(0, MAX_READ).map(async key => savedOf(await host.stored(key))))).flatMap(one => one ?? [])
+}
+
+/**
+ * Picks up the records an earlier load of the plugin kept in this
+ * conversation, when the plugin was loaded afresh for it: Claude Code
+ * started a plugin again whose copy it lost, or the conversation was moved
+ * to the background and goes on in a job of its own. They are found by the
+ * conversation's id, or by the rows of the nearest one it went on from
+ * (`saved.ts`), and asked of Fylgja, `OPEN_WIDTH` at a time; only a record
+ * Fylgja says is not there is let go. They are listed before the ones
+ * written since, and none of them is Scribe's own to rewrite or take back.
+ * Any other answer, or a call that did not get through, leaves that record
+ * waiting, and kept on this machine, for the next try: the session's start,
+ * the window opened, a turn's end. Never fails.
+ */
+export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
+  if (scribe.recovery !== 'pending') {
+    return
+  }
+
+  const { epoch } = scribe
+  let state: 'pending' | 'done' = 'done'
+
+  scribe.recovery = 'running'
+
+  try {
+    if (isOff(scribe) || !scribe.isInteractive || scribe.loadedFor === undefined || (await host.sessionId()) !== scribe.loadedFor) {
+      return
+    }
+
+    const rows = await host.rows()
+
+    // A conversation with no rows yet has kept nothing; one whose rows are not read yet is looked at again later.
+    if (rows.length === 0) {
+      state = 'pending'
+
+      return
+    }
+
+    const held = new Set([...scribe.written, ...scribe.ledger.gone].map(one => one.id))
+    const from = scribe.waiting === undefined ? nearest(await savedAll(host), scribe.loadedFor, rows) : undefined
+    const wanted = scribe.waiting ?? (from?.records ?? []).filter(one => !held.has(one.id))
+
+    if (epoch !== scribe.epoch) {
+      return
+    }
+
+    scribe.waitingFrom ??= from?.id
+    scribe.waiting = wanted
+
+    if (wanted.length === 0) {
+      return
+    }
+
+    const who = await identityOf(host, scribe)
+
+    if (who === null || epoch !== scribe.epoch) {
+      state = 'pending'
+
+      return
+    }
+
+    // Each record comes back, is let go because Fylgja says it is not there, or waits.
+    const back = await pooled(wanted, OPEN_WIDTH, async (one): Promise<Written | 'gone' | 'waits'> => {
+      try {
+        const { answer, refusal } = await tried(host, scribe, 'open', { ref: one.id })
+        const detail = answer === undefined ? undefined : detailOf(answer, one.id)
+
+        return detail !== undefined ? recordOf(one, detail) : answer === undefined && failureOf('open', refusal ?? '') === 'not_found' ? 'gone' : 'waits'
+      } catch {
+        return 'waits'
+      }
+    })
+
+    if (epoch !== scribe.epoch) {
+      return
+    }
+
+    const standing = new Set(scribe.written.map(one => one.id))
+    const found = back.flatMap(one => (typeof one === 'string' || standing.has(one.id) ? [] : [one]))
+
+    scribe.waiting = wanted.filter((_, at) => back[at] === 'waits')
+    state = scribe.waiting.length > 0 ? 'pending' : 'done'
+    scribe.written = [...found, ...scribe.written].slice(-MAX_LISTED)
+    // Said already: the model is not to write them again.
+    scribe.recorded = [...found.map(one => ({ id: null, content: one.content })), ...scribe.recorded].slice(-MAX_LISTED)
+
+    if (found.length > 0) {
+      host.mark()
+      host.redraw()
+    }
+  } catch {
+    state = 'pending'
+  } finally {
+    if (epoch === scribe.epoch) {
+      scribe.recovery = state
+    }
+  }
+
+  // Kept under this conversation's own id from here on, those still waiting with them, so a later load finds them by it.
+  if (epoch === scribe.epoch && (scribe.waiting?.length ?? 0) + scribe.written.filter(one => one.isPartial === true).length > 0) {
+    save(host, scribe)
+  }
 }
 
 function ids(value: unknown): string[] {
@@ -1262,6 +1533,8 @@ async function send(
     scribe.mine.add(written.id)
   }
 
+  save(host, scribe)
+
   return { written, code: undefined, refusal: undefined, isTaken: true }
 }
 
@@ -1622,6 +1895,7 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft, isByHand 
 
   scribe.written = scribe.written.map(one => (one.id === own.id ? now : one))
   scribe.recorded = scribe.recorded.map(one => (one.id === own.id ? { id: one.id, content } : one))
+  save(host, scribe)
 
   if (draft.reasonStatus !== 'not_stated') {
     withdraw(host, scribe, own.id)
@@ -1668,10 +1942,14 @@ async function takeBack(host: ScribeHost, scribe: Scribe, id: string, isByHand =
   scribe.mine.delete(id)
   scribe.recorded = scribe.recorded.filter(one => one.id !== id)
   withdraw(host, scribe, id)
+  save(host, scribe)
 
   const gone: Written = { ...own, outcome: 'withdrawn', replaced: null }
 
-  Ledger.shelve(scribe.ledger, gone)
+  // One picked up after a load again is not known whole, and is not sent back as if it were.
+  if (own.isPartial !== true) {
+    Ledger.shelve(scribe.ledger, gone)
+  }
 
   return gone
 }
@@ -2867,6 +3145,14 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
       return
     }
 
+    // What an earlier load kept in this conversation is listed, and known to the look, before the look writes anything; for a moment at most.
+    await within(host, recover(host, scribe), RECOVER_WAIT_MS)
+
+    // The marks of a conversation that kept records follow its rows, so a fork of it later is told from its siblings.
+    if (scribe.written.length > 0) {
+      save(host, scribe)
+    }
+
     if (scribe.looking !== null) {
       await within(host, scribe.looking, INSIDE_WAIT_MS)
     }
@@ -3658,6 +3944,7 @@ async function pressedReceipt(host: ScribeHost, scribe: Scribe, key: string): Pr
     shown.records = shown.records.filter(one => one !== written)
     scribe.written = scribe.written.filter(one => one.id !== written.id)
     touched(scribe, written.id)
+    save(host, scribe)
     band.receipt = shown.records.length === 0 ? null : shown
 
     // Only a record Fylgja took out can be put back: one whose removal failed, or waits to be tried again, is not offered.
@@ -3718,6 +4005,7 @@ async function putBack(host: ScribeHost, scribe: Scribe, gone: Written): Promise
 
   // Among the session's records it reads as put back too, whatever id Fylgja gave it.
   scribe.written = scribe.written.map(one => (one.id === back.id ? back : one))
+  save(host, scribe)
 
   return back
 }

@@ -367,6 +367,12 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
     return { value: undefined }
   })
+  on('store.delete', ($, e) => {
+    kept.delete(e.key)
+
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: [...kept.keys()] }))
   on('prompt.read', () => ({ value: { text: box.text, cursor: box.cursor ?? box.text.length } }))
   // The box takes a text as Claude Code's does: over the draft, after it, or in at the cursor.
   on('prompt.fill', ($, e) => {

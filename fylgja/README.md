@@ -859,12 +859,42 @@ that id.
   records themselves stay in Fylgja, where Claude finds them with
   `recall` when it works in those files.
 - **Resume and fork.** They start over the same way, and the context of
-  the resumed or branched conversation has no block: which records a
-  session kept is held by the running plugin alone. Nothing of it is
-  written to this machine, neither by the plugin nor into the
-  conversation Claude Code saves, so there is nothing to pick up again.
-  What such a conversation still knows of your decisions is what its
-  own rows and its summary hold; the records are in Fylgja.
+  the resumed or branched conversation has no block. What such a
+  conversation still knows of your decisions is what its own rows and
+  its summary hold; the records are in Fylgja.
+- **The plugin loaded again for the same conversation.** Claude Code
+  loads the plugin afresh, with nothing it held, when it starts it again
+  after losing its copy, and when you move the conversation to the
+  background from the agents view and open it again: it then goes on in
+  a background job that resumed it as a fork, under an id of its own.
+  So that the window and the mark still list what was kept, the plugin
+  keeps on this machine the ids of each conversation's records, under a
+  key of the conversation's own, with two marks of its rows that the
+  background job's copy of the conversation holds too: the id of its
+  last tool call, and a hash of its rows in order (only while its whole
+  history is readable: past the newest 4096 rows the plugin can read,
+  the tool call alone). A load for that conversation takes its own list
+  when it has one; otherwise, of those it goes on from, the one that
+  shares the most rows with it, so a sibling forked from the same
+  conversation is not taken for it (the tool call decides only where
+  rows cannot be compared). It asks Fylgja for each record again
+  (`open`, four at a time, at the session's start, or when the window is
+  opened or, for a moment, when a turn ends if Fylgja did not answer
+  then), and lists them before the ones written since. Only a record
+  Fylgja says is not there is let go; any other answer leaves it waiting,
+  and kept. They are not Scribe's own to rewrite or take back, which
+  files they concern is not shown, and one you remove is not offered to
+  be put back. `/clear` and a resume or fork into another conversation
+  pick up nothing, except right after a load and before any turn has
+  ended, where an id that changes still looks for the conversation by
+  its rows (Claude Code may read out the resumed conversation's id
+  before the job's own): there a fork lists what the conversation kept,
+  and a `/resume` into another conversation lists that conversation's
+  own kept records, when this machine has them. A conversation you resume or fork from the
+  command line in a new process, while its rows begin with those of one
+  that kept records, lists those too. A compaction between keeping a
+  record and the background job's start leaves only the tool call to
+  find it by.
 - **Where an organization manages Claude Code.** There Claude Code does
   not run a plugin's hooks on the start of a cleared, resumed or branched
   conversation. The plugin starts over all the same, when it next sees
@@ -1096,7 +1126,12 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   up for. Three ids, no name, no token.
 - **Kept on this machine, by Scribe:** the ids of at most 500 records you
   marked `Knew this`, two counters for holding back after ignored offers,
-  whether Scribe is switched off, and whether it has shown anything yet.
+  whether Scribe is switched off, and whether it has shown anything yet;
+  and, for at most 20 conversations, each under `scribe.list.<its id>`
+  and listed in `scribe.lists`: the conversation's id, when it was
+  written, the id of its last tool call, a hash of its rows and their
+  number, and the id, kind and outcome word of each record it kept (at
+  most 40), so that a plugin loaded again for it lists them again.
   Ids, numbers and switches; never a word of a prompt, a reply, a file, a
   plan or a record. The plugin writes no file of its own. Scribe writes
   five kinds of line to Claude Code's debug log, each at most once a
@@ -1342,3 +1377,12 @@ see in ordinary work, and last what needs your setup changed.
     refusal of an argument it does not know was read from the server
     library's own behaviour, and that it takes a decision sent again
     under its own id from its code.)
+26. The agents view: in a session where the mark reads `2 kept`, press
+    the left arrow to move it to the background, then open it again from
+    the agents view. The mark reads `2 kept` again within a moment, and
+    the window lists both records with their reasons and no `In:` line.
+    `/clear` there: the window lists nothing. (Read from Claude Code
+    2.1.299's own code, not yet seen live: the left arrow starts a
+    background job with `--resume` of the conversation and
+    `--fork-session` under a new id, so the plugin there is a fresh load
+    with that id; a job started again later resumes under the job's id.)

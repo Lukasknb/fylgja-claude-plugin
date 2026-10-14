@@ -129,6 +129,12 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
 
       return Promise.resolve()
     },
+    unstore: key => {
+      world.kept.delete(key)
+
+      return Promise.resolve()
+    },
+    keys: () => Promise.resolve([...world.kept.keys()]),
     sessionId: () => Promise.resolve(`scenario-${world.scenario.id}-${world.run}`),
     repo: () => Promise.resolve({ root: ROOT, remote: `git@github.com:${world.scenario.repo}.git` }),
     cwd: () => Promise.resolve(ROOT),

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { verdictFor } from '../hooks/scribe/grant'
+import { PREFIX } from '../hooks/scribe/saved'
 import { STORE } from '../hooks/scribe/scribe'
 import * as Telemetry from '../hooks/telemetry'
 import type { Door } from '../hooks/telemetry'
@@ -863,7 +864,9 @@ describe('reporting never stands in Scribe’s way', () => {
     await turn($, set, ...QUIET)
 
     expect(set.reports.length).toBeGreaterThan(0)
-    expect([...set.kept.keys()].filter(key => key !== 'fylgja.account' && !Object.values(STORE).includes(key as never))).toEqual([])
+    expect(
+      [...set.kept.keys()].filter(key => key !== 'fylgja.account' && !key.startsWith(PREFIX) && !Object.values(STORE).includes(key as never)),
+    ).toEqual([])
     expect(JSON.stringify([...set.kept.values()])).not.toMatch(/report_events|session_started|skipped_gate/)
   })
 })

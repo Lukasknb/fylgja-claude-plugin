@@ -282,12 +282,17 @@ function opened(record: Written, isCut: boolean): Part[][] {
     ...(isCut ? [[{ text: drawn(record.content, MAX_CONTENT) }]] : []),
     ...why({ kind: record.kind, detail: record.detail ?? '', reasonStatus: record.reasonStatus }).map(row => row.parts),
     ...(rejected.length === 0 ? [] : [[{ text: 'Rejected: ', tone: 'dim' } as const, { text: rejected.join('; ') }]]),
-    [
-      { text: 'In: ', tone: 'dim' },
-      places.length === 0
-        ? { text: 'no file', tone: 'dim' }
-        : { text: `${places.slice(0, MAX_PLACES).join(', ')}${more > 0 ? ` and ${more} more` : ''}` },
-    ],
+    // One picked up after the plugin was loaded again does not say which files it concerns: nothing is said of them.
+    ...(record.isPartial === true && places.length === 0
+      ? []
+      : [
+          [
+            { text: 'In: ', tone: 'dim' } as const,
+            places.length === 0
+              ? ({ text: 'no file', tone: 'dim' } as const)
+              : { text: `${places.slice(0, MAX_PLACES).join(', ')}${more > 0 ? ` and ${more} more` : ''}` },
+          ],
+        ]),
     ...(record.replaced === null ? [] : [[{ text: 'Replaces: ', tone: 'dim' } as const, { text: drawn(record.replaced, MAX_CONTENT) }]]),
   ]
 }

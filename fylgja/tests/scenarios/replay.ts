@@ -307,6 +307,12 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
 
       return Promise.resolve()
     },
+    unstore: key => {
+      world.kept.delete(key)
+
+      return Promise.resolve()
+    },
+    keys: () => Promise.resolve([...world.kept.keys()]),
     sessionId: () => Promise.resolve(world.session.sessionId),
     repo: () => Promise.resolve(world.session.repo),
     cwd: () => Promise.resolve(world.cwd),

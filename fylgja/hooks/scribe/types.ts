@@ -127,4 +127,10 @@ export type Written = {
    * that one because the question whether it replaces it went unanswered.
    */
   against?: string
+  /**
+   * Picked up from Fylgja after the plugin was loaded again (`saved.ts`):
+   * the files it concerns and its triggers are not known here, so once it
+   * is taken out it is not offered to be put back.
+   */
+  isPartial?: true
 }

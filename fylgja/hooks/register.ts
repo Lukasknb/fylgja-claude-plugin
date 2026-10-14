@@ -155,6 +155,8 @@ function scribeHostOf($: EngineInterface, session: Session.Session, report: Repo
     fill: async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled,
     stored: key => $.store.get(key),
     store: (key, value) => $.store.set(key, value),
+    unstore: key => $.store.delete(key),
+    keys: () => $.store.keys(),
     sessionId: () => $.session.id(),
     repo: () => $.session.repo(),
     cwd: () => $.session.cwd(),
@@ -319,6 +321,26 @@ async function openKept(
 }
 
 /**
+ * Before the window lists what was kept: what Scribe kept in this
+ * conversation before the plugin was loaded afresh for it is picked up, in
+ * the hook that opens it and for a moment at most. Nothing is asked once
+ * that is done.
+ */
+async function recovered($: EngineInterface, session: Session.Session, scribe: Scribe.Scribe, report: Report): Promise<void> {
+  if (scribe.recovery !== 'pending') {
+    return
+  }
+
+  const live = open()
+
+  try {
+    await briefly((ms, fn) => $.clock.after(ms, fn), Scribe.recover(scribeHostOf($, session, report, live), scribe), SHORT_WAIT_MS)
+  } finally {
+    close(live)
+  }
+}
+
+/**
  * One search of the developer's, noted once it has been answered or has
  * failed: how it was asked for, how it ended, how long it took and how many
  * it found as one of four sizes. Nothing of what was looked for or found.
@@ -476,6 +498,8 @@ async function caughtUp($: EngineInterface, held: Held): Promise<boolean> {
   }
 
   await startOver($, held)
+  // Still the conversation the plugin was loaded for, when no turn has ended since: see `Scribe.followed`.
+  Scribe.followed(held.scribe, id)
 
   return true
 }
@@ -627,7 +651,11 @@ export function register(on: On, options: PluginOptions = {}): void {
     Session.located(session, e.cwd)
     Session.revet(session)
     Scribe.started(scribe, e.isInteractive, e.surface)
-    held.conversation.id = (await idOf($)) ?? held.conversation.id
+
+    const id = await idOf($)
+
+    held.conversation.id = id ?? held.conversation.id
+    Scribe.loaded(scribe, id)
     Telemetry.started(telemetry, e.surface)
     signedIn = undefined
 
@@ -643,6 +671,8 @@ export function register(on: On, options: PluginOptions = {}): void {
       const host = hostOf($, session, live)
 
       await briefly(host.after, flush(host, session, true), SHORT_WAIT_MS)
+      // A conversation the plugin was loaded afresh for, a moment more: what Scribe kept in it before.
+      await briefly(host.after, Scribe.recover(scribeHostOf($, session, report, live), scribe), SHORT_WAIT_MS)
     } catch (error) {
       report('error', { component: 'session_start', kind: 'threw', cause: Telemetry.causeOf(error) })
 
@@ -708,6 +738,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       await vouch($, held, noteSignIn)
     }
 
+    await recovered($, session, scribe, report)
     await openKept($, scribe, win, report, 'command')
 
     return {}
@@ -775,6 +806,10 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     if (!isSeen) {
       await startOver($, held)
+
+      if (id !== undefined) {
+        Scribe.followed(scribe, id)
+      }
     }
 
     const started = await next(e)
@@ -1178,6 +1213,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       // With the window open the mark is drawn as text, so the band has
       // nothing left to hold them with: once it has been drawn so, the
       // window is asked again, and gets them.
+      await recovered($, session, scribe, report)
       await openKept($, scribe, win, report, 'click')
 
       if (scribe.ledger.isOpen) {
