@@ -7,10 +7,12 @@
  * before a receipt; a question never shows while Claude is working, and
  * nothing new comes up while the developer is typing.
  *
- * A question is one of three: why a decision was taken, whether a new
- * decision replaces a recorded one, and whether a recorded decision still
- * holds now that its code has changed. All three are held to the same
- * limits.
+ * A question is one of four: why a decision was taken, whether a new
+ * decision replaces a recorded one, whether a recorded decision still
+ * holds now that its code has changed, and whether a choice an agent's
+ * report says it made is to be kept. The first three are held to the same
+ * limits; the fourth has its own, one a turn, and never stands in the way
+ * of another.
  */
 
 import type { Draft, Fact, Written } from './types'
@@ -66,7 +68,20 @@ export type HoldsQuestion = {
   isTouched: boolean
 }
 
-export type Question = ReasonQuestion | ReversalQuestion | HoldsQuestion
+/**
+ * Whether a choice an agent of the session made, as its report says, is to
+ * be kept. Nothing is written unless the developer keeps it. It has its own
+ * share, one a turn, and takes nothing from the other questions' limits.
+ */
+export type ReportQuestion = {
+  kind: 'question'
+  form: 'report'
+  /** What would be written, as the look proposed it. */
+  draft: Draft
+  isTouched: boolean
+}
+
+export type Question = ReasonQuestion | ReversalQuestion | HoldsQuestion | ReportQuestion
 export type Item = Tell | Question
 
 /** One line saying what Scribe just wrote. It waits for nobody and nothing waits for it. */
@@ -116,6 +131,8 @@ export type Band = {
   questions: number
   unanswered: number
   hasAskedThisTurn: boolean
+  /** Questions about a choice an agent made, put in line in the turn in hand. */
+  choicesThisTurn: number
   tellsThisTurn: number
   receipts: number
   isWorking: boolean
@@ -134,6 +151,9 @@ export const MAX_QUESTIONS = 4
 export const MAX_UNANSWERED = 2
 
 export const MAX_TELLS_PER_TURN = 1
+
+/** No more questions about a choice an agent made than this in one turn. */
+export const MAX_CHOICES_PER_TURN = 1
 
 /** No more ids of known records are kept than this; the oldest go first. */
 export const MAX_KNOWN = 500
@@ -164,6 +184,7 @@ export function create(): Band {
     questions: 0,
     unanswered: 0,
     hasAskedThisTurn: false,
+    choicesThisTurn: 0,
     tellsThisTurn: 0,
     receipts: 0,
     isWorking: false,
@@ -220,6 +241,22 @@ export function offerQuestion(band: Band, question: Question, about: string): bo
   band.asked.add(key)
   band.questions += 1
   band.hasAskedThisTurn = true
+  enqueue(band, question)
+
+  return true
+}
+
+/**
+ * Puts the question whether a choice an agent made is to be kept in line,
+ * unless the turn has had its one. It is counted apart: it takes nothing
+ * from the session's share of questions, and the turn may still ask one.
+ */
+export function offerChoice(band: Band, question: ReportQuestion): boolean {
+  if (band.choicesThisTurn >= MAX_CHOICES_PER_TURN) {
+    return false
+  }
+
+  band.choicesThisTurn += 1
   enqueue(band, question)
 
   return true
@@ -358,7 +395,9 @@ export function settle(band: Band): Settled {
 
   while (band.current === null && !band.isTyping) {
     // A question comes before a tell; while Claude works, only a tell may come up.
-    const asks = band.isWorking ? -1 : band.queue.findIndex(item => item.kind === 'question')
+    // A question about an agent's choice comes after any other.
+    const other = band.queue.findIndex(item => item.kind === 'question' && item.form !== 'report')
+    const asks = band.isWorking ? -1 : other !== -1 ? other : band.queue.findIndex(item => item.kind === 'question')
     const at = asks === -1 ? band.queue.findIndex(item => item.kind === 'tell') : asks
 
     if (at === -1) {
@@ -427,7 +466,8 @@ export function submitted(band: Band): Item | undefined {
     if (!item.isTouched) {
       band.kept.typedPast += 1
       band.kept.skip = skipsAfter(band.kept.typedPast)
-      band.unanswered += item.kind === 'question' ? 1 : 0
+      // One about an agent's choice is counted apart, and not here.
+      band.unanswered += item.kind === 'question' && item.form !== 'report' ? 1 : 0
     }
 
     clear(band)

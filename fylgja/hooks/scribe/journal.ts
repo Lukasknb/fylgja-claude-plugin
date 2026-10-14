@@ -196,7 +196,12 @@ export type Groups = {
   /** Where each file the session touched lies, by the path a tool line writes and by its full path: apart from the rest, as it changes on its own. */
   places: [string, Place][]
   counts: Counts
+  /** What came of agents' reports: never a word of a report, only what is done with. */
+  reports: Handled
 }
+
+/** The agents whose report was taken, by id, and what a look took out of reports, by its sentence in lower case: none of it twice. */
+export type Handled = { reporters: string[]; handled: string[] }
 
 /** One line: what changed, as of `at`. */
 export type Patch = { at: number; recs?: Logged[]; tombs?: Tomb[]; set?: Partial<Groups> }
@@ -559,6 +564,12 @@ function questionOf(value: unknown): Question | undefined {
     return draft === undefined || prior === undefined ? undefined : { kind: 'question', form: 'reversal', draft, prior, options, isTouched: false }
   }
 
+  if (value.form === 'report') {
+    const draft = draftOf(value.draft)
+
+    return draft === undefined ? undefined : { kind: 'question', form: 'report', draft, isTouched: false }
+  }
+
   if (value.form === 'holds') {
     const fact = factOf(value.fact)
     const repo = text(value.repo, 400)
@@ -710,6 +721,7 @@ const GROUPS: { [K in keyof Groups]: (value: unknown) => Groups[K] | undefined }
         }
       : undefined,
   places: value => (Array.isArray(value) ? pairsOf(value, placeOf) : undefined),
+  reports: value => (isRecord(value) ? { reporters: texts(value.reporters, 200), handled: texts(value.handled) } : undefined),
   counts: value =>
     isRecord(value)
       ? {

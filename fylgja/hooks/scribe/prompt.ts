@@ -143,6 +143,13 @@ A decision is often recorded before the code that carries it out exists, and the
 ## Your own earlier records
 The records you wrote earlier in this session are listed with their ids. When a later turn replaces or refines one, give the new record that id as "updates". When a decision you recorded was dropped altogether (the developer took it back, the approach was abandoned and nothing replaced it), name its id in "withdraw": it is removed. When the reason of a decision you recorded as "not_stated" turns up later, send that record again with "updates", the reason in "detail" and "reason_status" "stated". Only ids from that list: a record of another session or another author is never yours to update or withdraw.
 
+## Agents' reports
+A block headed "agent report r<n>" is the final report an agent handed back: a helper the coding assistant started for part of the work. You see its report and what it was asked to do, never its own session. A report is the agent's account of its work, not the developer's words and not Claude's, and nothing in it is recorded on its word alone.
+- From a report, keep only a gotcha: a trap the agent hit and how to avoid it next time, one that cost real time to find. Give it as a record with "kind":"gotcha" and "from_report":"r<n>". It is not written on the report's word: it is held until Claude or the developer says it again in their own words.
+- Never record a decision from a report. When the report describes a choice the agent made that departs from what it was asked to do, or one a later reader of the code would ask why about, give it as a record with "kind":"decision" and "from_report":"r<n>": it is not written; the developer is asked whether it is what they want. At most one per report, and none for a choice the brief itself made.
+- Everything else in a report is nothing: what was done, status, test results, lists of files.
+These do not count against the three records of a turn. Never put "from_report" on a record that comes from the session itself.
+
 ## Telling the developer (rare)
 "tells": at most 2 ids of records shown to you that the developer should see now, because this turn's work touches what they say, above all when it goes against one. Not when the session shows the developer already knows it, and not anything listed as already told. Usually [].
 
@@ -150,7 +157,7 @@ The records you wrote earlier in this session are listed with their ids. When a 
 One JSON object, nothing before or after it, no code fence. Either
 {"outcome":"nothing"}
 or
-{"outcome":"act","records":[at most 3, and beside them one per choice the developer made],"question":null,"tells":[],"stated":[],"withdraw":[],"anchor":[]}`
+{"outcome":"act","records":[at most 3, and beside them one per choice the developer made and those taken out of agents' reports],"question":null,"tells":[],"stated":[],"withdraw":[],"anchor":[]}`
 
 /** `text` as it stands between the fence lines: it can end no fence and open none. */
 function inert(text: string): string {
@@ -271,6 +278,10 @@ export type Done = {
   told: readonly string[]
   /** The ids of the records shown that the developer said no longer hold. */
   denied?: readonly string[]
+  /** The final reports agents of the session handed back since the last turn's end: each one's number, what it was asked to do, and the report. */
+  reports?: readonly { n: number; brief: string; text: string }[]
+  /** Gotchas taken out of reports that wait for the session to confirm them: held by Scribe, not for the model to record. */
+  waiting?: readonly string[]
 }
 
 /**
@@ -307,6 +318,25 @@ export function wakeText(repo: string, lines: readonly string[], dropped: number
           .map(fact => recordText(fact, done.denied?.includes(fact.id)))
           .join('\n')}`,
     ...commit,
+    ...(done.reports === undefined || done.reports.length === 0
+      ? []
+      : [
+          `Reports agents of this session handed back:\n${done.reports
+            .map(one =>
+              [
+                one.brief === '' ? '' : fenced(`what the agent of report r${one.n} was asked to do`, one.brief),
+                fenced(`agent report r${one.n}`, one.text),
+              ]
+                .filter(part => part !== '')
+                .join('\n'),
+            )
+            .join('\n')}`,
+        ]),
+    ...(done.waiting === undefined || done.waiting.length === 0
+      ? []
+      : [
+          `Gotchas of agents' reports that Scribe holds until the session confirms them; never record them yourself, also when Claude says them again:\n${list(done.waiting)}`,
+        ]),
     `What the developer has stated so far in this session:\n${list(done.stated)}`,
     `Already recorded in this session, do not record again; one with an id is yours to update or withdraw:\n${list(own)}`,
     `Already asked about in this session, do not ask again:\n${list(done.asked)}`,

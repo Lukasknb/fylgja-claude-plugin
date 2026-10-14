@@ -48,6 +48,14 @@ export function carded(line: string): string {
     return asks('is this decision still true?', NOTES.holds)
   }
 
+  if (rows.startsWith('? Agent found: ')) {
+    return asks('keep what an agent found?', NOTES.report)
+  }
+
+  if (rows.startsWith('? Agent chose: ')) {
+    return asks('keep what an agent decided?', NOTES.report)
+  }
+
   if (rows.startsWith(' [Why]')) {
     return asks('the reason, in your words', NOTES.field)
   }
@@ -126,6 +134,8 @@ export type StageOptions = {
    * refused, as a machine without git would.
    */
   git?: (args: readonly string[], root: string, clock: MockClock) => Ran | undefined | 'hangs' | Promise<Ran | undefined>
+  /** The plugin's own rows of `/config` as they stand when the stage is set; a test changes them through `Stage.settings`. */
+  settings?: Readonly<Record<string, string | boolean>>
 }
 
 export type Stage = {
@@ -166,6 +176,12 @@ export type Stage = {
   clock: MockClock
   /** The calls made of one tool. */
   of: (tool: string) => Record<string, unknown>[]
+  /** The plugin's own rows of `/config`, by field: what `$.config.list` answers now. A field not here is not listed. */
+  settings: Record<string, string | boolean>
+  /** Every time the plugin read a conversation: the agent's id when it asked for an agent's, undefined for the main one. */
+  conversations: (string | undefined)[]
+  /** How many times the plugin read `/config`. */
+  configReads: number
 }
 
 /**
@@ -193,6 +209,9 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const rows: Row[] = []
   const box: { text: string; cursor?: number } = { text: '' }
   const clock = mock.clock(on)
+  const settings: Record<string, string | boolean> = { ...options.settings }
+  const conversations: (string | undefined)[] = []
+  const configReads = { count: 0 }
   let written = 0
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -337,7 +356,35 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     }
   })
 
-  on('session.messages', () => ({ value: rows as never }))
+  on('session.messages', ($, e) => {
+    const asked = e as { agentId?: string } | undefined
+
+    conversations.push(asked?.agentId)
+
+    return { value: rows as never }
+  })
+  // A row changed in the menu: the plugin's own fields are written where `$.config.list` reads them.
+  on('config.set', ($, e) => {
+    if (e.key.startsWith('fylgja.') && typeof e.value !== 'object') {
+      settings[e.key.slice('fylgja.'.length)] = e.value as string | boolean
+    }
+
+    return { value: e.value }
+  })
+  on('config.list', () => {
+    configReads.count += 1
+
+    return {
+    value: Object.entries(settings).map(([field, value]) => ({
+      key: `fylgja.${field}`,
+      label: field,
+      kind: typeof value === 'boolean' ? ('boolean' as const) : ('choice' as const),
+      value,
+      provider: { plugin: 'fylgja', tier: 'user' },
+      isLocked: false,
+    })) as never,
+    }
+  })
   on('session.id', () => (options.hasNoId === true ? { deny: 'no id today' } : { value: options.sessionId?.() ?? SESSION_ID }))
   on('session.repo', () => ({
     value: (options.repo === undefined
@@ -452,6 +499,11 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     box,
     clock,
     of: tool => calls.filter(call => call.tool === tool).map(call => call.args),
+    settings,
+    conversations,
+    get configReads() {
+      return configReads.count
+    },
   }
 }
 

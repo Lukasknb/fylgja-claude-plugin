@@ -56,9 +56,23 @@ export type Place = { repo: string; path: string }
 export type Ask =
   { form: 'reason'; record: number; options: string[] } | { form: 'reversal'; record: number; prior: string; options: string[] }
 
+/**
+ * A record a wake proposed out of an agent's final report: never written on
+ * the report's word alone. A gotcha is written once the main conversation
+ * confirms it in its own words (`reports.ts`); a decision never is, and the
+ * developer is asked instead.
+ */
+export type Reported = {
+  draft: Draft
+  /** The number of the report it came out of. */
+  report: number
+}
+
 /** What a wake came to. Nothing in all three is the usual answer. */
 export type Verdict = {
   records: Draft[]
+  /** What it took out of agents' reports, kept apart from the records: none of it is written as it stands. */
+  reported?: Reported[]
   question: Ask | null
   /** Ids of records worth telling the developer about, each one a lookup returned. */
   tells: string[]

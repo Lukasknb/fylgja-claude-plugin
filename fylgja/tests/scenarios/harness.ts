@@ -147,6 +147,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     run: () => Promise.reject(new Error('no commands here')),
     rows: () => Promise.resolve(world.rows),
     destination: () => undefined,
+    // The run's own model stands; no other setting is read.
+    settings: async () => ({}),
   }
 }
 
@@ -242,10 +244,8 @@ async function play(
   // A machine that has seen Scribe before, so "What is this" is not in the way.
   const world: World = { scenario, run, server, rows: [], kept: new Map([['scribe.hasShown', true]]), outcome }
   const host = hostOf($, world)
-  const scribe = Scribe.create({ isOn: true })
-
-  // A scenario run may compare models; a session always uses the one Scribe ships with.
-  scribe.model = model
+  // A scenario run may compare models: the one it names stands, whatever the setting says.
+  const scribe = Scribe.create({ isOn: true, model })
   const note = (turn: number): void => {
     const seen = look(scribe, turn)
 

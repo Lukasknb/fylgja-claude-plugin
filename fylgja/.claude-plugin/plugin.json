@@ -9,9 +9,33 @@
     "scribe": {
       "type": "boolean",
       "title": "Scribe",
-      "description": "Scribe follows the session and records decisions with their reasons in Fylgja, asks when a decision has none, and tells you what is recorded about the files in hand. It uses your own Claude plan for its model calls (Sonnet). Off: nothing is read, asked or written.",
+      "description": "Scribe follows the session and records decisions with their reasons in Fylgja, asks when a decision has none, and tells you what is recorded about the files in hand. It uses your own Claude plan for its model calls. Off: nothing is read, asked or written.",
       "required": false,
       "default": true
+    },
+    "scribeCadence": {
+      "type": "string",
+      "title": "Scribe looks",
+      "description": "How often Scribe looks at the session while Claude works: after every 5 or 10 of Claude's steps, or only when a turn ends. It always looks when a turn ends, and right after you answer one of Claude's questions. Each look is one call on your Claude plan.",
+      "options": [
+        "Every 5 steps",
+        "Every 10 steps",
+        "Turn end only"
+      ],
+      "required": false,
+      "default": "Every 5 steps"
+    },
+    "scribeModel": {
+      "type": "string",
+      "title": "Scribe model",
+      "description": "The model Scribe thinks with, on your own Claude plan. Sonnet is what Scribe was tuned on; Haiku costs less and misses more decisions that come without a reason; Opus costs more.",
+      "options": [
+        "Haiku",
+        "Sonnet",
+        "Opus"
+      ],
+      "required": false,
+      "default": "Sonnet"
     },
     "telemetry": {
       "type": "boolean",

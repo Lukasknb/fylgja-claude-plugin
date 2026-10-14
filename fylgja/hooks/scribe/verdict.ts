@@ -15,7 +15,7 @@ import { proseOf } from './labels'
 import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
-import type { Anchor, Ask, Draft, Fact, Place, ReasonStatus, RecordKind, Verdict } from './types'
+import type { Anchor, Ask, Draft, Fact, Place, ReasonStatus, RecordKind, Reported, Verdict } from './types'
 import { OFFERED_MARK, shareIn } from './words'
 
 /** No record's sentence is longer than this; a longer one is not written at all. */
@@ -117,6 +117,8 @@ export type Seen = {
   offered?: string
   /** What the developer typed in this turn: their own words. */
   typed?: string
+  /** The numbers of the agents' reports this wake was shown: the only ones a record may come out of. */
+  reports?: ReadonlySet<number>
 }
 
 /** The key what git said of a file is held under: its repository and its path there. */
@@ -405,11 +407,15 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     return { records: [], question: null, tells: [], withdrawn: [], stated: [] }
   }
 
+  // What came out of an agent's report is kept apart, and never written as it stands.
+  const proposed = Array.isArray(value.records) ? value.records : []
+  const reported = reportedOf(proposed, seen)
+  const own = proposed.filter(record => !isFromReport(record))
   // A wake writes no more than `MAX_RECORDS` records, and beside them one for
   // each question the developer answered in the turn, up to `MAX_CHOICE_RECORDS`:
   // a choice they made is never what the limit drops.
   const room = { other: MAX_RECORDS, choice: Math.min(MAX_CHOICE_RECORDS, seen.choices ?? 0) }
-  const given = (Array.isArray(value.records) ? value.records : []).slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS).map(record => {
+  const given = own.slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS).map(record => {
     const draft = draftOf(record, seen)
 
     if (draft === undefined) {
@@ -521,16 +527,55 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
 
   return {
     records,
+    ...(reported.length === 0 ? {} : { reported }),
     question,
     tells,
     withdrawn,
     stated: sentences(value.stated, MAX_STATED, MAX_STATED_CHARS),
     anchored,
     proposed: Array.isArray(value.anchor) ? value.anchor.length : 0,
-    aboutWork: (Array.isArray(value.records) ? value.records : [])
-      .slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS)
-      .filter(isAboutTheWork).length,
+    aboutWork: own.slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS).filter(isAboutTheWork).length,
   }
+}
+
+/** No more records are taken out of agents' reports by one verdict than this. */
+export const MAX_REPORTED = 3
+
+/** Whether the model said a record of its verdict came out of an agent's report. */
+function isFromReport(value: unknown): boolean {
+  return isRecord(value) && value.from_report !== undefined && value.from_report !== null
+}
+
+/** The number of a report as the model names it, `r2` or `2`; undefined for anything else. */
+function reportNumber(value: unknown): number | undefined {
+  const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim().toLowerCase() : ''
+  const found = /^r?(\d{1,6})$/.exec(text)
+
+  return found === null ? undefined : Number(found[1])
+}
+
+/**
+ * The records the model took out of agents' reports, each held to one of the
+ * reports this wake was shown; one that names no such report is no record.
+ */
+function reportedOf(proposed: readonly unknown[], seen: Seen): Reported[] {
+  const reported: Reported[] = []
+
+  for (const value of proposed) {
+    if (!isFromReport(value) || !isRecord(value) || reported.length >= MAX_REPORTED) {
+      continue
+    }
+
+    const report = reportNumber(value.from_report)
+    // Nothing of a report is the developer's choice, and nothing of it replaces or rewrites a record.
+    const draft = draftOf({ ...value, from_choice: false, supersedes: null, updates: null }, seen)
+
+    if (report !== undefined && seen.reports?.has(report) === true && draft !== undefined) {
+      reported.push({ draft, report })
+    }
+  }
+
+  return reported
 }
 
 /** Beside the records of a wake, no more records of the developer's own choices than this. */

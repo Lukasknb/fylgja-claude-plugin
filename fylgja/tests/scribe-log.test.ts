@@ -168,6 +168,7 @@ function groupsOf(more: Partial<Groups> = {}): Groups {
     },
     places: [],
     counts: { dropped: 0, lost: [], letGo: 0, unplaced: 0, wakes: 0, wakeTimes: [], denied: [] },
+    reports: { reporters: [], handled: [] },
     ...more,
   }
 }

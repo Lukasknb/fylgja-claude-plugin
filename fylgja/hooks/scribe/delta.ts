@@ -27,6 +27,8 @@ export type Row = {
     /** What the transcript stored for the call; on a call that was refused or failed, the engine's own error text. */
     result?: unknown
     isError?: true
+    /** On a call of the Agent tool, the id of the agent it started. */
+    agentId?: string
   }[]
 }
 

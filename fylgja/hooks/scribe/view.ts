@@ -75,6 +75,7 @@ export const NOTES = {
   reason: 'Leave it and it goes with your next prompt. The decision stays recorded, without a reason.',
   reversal: 'Leave it and it goes with your next prompt. The new decision is then recorded beside the old one.',
   holds: 'Leave it and it goes with your next prompt. The record stays as it is, marked as possibly out of date.',
+  report: 'Leave it and it goes with your next prompt. Nothing is recorded.',
   field: 'Enter saves it. Cancel leaves everything as it is.',
 } as const
 
@@ -263,6 +264,27 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
         twice(band, 'replaces', '1', 'Yes, it replaces it'),
         { key: 'tell-claude', hotkey: '2', label: 'No, tell Claude' },
         { key: 'different', hotkey: '3', label: 'Different case' },
+        { key: 'skip', hotkey: '0', label: 'Skip' },
+      ]),
+    }
+  }
+
+  if (item.form === 'report') {
+    const { draft } = item
+
+    // A choice only an agent's report says it made: nothing is written unless the developer keeps it.
+    return {
+      register: 'asks',
+      head: 'keep what an agent decided?',
+      note: NOTES.report,
+      rows: [
+        { parts: [mark('?'), { text: 'Agent chose: ', tone: 'strong' }, { text: drawn(draft.content, MAX_CONTENT) }] },
+        { parts: [{ text: 'Not what it was asked to do, or a choice nobody made with you.', tone: 'dim' }] },
+      ],
+      // Keeping it writes to Fylgja, so it waits for its second press.
+      keys: withAbout(band, [
+        twice(band, 'keep', '1', 'Keep, record it'),
+        { key: 'tell-claude', hotkey: '2', label: 'Not wanted, tell Claude' },
         { key: 'skip', hotkey: '0', label: 'Skip' },
       ]),
     }

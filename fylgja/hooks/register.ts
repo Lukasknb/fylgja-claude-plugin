@@ -170,9 +170,22 @@ function scribeHostOf($: EngineInterface, session: Session.Session, report: Repo
     surfaces: () => $.session.surfaces(),
     run: (argv, timeoutMs) => $.process.run(argv, { timeoutMs }),
     rows: () => $.session.messages(),
+    // The plugin's own rows of `/config`, by field, as they stand now.
+    settings: async () => Object.fromEntries((await $.config.list()).flatMap(row => {
+      const field = ownField(row.key)
+
+      return field === undefined ? [] : [[field, row.value]]
+    })),
     destination: () =>
       session.account.state === 'pinned' && session.account.who !== undefined ? destinationOf(session.account.who) : undefined,
   }
+}
+
+/** The field a `/config` key names when it is one of this plugin's own (`fylgja.<field>`); undefined otherwise. */
+function ownField(key: string): string | undefined {
+  const at = key.indexOf('.')
+
+  return at === -1 || key.slice(0, at).split('@')[0] !== 'fylgja' ? undefined : key.slice(at + 1)
 }
 
 /**
@@ -605,7 +618,7 @@ function ring($: EngineInterface, session: Session.Session, scribe: Scribe.Scrib
 export function register(on: On, options: PluginOptions = {}): void {
   const session = Session.create()
   const draft = Draft.create()
-  const scribe = Scribe.create({ isOn: options.scribe !== false })
+  const scribe = Scribe.create({ isOn: options.scribe !== false, settings: options })
   const win: Win = { which: 'kept', search: Search.create() }
   // What the plugin reports about its own working, unless its option is off: counts and fixed words, held in memory until a hook sends them.
   const telemetry = Telemetry.create(options.telemetry !== false)
@@ -1052,9 +1065,10 @@ export function register(on: On, options: PluginOptions = {}): void {
   // itself is never held. The files the step names are then noted for a
   // lookup of what is recorded about them; a slow one is not waited for.
   //
-  // A step that begins after the developer answered a question of Claude's
-  // has Scribe look right then, beside the step and never waited for: the
-  // step, and the turn, go on as they would have. What that look still has
+  // A step that begins after the developer answered a question of Claude's,
+  // or after as many steps as the developer's setting says, has Scribe look
+  // right then, beside the step and never waited for: the step, and the
+  // turn, go on as they would have. What that look still has
   // to call on Fylgja once this hook has handed back is started by the hooks
   // that follow, each for as long as it is being waited on.
   on('turn.step', async function* ($, e, next) {
@@ -1074,7 +1088,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         Scribe.began(scribe)
         void looked
           .catch(() => undefined)
-          .then(() => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe))
+          .then(() => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe, e.index))
           .catch(() => undefined)
           .finally(() => refresh($, session, scribe, noteSignIn))
       }
@@ -1101,9 +1115,22 @@ export function register(on: On, options: PluginOptions = {}): void {
     }
   })
 
+  // A row of the plugin's own changed in the `/config` menu: Scribe takes it
+  // at once, for its next step, look or key, with no reload.
+  on('config.set', { key: /^fylgja(?:@[^.]*)?\./ }, async ($, e, next) => {
+    const done = await next(e)
+    const field = ownField(e.key)
+
+    if (field !== undefined && done.deny === undefined) {
+      Scribe.configured(scribe, field, done.value)
+    }
+
+    return done
+  }).catch(($, e, next) => next(e))
+
   // The end of a turn of the main conversation is where Scribe does its
-  // work, after the turn itself is done with. An agent's turn is not its
-  // business. A look begun inside the turn that is still under way is
+  // work, after the turn itself is done with. Of an agent's turn, only the
+  // report it hands back is taken, for Scribe's next look: never its session. A look begun inside the turn that is still under way is
   // stopped here, and this one reads what it was reading. The hook has ten
   // seconds of its own time, and waiting for work begun elsewhere counts
   // against them, where waiting for its own calls does not.
@@ -1128,6 +1155,8 @@ export function register(on: On, options: PluginOptions = {}): void {
 
       if (e.agentId === undefined) {
         await Scribe.completed(scribeHostOf($, session, report, live), scribe)
+      } else {
+        Scribe.reported(scribe, e.agentId, e.answer, e.isAborted ? 'aborted' : e.reason)
       }
     } catch (error) {
       // The turn ended as it would have without the plugin.

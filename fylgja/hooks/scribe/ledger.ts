@@ -238,6 +238,8 @@ const NOT_KEPT: Readonly<Record<string, string>> = {
   leans_on_conversation: 'wording leaned on this conversation',
   label_stayed: 'named something by a label only this conversation knew',
   about_work: 'about how this work was organised, not the code',
+  unconfirmed_report: 'only an agent reported it, and nobody confirmed it',
+  report_choice: 'a choice an agent made that could not be put to you',
 }
 
 /**

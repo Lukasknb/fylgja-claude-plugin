@@ -186,10 +186,13 @@ Very little, on purpose.
 ## Scribe
 
 Scribe is the one part that does more than draw. At the end of a turn you
-started it reads what happened, thinks about it with a small model on your
-own Claude plan, and works with Fylgja. When you answer a question Claude
+started it reads what happened, thinks about it with a model on your own
+Claude plan, and works with Fylgja. When you answer a question Claude
 put to you, it does so right then, while Claude goes on working: that is
 where most decisions are made, and the turn may run for a long time after.
+It also looks while Claude works, every 5 steps unless you set it
+otherwise (see "Scribe's settings"), and reads the final report of each
+agent Claude starts (see "What an agent hands back").
 Most turns it does nothing, and you see nothing. What it shows, it shows
 in the band above the prompt, one thing at a time, as a small card. A card is one of two kinds, and you can tell
 which without reading it:
@@ -693,10 +696,78 @@ That is not kept as an answer: the plugin asks again as the next turn
 begins and at its end, calls nothing else until it knows, and takes the
 line down and works as ever once the pinned account answers.
 
+### Scribe's settings
+
+Two rows of `/config`, under this plugin. A change in the menu applies at
+the next step, look or key, with no reload and no new session; `/config`
+is also read once a turn, by the fifth step or the turn's end, for a
+change made another way.
+
+- **Scribe looks**: how often Scribe looks while Claude works.
+  `Every 5 steps` (the default) and `Every 10 steps` look as the step
+  after the fifth (or tenth, fifteenth, ...) of Claude's steps in a turn
+  begins, over what happened since Scribe last looked; the look at the
+  turn's end then reads only what came after. `Turn end only` makes no
+  such look. Whatever the setting, Scribe always looks when a turn ends,
+  and right after you answer a question Claude put to you. A look made
+  for the count of steps is never begun while another look is under way
+  or waiting, never holds a step, and is stopped when the turn ends
+  before it is done, as a look after an answer is. A question it comes to
+  waits for Claude to finish, as every question does. As the hour's share
+  of 30 looks runs low the count widens: twice the setting once 10 are
+  used, four times once 20 are (so 5, then 10, then 20 steps).
+- **Scribe model**: the model Scribe thinks with. `Sonnet` (the default)
+  is what Scribe was tuned on. `Haiku` costs less; on the scripted
+  sessions it stayed silent more often where a decision came without a
+  reason. `Opus` costs more. Every request of Scribe's uses it: the
+  look, the look for a reason, the comparison with recorded decisions,
+  and putting a refused record right.
+
+### What an agent hands back
+
+When an agent that Claude started with its Agent tool finishes, Scribe
+takes its final report (the text it handed back) and what Claude asked it
+to do (from that Agent call in the main conversation). It reads nothing
+else of the agent: not its session, its steps or its tool calls. Only an
+agent whose Agent call is in the main conversation counts: not one another
+agent started, not one a plugin started. Only the first report of each
+agent counts (a teammate's later turns are its talk), and not a run that
+ended in an error or was stopped. A report is shown to one look, the
+next, its first 4,000 characters, the newest 3 at most; a report no look
+was shown by the turn's end is let go. Nothing is recorded on a report's
+word alone:
+
+- **A gotcha** (a trap the agent hit and how to avoid it) is held until
+  the main conversation confirms it: after the Agent call, Claude or you
+  say it again in your own words. That is checked by the plugin, not by
+  the model: such a line holds at least 40% of the gotcha's words once
+  every run of six or more words it copies from the report is taken out,
+  so Claude passing the report on word for word confirms nothing. Each
+  later look of the turn checks again, and records it once. One nobody
+  confirmed by the turn's end is let go without a word, and the window of
+  what was kept counts it as `only an agent reported it, and nobody
+  confirmed it`.
+- **A decision is never recorded from a report.** When the report says
+  the agent made a choice that departs from what it was asked to do, or
+  one a later reader would ask why about, you are asked instead, on a
+  card `keep what an agent decided?`: `Keep, record it` (pressed twice)
+  records it as yours, without the reason the agent gave, and asks you
+  for one next with the agent's offered first; `Not wanted, tell Claude`
+  puts a note about the choice in the prompt box for you to send;
+  `Skip` records nothing. Such a card has its own share, one a turn: it
+  takes nothing from the four questions of a session, does not count as
+  unanswered, and stands behind any other question. A second in the same
+  turn is let go and counted as `a choice an agent made that could not be
+  put to you`.
+
+Whatever a look took out of a report is handled once: no later look
+writes or asks about it again.
+
 ### What Scribe costs
 
-Scribe thinks with Sonnet, on your own Claude plan. Claude Code shows no
-cost line for these requests, so here is what they are.
+Scribe thinks with Sonnet unless you pick another model under **Scribe
+model**, on your own Claude plan. Claude Code shows no cost line for
+these requests, so here is what they are.
 
 - **When a model is asked.** Once at the end of a turn that you started
   with a prompt, or in which you decided something without typing one:
@@ -721,7 +792,12 @@ cost line for these requests, so here is what they are.
   key of yours wrote the record, or for a record that waited a turn)
   counts as one of the 30 by itself, and is not made once they are used
   up. The count is kept by each running Claude Code, so two sessions open
-  at once have 30 each.
+  at once have 30 each. And, under **Scribe looks**, once inside a turn
+  every 5 or 10 of Claude's steps, over what happened since the last look,
+  when the turn is yours as above. Such a look counts as one of the 30,
+  and the count of steps widens as they are used (see "Scribe's
+  settings"). An agent's report adds up to 4,000 characters, three
+  reports at most, to the one look that is shown it.
 - **Usually:** one request per look of about 9,000 to 18,000 input
   tokens, half to two thirds of them read from the prompt cache, and 130
   to 350 output tokens, in one and a half to two and a half seconds
@@ -794,8 +870,9 @@ author, against a stand-in knowledge base, with nobody at the keys.
   attached and its files are reported with none. A file a commit holds
   that the session did not touch is not reported either, and a record
   anchored to it is not marked as changed.
-  What an agent decided on its own is not seen at all: only the paths
-  it changed are.
+  What an agent decided on its own is seen only as far as its final
+  report says it, and is never recorded on that word alone (see "What
+  an agent hands back").
 - Six of seven looks for a reason found none, at 21,000 to 33,000
   characters each: the dearest request there is, for little.
 - A one-off operation chosen from options (how one incident was
@@ -1037,9 +1114,9 @@ The events, each with every key it may carry. Any key may be left out.
 | Event | Sent when | Keys |
 |-|-|-|
 | `session_started` | a session begins | `is_interactive`, `is_signed_in`, `is_scribe_on` (yes/no each) |
-| `look` | Scribe has looked at what happened, at a turn's end or after you answered a question of Claude's | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `drafts_dropped`, `calls_missed`; `first_refusal_code` (a refusal code, below); `first_drop_reason` (about_work, label_stayed) |
+| `look` | Scribe has looked at what happened, at a turn's end, after you answered a question of Claude's, or after so many steps (that look carries no `trigger`) | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `drafts_dropped`, `calls_missed`; `first_refusal_code` (a refusal code, below); `first_drop_reason` (about_work, label_stayed; a record let go for an agent's report counts in `drafts_dropped` and is not named) |
 | `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no) |
-| `question` | a question of Scribe's was held back by a rule, came up, or was answered | `stage` (held_back, shown, answered); `form` (reason, reversal, holds); `held_back_by` (turn_asked, asked_before, session_share, unanswered); `key` (option, own_words, no_reason, skip, still_holds, no_longer_holds, replaces, different, told_claude, expired, withdrawn); `ms_until_answered` (number) |
+| `question` | a question of Scribe's was held back by a rule, came up, or was answered; one about an agent's report is not reported | `stage` (held_back, shown, answered); `form` (reason, reversal, holds); `held_back_by` (turn_asked, asked_before, session_share, unanswered); `key` (option, own_words, no_reason, skip, still_holds, no_longer_holds, replaces, different, told_claude, expired, withdrawn); `ms_until_answered` (number) |
 | `window` | you asked for the window, with the mark or a command | `view` (kept, search); `opened_by` (click, command); `outcome` (opened, not_placed, failed); `records_listed` (number) |
 | `window_action` | a key of the window did something to a record | `view` (kept, search); `action` (reword, remove, put_back, open_record, cite); `outcome` (done, trouble) |
 | `search` | a search you made in the window was answered, or failed | `asked_by` (command, field, again); `outcome` (found, failed, signed_out); `results` (none, 1_3, 4_10, over_10); `duration_ms` (number) |
@@ -1505,3 +1582,23 @@ see in ordinary work, and last what needs your setup changed.
     `/reload-plugins` lists nothing. (The store's lock between two
     processes, and the file's name and place, were read from Claude Code
     2.1.299's own code, not seen live.)
+28. Scribe's settings: in `/config`, set **Scribe looks** to
+    `Every 5 steps` and give Claude a task of a dozen steps. A look begins
+    as the sixth step begins (the mark says it is reading) and the step is
+    not held; set it to `Turn end only` mid-session and the next long turn
+    has none until it ends. Set **Scribe model** to `Haiku` and the next
+    look's request, in the debug log or the plan's usage, is Haiku's.
+    (Seen against the test stand-in only: that `$.config.list` names the
+    plugin's rows `fylgja.scribeCadence` and `fylgja.scribeModel`, and that
+    a change there needs no reload, is read from the engine's types.)
+29. An agent's report: have Claude start an agent that hits a trap and
+    says so in its report, and a background agent that does the same.
+    With Claude saying the trap again in its own words, the gotcha is
+    recorded once; without, or with Claude only quoting the report,
+    nothing is recorded and nothing is asked. An agent that also changed
+    something it was not asked to change brings up `keep what an agent
+    decided?`, and nothing is recorded until you keep it. (Read from the engine's types, not yet seen
+    live: that an agent's `turn.complete` carries its report as `answer`,
+    a background agent's and a teammate's too, that the Agent call in
+    the main conversation carries the agent's id, and that the `/config`
+    menu's change reaches `config.set`.)

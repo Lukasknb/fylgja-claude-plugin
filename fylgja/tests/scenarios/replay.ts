@@ -336,6 +336,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     run: () => Promise.reject(new Error('no commands here')),
     rows: () => Promise.resolve(world.rows),
     destination: () => undefined,
+    // The run's own model stands; no other setting is read.
+    settings: async () => ({}),
   }
 }
 
@@ -371,6 +373,8 @@ function noteItems(scribe: Scribe.Scribe, seen: Set<Band.Item>, step: Step, show
       step.questions.push({ form: 'reason', text: item.content, options: item.options, prior: null })
     } else if (item.form === 'holds') {
       step.questions.push({ form: 'holds', text: item.fact.content, options: [], prior: null })
+    } else if (item.form === 'report') {
+      step.questions.push({ form: 'report', text: item.draft.content, options: [], prior: null })
     } else {
       step.questions.push({ form: 'reversal', text: item.draft.content, options: item.options, prior: item.prior.content })
     }

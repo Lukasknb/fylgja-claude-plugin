@@ -48,10 +48,12 @@ import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from '
 import type { Block } from './prompt'
 import { relativeTo, repoNameOf } from './repo'
 import * as Journal from './journal'
+import { briefOf, isConfirmed, isStarted } from './reports'
+import { CADENCE_FIELD, CADENCE_STEP, cadenceOf, MODEL_FIELD, modelOf } from './settings'
 import { cleared } from './staged'
 import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
-import type { Commit, Deferred, Doubted, Draft, Fact, Place, Verdict, Written } from './types'
+import type { Commit, Deferred, Doubted, Draft, Fact, Place, Reported, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReason } from './verdict'
 import { stateKey } from './verdict'
 import type { Seen } from './verdict'
@@ -123,6 +125,8 @@ export type ScribeHost = LoopHost & {
   rows: () => Promise<readonly Row[]>
   /** The team, person and profile the connection writes to, in words; undefined while not known. */
   destination: () => string | undefined
+  /** The plugin's own rows of `/config` as they stand now, by field (`$.config.list`). */
+  settings: () => Promise<Readonly<Record<string, unknown>>>
 }
 
 /**
@@ -167,19 +171,31 @@ type Log = {
   isWriting: boolean
 }
 
-export type Options = { isOn: boolean }
+export type Options = {
+  isOn: boolean
+  /** The plugin's options as it was loaded with them: what a setting is taken to be when `/config` cannot be read. */
+  settings?: Readonly<Record<string, unknown>>
+  /** A model that stands whatever the setting says: a run that compares models. */
+  model?: string
+}
 
 /**
- * The model Scribe thinks with. One model, not a choice: the smaller one was
- * tried on the same scripted sessions and stayed silent where a decision came
- * without a reason, which is the very thing Scribe is there to catch.
+ * The model Scribe thinks with unless the developer picked another in
+ * `/config` (`settings.ts`). The smaller one was tried on the same scripted
+ * sessions and stayed silent more often where a decision came without a
+ * reason, which is the very thing Scribe is there to catch: it is offered,
+ * and is not the default.
  */
 export const MODEL = 'sonnet'
 
 export type Scribe = {
   options: Options
-  /** The model asked; `MODEL` everywhere but in a run that compares models. */
+  /** The model asked: the one picked in `/config`; a run that compares models sets its own. */
   model: string
+  /** Scribe's rows of `/config` as last known: as loaded, then as changed in the menu or read at a turn. */
+  settings: Readonly<Record<string, unknown>>
+  /** The turn the settings were last read in from `/config`; -1 before the first. */
+  settingsTurn: number
   /** Whether a person is at a prompt Scribe can draw above. */
   isInteractive: boolean
   /** Undefined until asked for; null when Scribe is off for this session. */
@@ -435,10 +451,45 @@ export type Scribe = {
   /** Records the plugin itself did not write (`letGo`), and why the first since this was last cleared was not. */
   letGo: number
   letGoBy: DropReason | undefined
+  /**
+   * The final reports agents of the session handed back, oldest first, until
+   * a look at a turn's end has read them: each its number, the agent, and the
+   * report cut to its length. Only the report: nothing else an agent did or
+   * said is read. At most `MAX_REPORTS`, the newest.
+   */
+  reports: AgentReport[]
+  /** Counts the reports handed back: each its own number. */
+  reportCount: number
+  /** The agents whose report was taken: one report each. */
+  reporters: Set<string>
+  /**
+   * Gotchas a look took out of a report that the main conversation has not
+   * confirmed yet, each with its agent and the report: written once it is
+   * confirmed, let go at the turn's end. At most `MAX_UNCONFIRMED`.
+   */
+  unconfirmed: { draft: Draft; agentId: string; report: string }[]
+  /** What was taken out of reports and written, put to the developer or let go, by its sentence: never again. */
+  handled: Set<string>
 }
 
+/** An agent's final report, as Scribe holds it until a turn's end has looked at it. */
+export type AgentReport = { n: number; agentId: string; text: string }
+
+/** No more reports wait for a look than this; an older one is let go unread. */
+export const MAX_REPORTS = 3
+
+/** No more of one report is read than this, in characters: its opening, where an agent says what it found. */
+export const MAX_REPORT_CHARS = 4000
+
+/** No more gotchas of reports wait for the main conversation to confirm them than this. */
+const MAX_UNCONFIRMED = 6
+
 /** Why the plugin itself did not write a record: one word of the report's fixed list. */
-export type DropReason = (typeof SCHEMA.events.look.first_drop_reason.oneOf)[number]
+export type DropReason =
+  | (typeof SCHEMA.events.look.first_drop_reason.oneOf)[number]
+  // A gotcha of an agent's report that the main conversation never confirmed, and a choice of one nobody could be asked about.
+  | 'unconfirmed_report'
+  | 'report_choice'
 
 /** The keys kept on this machine. */
 export const STORE = {
@@ -557,7 +608,9 @@ const PROBE = 'README.md'
 export function create(options: Options): Scribe {
   return {
     options,
-    model: MODEL,
+    model: options.model ?? modelOf(options.settings?.[MODEL_FIELD]),
+    settings: options.settings ?? {},
+    settingsTurn: -1,
     isInteractive: false,
     identity: undefined,
     band: Band.create(),
@@ -647,6 +700,11 @@ export function create(options: Options): Scribe {
     loadedAt: 0,
     letGo: 0,
     letGoBy: undefined,
+    reports: [],
+    reportCount: 0,
+    reporters: new Set(),
+    unconfirmed: [],
+    handled: new Set(),
   }
 }
 
@@ -725,6 +783,10 @@ export function startOver(scribe: Scribe): void {
   // The developer cleared the conversation on purpose: what they said of a record in it goes with it.
   scribe.denied.clear()
   scribe.deferred = []
+  scribe.reports = []
+  scribe.reporters.clear()
+  scribe.unconfirmed = []
+  scribe.handled.clear()
 }
 
 /**
@@ -886,6 +948,7 @@ function nowOf(scribe: Scribe): Journal.Now {
         wakeTimes: scribe.wakeTimes,
         denied: [...scribe.denied],
       },
+      reports: { reporters: [...scribe.reporters].slice(-Journal.MAX_LIST), handled: [...scribe.handled].slice(-Journal.MAX_LIST) },
     },
   }
 }
@@ -1289,6 +1352,15 @@ function restore(host: ScribeHost, scribe: Scribe, folded: Journal.Folded, rows:
     if (!scribe.places.has(file)) {
       scribe.places.set(file, place)
     }
+  }
+
+  // An agent's report taken before, and what was done with what it said, are not taken again.
+  for (const id of groups.reports?.reporters ?? []) {
+    scribe.reporters.add(id)
+  }
+
+  for (const key of groups.reports?.handled ?? []) {
+    scribe.handled.add(key)
   }
 
   if (groups.counts !== undefined) {
@@ -2279,7 +2351,8 @@ const SHOWN = new WeakMap<Band.Question, number>()
 function shownNow(host: ScribeHost, scribe: Scribe): void {
   const item = scribe.band.current
 
-  if (item?.kind === 'question' && !SHOWN.has(item)) {
+  // A question about an agent's report has no word of its own on Fylgja's list yet, and is not reported.
+  if (item?.kind === 'question' && item.form !== 'report' && !SHOWN.has(item)) {
     SHOWN.set(item, performance.now())
     host.report('question', { stage: 'shown', form: item.form })
   }
@@ -2288,6 +2361,10 @@ function shownNow(host: ScribeHost, scribe: Scribe): void {
 /** Notes how a question that was on show ended: by which kind of key, and how long after it came up. */
 function answeredBy(host: ScribeHost, item: Band.Question, key: Word<'question', 'key'>): void {
   const since = SHOWN.get(item)
+
+  if (item.form === 'report') {
+    return
+  }
 
   host.report('question', {
     stage: 'answered',
@@ -2311,6 +2388,10 @@ function answerOf(item: Band.Question, key: string): Word<'question', 'key'> | u
     return key === 'holds' ? 'still_holds' : key === 'no-longer' ? 'no_longer_holds' : undefined
   }
 
+  if (item.form === 'report') {
+    return undefined
+  }
+
   return key === 'replaces' ? 'replaces' : key === 'different' ? 'different' : key === 'tell-claude' ? 'told_claude' : undefined
 }
 
@@ -2331,7 +2412,7 @@ function ask(host: ScribeHost, scribe: Scribe, question: Band.Question, about: s
           : undefined
   const isInLine = Band.offerQuestion(band, question, about)
 
-  if (!isInLine && by !== undefined) {
+  if (!isInLine && by !== undefined && question.form !== 'report') {
     host.report('question', { stage: 'held_back', form: question.form, held_back_by: by })
   }
 
@@ -3115,6 +3196,109 @@ async function apply(
 }
 
 /**
+ * An agent handed its final report back (`turn.complete` of its run). The
+ * report is held for the next look, and nothing else of the agent is read:
+ * not its session, not its steps. Only an answer counts, one that ended as
+ * an answer and says something, and only the first of each agent: a
+ * teammate's later turns are its talk, not its report. Whether the main
+ * conversation started the agent is seen when a look reads the rows.
+ */
+export function reported(scribe: Scribe, agentId: string, text: string, ending: string): void {
+  const report = text.trim()
+
+  if (isOff(scribe) || ending !== 'answer' || report === '' || scribe.reporters.has(agentId)) {
+    return
+  }
+
+  scribe.reporters.add(agentId)
+  scribe.reportCount += 1
+
+  const cut = report.length - MAX_REPORT_CHARS
+  const kept = cut <= 0 ? report : `${report.slice(0, MAX_REPORT_CHARS)}\n[cut here: ${cut} more characters are not shown]`
+
+  scribe.reports = [...scribe.reports, { n: scribe.reportCount, agentId, text: kept }].slice(-MAX_REPORTS)
+}
+
+/** The reports held that an agent the main conversation started handed back: the only ones a look is shown. */
+function reportsIn(scribe: Scribe, rows: readonly Row[]): AgentReport[] {
+  return scribe.reports.filter(one => isStarted(rows, one.agentId))
+}
+
+/**
+ * What a look took out of the reports it was shown, which no other look is
+ * shown again. Never a record on a report's word: a gotcha waits for the
+ * main conversation to confirm it (`confirmReports`); a choice the agent made
+ * is put to the developer, once, and written only if they keep it.
+ */
+function takeReports(host: ScribeHost, scribe: Scribe, shown: readonly AgentReport[], reported: readonly Reported[]): void {
+  const taken = new Set(shown.map(one => one.n))
+
+  scribe.reports = scribe.reports.filter(one => !taken.has(one.n))
+
+  for (const one of reported) {
+    const report = shown.find(had => had.n === one.report)
+    const key = one.draft.content.toLowerCase()
+
+    if (report === undefined || scribe.handled.has(key) || scribe.recorded.some(had => had.content.toLowerCase() === key)) {
+      continue
+    }
+
+    scribe.handled.add(key)
+
+    if (one.draft.kind === 'gotcha') {
+      scribe.unconfirmed = [...scribe.unconfirmed, { draft: one.draft, agentId: report.agentId, report: report.text }].slice(
+        -MAX_UNCONFIRMED,
+      )
+    } else if (Band.offerChoice(scribe.band, { kind: 'question', form: 'report', draft: one.draft, isTouched: false })) {
+      scribe.asked = [...scribe.asked, one.draft.content].slice(-MAX_LISTED)
+    } else {
+      letGo(scribe, 'report_choice')
+    }
+  }
+}
+
+/**
+ * Writes each gotcha waiting from a report that the main conversation has
+ * confirmed by now (`isConfirmed`), once. Unconfirmed, it waits.
+ */
+async function confirmReports(host: ScribeHost, scribe: Scribe, who: Identity, rows: readonly Row[]): Promise<void> {
+  const confirmed = scribe.unconfirmed.filter(one => isConfirmed(rows, one.agentId, one.report, one.draft.content, scribe.prompts))
+
+  if (confirmed.length === 0) {
+    return
+  }
+
+  scribe.unconfirmed = scribe.unconfirmed.filter(one => !confirmed.includes(one))
+
+  const budget = await lone(host, scribe)
+
+  for (const one of confirmed) {
+    const kept = await written(host, scribe, who, one.draft, budget)
+
+    if (kept !== undefined) {
+      Band.receive(scribe.band, [kept])
+    }
+  }
+
+  settle(host, scribe)
+}
+
+/**
+ * The turn has ended and its last look is done. A gotcha of a report that
+ * nobody confirmed is let go without a word, and counted; a report no look
+ * was shown goes with it.
+ */
+function endReports(scribe: Scribe, ending: readonly number[]): void {
+  scribe.reports = scribe.reports.filter(one => !ending.includes(one.n))
+
+  for (const _ of scribe.unconfirmed) {
+    letGo(scribe, 'unconfirmed_report')
+  }
+
+  scribe.unconfirmed = []
+}
+
+/**
  * Asks Fylgja what is recorded about the files waiting to be looked up. A
  * record anchored to one of those very files is offered to the developer;
  * one anchored to a folder above is kept for the next wake to judge.
@@ -3596,6 +3780,11 @@ function letGo(scribe: Scribe, reason: DropReason): void {
   lose(scribe, reason)
 }
 
+/** Why a record was let go, as Fylgja's list of words has it; undefined for a reason the list does not hold yet. */
+function dropWord(reason: DropReason | undefined): Word<'look', 'first_drop_reason'> | undefined {
+  return wordOf(SCHEMA.events.look.first_drop_reason.oneOf, reason, undefined)
+}
+
 /** A record lost for good after Fylgja refused it, counted under the rule it was refused by. */
 function lose(scribe: Scribe, code: string): void {
   scribe.dropped += 1
@@ -3945,24 +4134,97 @@ export function began(scribe: Scribe): void {
   scribe.band.isWorking = true
 }
 
+/** Takes the model the settings in hand name, unless a run that compares models set its own. */
+function pickModel(scribe: Scribe): void {
+  if (scribe.options.model === undefined) {
+    scribe.model = modelOf(scribe.settings[MODEL_FIELD])
+  }
+}
+
 /**
- * A step of the main conversation begins. When a step before it put a
- * question to the developer and the rows now hold their answer, Scribe looks
- * right then, as it does at a turn's end: most decisions are made in such
- * an answer, and the turn may go on for a long time after it.
- *
- * The step does not wait for this, and neither does the turn. What it
- * resolves with says only that the look has ended.
+ * One of Scribe's rows of `/config` was changed (`config.set`): taken at
+ * once, for the next step, look or key.
  */
-export async function stepping(host: ScribeHost, scribe: Scribe): Promise<void> {
-  if (!scribe.isAsking) {
+export function configured(scribe: Scribe, field: string, value: unknown): void {
+  scribe.settings = { ...scribe.settings, [field]: value }
+  pickModel(scribe)
+}
+
+/**
+ * The settings as `/config` holds them, read once a turn: a change that came
+ * by another way than the menu is taken at the next turn. Unread, they stay
+ * as they were.
+ */
+async function freshSettings(host: ScribeHost, scribe: Scribe, turn = scribe.turn): Promise<void> {
+  if (scribe.settingsTurn === turn) {
     return
   }
 
+  scribe.settingsTurn = turn
+
+  try {
+    scribe.settings = { ...scribe.settings, ...(await host.settings()) }
+  } catch {
+    // As they were.
+  }
+
+  pickModel(scribe)
+}
+
+/**
+ * How many times the developer's count of steps a look waits for, as the
+ * hour's share of wakes runs low: once with fewer than 10 of the 30 used,
+ * twice with fewer than 20, four times after. The share is spent more
+ * slowly, and the turn's end and the answers to questions still find some.
+ */
+function widening(scribe: Scribe, now: number): number {
+  const used = scribe.wakeTimes.filter(at => now - at < HOUR_MS).length
+
+  return used >= WIDEN_TWICE ? 4 : used >= WIDEN_ONCE ? 2 : 1
+}
+
+/** From this many wakes in the hour, a look for the count of steps waits for twice the count, and from the second for four times. */
+export const WIDEN_ONCE = 10
+export const WIDEN_TWICE = 20
+
+/**
+ * A step of the main conversation begins, and Scribe may look right then, as
+ * it does at a turn's end, at the rows since it last looked.
+ *
+ * It looks when a step before this one put a question to the developer and
+ * the rows now hold their answer: most decisions are made in such an
+ * answer, and the turn may go on for a long time after it. It also looks
+ * when as many steps of the turn have ended as the developer's setting says
+ * (`settings.ts`), unless a look is under way or waiting: the look under way
+ * reads up to where it began, and the turn's end reads the rest.
+ *
+ * The step does not wait for this, and neither does the turn. What it
+ * resolves with says only that the look has ended.
+ *
+ * @param index the step's place in its turn, from 0: this many steps of it have ended
+ */
+export async function stepping(host: ScribeHost, scribe: Scribe, index = 0): Promise<void> {
   const { epoch } = scribe
+  let trigger: Trigger | undefined = scribe.isAsking ? 'answered' : undefined
+
+  // Every count of steps is a multiple of the smallest: no other step reads anything.
+  if (trigger === undefined && index > 0 && index % CADENCE_STEP === 0 && scribe.looking === null && !isOff(scribe)) {
+    await freshSettings(host, scribe)
+
+    const every = cadenceOf(scribe.settings[CADENCE_FIELD])
+    const due = every === null ? null : every * widening(scribe, await host.now())
+
+    trigger = due !== null && index % due === 0 ? 'cadence' : undefined
+  }
+
+  if (trigger === undefined) {
+    return
+  }
+
   const who = await reader(host, scribe)
 
-  if (who === null) {
+  // A look that began while this one was getting ready reads these rows: one look at a time, and none twice.
+  if (who === null || epoch !== scribe.epoch || (trigger === 'cadence' && scribe.looking !== null)) {
     return
   }
 
@@ -3970,7 +4232,7 @@ export async function stepping(host: ScribeHost, scribe: Scribe): Promise<void> 
 
   const cut = scribe.cut.signal
 
-  await inTurn(host, scribe, epoch, () => look(host, scribe, who, epoch, cut))
+  await inTurn(host, scribe, epoch, () => look(host, scribe, who, epoch, cut, trigger))
 }
 
 /**
@@ -4041,6 +4303,9 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
 
     // How far the conversation was read, and the marks of its rows as the turn left them, so a fork of it later is told from its siblings.
     logged(host, scribe)
+
+    // The next turn may put its own question about an agent's choice.
+    scribe.band.choicesThisTurn = 0
   }
 }
 
@@ -4064,12 +4329,22 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
  *   it leaves its rows unread and the answer as one no look was begun for:
  *   the turn's end looks at them as if this look had never been tried.
  */
-async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: number, cut?: AbortSignal): Promise<void> {
+async function look(
+  host: ScribeHost,
+  scribe: Scribe,
+  who: Identity,
+  epoch: number,
+  cut?: AbortSignal,
+  trigger: Trigger = 'answered',
+): Promise<void> {
   const isInside = cut !== undefined
 
   if (cut?.aborted === true) {
     return
   }
+
+  // The turn's end is counted as ended already: it is still the turn its steps read them in.
+  await freshSettings(host, scribe, isInside ? scribe.turn : scribe.turn - 1)
 
   const rows = await host.rows()
 
@@ -4089,7 +4364,8 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: numb
   if (isInside) {
     scribe.isAsking = hasOpenQuestion(unseen)
 
-    if (!isAnswered) {
+    // A look for an answer has nothing to do without one; a look that so many steps went by for reads whatever came.
+    if (!isAnswered && trigger === 'answered') {
       return
     }
   }
@@ -4114,15 +4390,39 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: numb
   const tally: Tally = { ending: 'stopped', noReply: undefined, steps: 0, lookups: 0, usage: undefined, proposed: 0 }
   const began = performance.now()
   const { wrote, refused, letGo: before } = scribe
+  // The reports a look at a turn's end is the last to be shown: those handed back while it reads wait for the next.
+  const ending = isInside ? [] : scribe.reports.map(one => one.n)
 
   scribe.refusedBy = undefined
   scribe.letGoBy = undefined
 
   try {
-    isWhole = await looked(host, scribe, who, { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut, tally })
+    isWhole = await looked(host, scribe, who, {
+      epoch,
+      rows,
+      from,
+      unseen,
+      compactions,
+      seen,
+      isAnswered,
+      found,
+      cut,
+      tally,
+      ...(isInside ? { trigger } : {}),
+    })
+
+    // A gotcha of an agent's report that the rows now confirm is written, whatever the look came to.
+    if (epoch === scribe.epoch && !isCut(cut)) {
+      await confirmReports(host, scribe, who, rows)
+    }
   } finally {
+    if (!isInside && epoch === scribe.epoch) {
+      endReports(scribe, ending)
+    }
+
     host.report('look', {
-      trigger: isInside ? 'answered_question' : 'turn_end',
+      // A look that so many steps went by for has no word of its own on Fylgja's list yet: it goes without one.
+      ...(!isInside ? { trigger: 'turn_end' as const } : isAnswered ? { trigger: 'answered_question' as const } : {}),
       ending: tally.ending,
       ...(tally.noReply === undefined ? {} : { no_reply_reason: tally.noReply }),
       is_whole: isWhole,
@@ -4146,7 +4446,7 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: numb
         ? {}
         : { first_refusal_code: wordOf(SCHEMA.events.look.first_refusal_code.oneOf, scribe.refusedBy, 'other') }),
       drafts_dropped: scribe.letGo - before,
-      ...(scribe.letGoBy === undefined ? {} : { first_drop_reason: scribe.letGoBy }),
+      ...(dropWord(scribe.letGoBy) === undefined ? {} : { first_drop_reason: dropWord(scribe.letGoBy) }),
       calls_missed: missedBy(host),
     })
 
@@ -4209,6 +4509,11 @@ function unless<T>(cut: AbortSignal | undefined, work: Promise<T>): Promise<T | 
       })
 }
 
+/** Whether a look inside a turn was stopped by the turn's end; read anew each time. */
+function isCut(cut: AbortSignal | undefined): boolean {
+  return cut?.aborted === true
+}
+
 /** An act's words as they are kept with the developer's prompts. */
 function wordsOf(act: { words: string }): string {
   return act.words.replace(/\s+/g, ' ').trim()
@@ -4224,8 +4529,16 @@ type Found = Pick<Scribe, 'consumed' | 'mark' | 'seam' | 'hasActed' | 'hasPrompt
   taken: readonly Row[] | undefined
 }
 
+/**
+ * What a look inside a turn was begun for: an answer the developer gave to a
+ * question of Claude's, or as many steps of the turn as their setting says.
+ */
+type Trigger = 'answered' | 'cadence'
+
 /** What a look has in hand once it has read the rows. */
 type Sight = {
+  /** What a look inside a turn was begun for; a look at a turn's end has none. */
+  trigger?: Trigger
   /** The conversation the look was begun in: what it comes to is let go once that one has started over. */
   epoch: number
   rows: readonly Row[]
@@ -4258,7 +4571,7 @@ type Tally = {
  * what the verdict held with every call to Fylgja getting through.
  */
 async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Sight): Promise<boolean> {
-  const { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut, tally } = sight
+  const { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut, tally, trigger } = sight
   const isInside = cut !== undefined
   // Whether the turn has ended since: read anew each time, as it changes while this waits.
   const isStopped = (): boolean => cut?.aborted === true
@@ -4508,6 +4821,8 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
                 .filter(one => one.repo === due.repo)
                 .map(one => ({ id: one.id, content: one.content })),
             }
+      // Only the reports of agents the main conversation started, each to one look.
+      const shownReports = reportsIn(scribe, rows)
       const judged = {
         plans: scribe.plans.docs,
         saidNoReason: mentionsNoReason(seen.developer),
@@ -4532,6 +4847,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
         own: new Set(mine.map(one => one.id)),
         ownRepos: new Map(mine.flatMap(one => (typeof one.repo === 'string' ? [[one.id, one.repo] as const] : []))),
         choices: seen.choices,
+        reports: new Set(shownReports.map(one => one.n)),
       }
       const woken = await unless(cut, wake(host, {
         model: scribe.model,
@@ -4553,6 +4869,8 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
             asked: scribe.asked,
             told: [...scribe.band.told].slice(-MAX_LISTED),
             denied: denied.map(fact => fact.id),
+            reports: shownReports.map(one => ({ n: one.n, brief: briefOf(rows, one.agentId), text: one.text })),
+            waiting: scribe.unconfirmed.map(one => one.draft.content),
           },
         ),
         repo: judged.home ?? who.repo,
@@ -4609,6 +4927,8 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
           seen: { ...judged, facts: woken.facts },
           window: { recent: seen.lines, earlier: earlierLines(scribe) },
         })
+        // The reports this look was shown are done with: no later look is shown them again.
+        takeReports(host, scribe, shownReports, woken.verdict.reported ?? [])
         isWhole = !isInside || missedBy(host) === missed
 
         // A look whose rows will be read again is not kept as one that was
@@ -5081,6 +5401,12 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
     return
   }
 
+  if (item.form === 'report') {
+    await pressedReport(host, scribe, who, item, key)
+
+    return
+  }
+
   if (key === 'tell-claude') {
     // Nothing is written: the developer is taking it up with Claude.
     if (await tellClaude(host, REVERSAL_LEAD, item.prior)) {
@@ -5126,6 +5452,81 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
 }
 
 /**
+ * A key of the question whether a choice an agent made is to be kept. Kept,
+ * it is written as the developer's own, without its reason, which only the
+ * agent gave, and the developer is asked for one next. Not wanted, it is put
+ * to Claude in the prompt box. Skipped, nothing is written, and it counts
+ * against none of the other questions.
+ */
+async function pressedReport(host: ScribeHost, scribe: Scribe, who: Identity, item: Band.ReportQuestion, key: string): Promise<void> {
+  const { band } = scribe
+
+  if (key === 'tell-claude') {
+    if (await tellClaudeOfChoice(host, item.draft)) {
+      Band.clear(band)
+    }
+
+    return
+  }
+
+  if (key === 'skip') {
+    Band.clear(band)
+
+    return
+  }
+
+  if (key !== 'keep') {
+    return
+  }
+
+  Band.clear(band)
+
+  const said = item.draft.detail.trim()
+  const draft: Draft = { ...item.draft, detail: '', reasonStatus: 'not_stated' }
+  const one = await written(host, scribe, who, { ...draft, supersedes: null, updates: null }, await lone(host, scribe))
+
+  if (one === undefined) {
+    return
+  }
+
+  // Kept on their word: theirs from here on.
+  touched(scribe, one.id)
+  Band.receive(band, [one])
+
+  // Why it was chosen is asked next, as part of the same answer; what the agent gave is offered, and is theirs only once picked.
+  if (one.reasonStatus === 'not_stated') {
+    band.current = {
+      kind: 'question',
+      form: 'reason',
+      id: one.id,
+      content: one.content,
+      options: said === '' ? [] : [said],
+      isTouched: true,
+    }
+  }
+}
+
+const AGENT_LEAD =
+  'A note from Fylgja, offered by Scribe: an agent of this session made this choice, and I do not want it. Please undo it or tell me why it was needed:'
+
+/** Puts a note about a choice an agent made in the prompt box, when the box is empty. Sends nothing. */
+async function tellClaudeOfChoice(host: ScribeHost, draft: Draft): Promise<boolean> {
+  if ((await host.box()) !== '') {
+    host.toast('The prompt box has text in it. Clear it, then press the key again.')
+
+    return false
+  }
+
+  if (!(await host.fill(`${AGENT_LEAD}\n\n> Choice: ${quoted(draft.content, MAX_CONTENT)}\n\n`))) {
+    host.toast('The note could not be put in the prompt box.')
+
+    return false
+  }
+
+  return true
+}
+
+/**
  * Whether a key writes to Fylgja or settles something for good, and so acts
  * only on its second press: removing a record, silencing one for good,
  * turning Scribe off, making a decision the replacement of a recorded one,
@@ -5136,6 +5537,7 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
  */
 function needsSecondPress(key: string): boolean {
   return (
+    key === 'keep' ||
     key === 'knew' ||
     key === 'off' ||
     key === 'replaces' ||
@@ -5361,6 +5763,7 @@ async function alone(host: ScribeHost, ledger: Ledger.Ledger, id: string, change
  */
 export async function ledgerPressed(host: ScribeHost, scribe: Scribe, key: string): Promise<void> {
   const { ledger } = scribe
+
   const at = key.indexOf(':')
   const action = at === -1 ? key : key.slice(0, at)
   const id = at === -1 ? '' : key.slice(at + 1)
