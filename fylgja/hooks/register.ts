@@ -168,6 +168,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session, report: Repo
     read: path => $.fs.read(path),
     vouched: root => isLeftToPlugin(hostOf($, session, live), root),
     surfaces: () => $.session.surfaces(),
+    run: (argv, timeoutMs) => $.process.run(argv, { timeoutMs }),
     rows: () => $.session.messages(),
     destination: () =>
       session.account.state === 'pinned' && session.account.who !== undefined ? destinationOf(session.account.who) : undefined,

@@ -275,6 +275,18 @@ at a time.
   names the plan; you are not asked. A plan in the repository becomes one
   of the record's anchors. A plan outside it will be gone for a later
   reader, so its reasoning is copied into the record.
+- **It notes the commit the code was at.** A decision about files is
+  written with the commit the working tree those files lie in is at
+  (`git rev-parse HEAD`) and whether any of them had changes not yet
+  committed (`git status --porcelain -- <the files>`), so a reader later
+  sees which code it was said of and can diff from there. git runs in
+  that tree (a worktree or a repository checked out inside another is
+  its own), without taking its lock or starting a file monitor, a second
+  and a half at most; when it does not answer, or the tree has no commit
+  yet, the decision is written without them. A commit made at that very
+  commit never marks the decision as one whose code changed. A Fylgja
+  server from before it took them gets the decision without them, and
+  is not sent them again for the session.
 - **It notes the commit.** After a `git commit` in this repository, the
   commit is attached to what the session recorded, Claude's own records
   included. Only a commit the command itself shows to be this repository's:
@@ -284,8 +296,8 @@ at a time.
   With the commit go files the session wrote or changed in this
   repository, as paths from its root, at most 200. Fylgja marks the
   other decisions anchored to those very files as ones whose code
-  changed since they were last confirmed. Scribe runs no index command
-  and reads no file's content, so it does not know what a commit holds.
+  changed since they were last confirmed. Scribe asks git nothing about
+  a commit and reads no file's content, so it does not know what a commit holds.
   It has the files the session changed and the number of files git
   itself prints for the commit, and it reports a file only when the two
   agree. A mark on somebody's record that the commit never touched is
@@ -602,7 +614,7 @@ author, against a stand-in knowledge base, with nobody at the keys.
   round 7 of 12 such records gained their files later and all 7
   pairings were right; 5 stayed without a place and are found by their
   words only.
-- An agent's commit is read from its command; Scribe runs no git, so
+- An agent's commit is read from its command; Scribe asks git nothing about it, so
   "the commit's files" are the files changed since the commit before.
   The sha of an agent's commit is never seen, so that commit is not
   attached and its files are reported with none. A file a commit holds
@@ -821,7 +833,10 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   alternatives, file anchors, your session's id, and `author: scribe`; your
   answers to its questions; your Fix, Remove and Put back; and the sha of a commit
   made in the session, with the paths of the files the session changed in
-  that repository since the commit before (their paths, never their content).
+  that repository since the commit before (their paths, never their content);
+  and with a new decision about files, the commit id the working tree is at
+  and one flag, whether one of those files had changes not yet committed —
+  nothing of the code.
 - **Kept:** what the chips show is held in memory by the running plugin for
   the conversation. It is dropped on `/clear`, on resume, when you have to
   sign in again, and when the session ends. The chip texts shown in the

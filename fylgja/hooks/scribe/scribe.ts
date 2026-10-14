@@ -23,6 +23,8 @@ import { SCHEMA } from '../telemetry-schema'
 import { wordOf } from '../telemetry'
 import type { Report, Word } from '../telemetry'
 import * as Band from './band'
+import { baseOf, isUnknownBase, rootOf } from './base'
+import type { Base, Run } from './base'
 import { carried, listedOf, saidOf } from './carry'
 import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain } from './delta'
 import type { Landed, Offer, Row } from './delta'
@@ -102,6 +104,12 @@ export type ScribeHost = LoopHost & {
   vouched: (root: string) => Promise<boolean>
   /** `$.session.surfaces`. */
   surfaces: () => Promise<readonly string[]>
+  /**
+   * `$.process.run`, with no shell. Used for one thing: git, asked which
+   * commit a working tree is at and whether a decision's files are changed
+   * there, before the decision is written (`base.ts`).
+   */
+  run: Run
   /** `$.session.messages`: the main conversation's rows. */
   rows: () => Promise<readonly Row[]>
   /** The team, person and profile the connection writes to, in words; undefined while not known. */
@@ -302,6 +310,8 @@ export type Scribe = {
   toAttach: Commit[]
   /** Whether Fylgja's server takes the files of a commit: true until it turned a commit down for them. */
   takesPaths: boolean
+  /** Whether Fylgja's server takes the commit a decision was written at: true until it turned a write down for it. */
+  takesBase: boolean
   /**
    * Recorded decisions whose code a commit changed after they were last
    * confirmed, not yet asked about: one of them is asked about when a look
@@ -540,6 +550,7 @@ export function create(options: Options): Scribe {
     commits: new Set(),
     toAttach: [],
     takesPaths: true,
+    takesBase: true,
     doubted: [],
     denied: new Map(),
     index: cleared(false),
@@ -660,6 +671,7 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   scribe.isGranted = false
   scribe.hasAsked = false
   scribe.takesPaths = true
+  scribe.takesBase = true
   scribe.index = cleared(false)
   scribe.created.clear()
   scribe.own.clear()
@@ -1426,6 +1438,22 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
 }
 
 /**
+ * The commit the working tree a decision's files lie in is at, and whether
+ * one of those files is changed there; undefined for anything but a
+ * decision about files, on a server that does not take it, and whenever git
+ * does not say at once.
+ */
+async function baseFor(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draft): Promise<Base | undefined> {
+  if (!scribe.takesBase || draft.kind !== 'decision' || draft.anchors.length === 0 || draft.repo === null) {
+    return undefined
+  }
+
+  const root = rootOf(scribe.places, draft.repo, draft.anchors, who)
+
+  return root === undefined ? undefined : baseOf(host.run, host.after, root, draft.anchors.map(anchor => anchor.path))
+}
+
+/**
  * What sending one record came to: what was written, or the code Fylgja
  * refused it by and its words. `isTaken` says Fylgja took it, whether or not
  * anything new was written for it.
@@ -1467,9 +1495,17 @@ async function send(
 
   let answer: Record<string, unknown> | undefined
   let refusal: string | undefined
+  // The commit the code is at goes with a new decision; a confirmation writes nothing new.
+  const base = recalled === undefined ? await baseFor(host, scribe, who, draft) : undefined
 
   try {
-    ;({ answer, refusal } = await tried(host, scribe, 'remember', args))
+    ;({ answer, refusal } = await tried(host, scribe, 'remember', base === undefined ? args : { ...args, ...base }))
+
+    if (answer === undefined && base !== undefined && isUnknownBase(refusal ?? '')) {
+      scribe.takesBase = false
+      host.debug('Scribe: Fylgja does not take the commit a decision was written at here; decisions are written without it in this session')
+      ;({ answer, refusal } = await tried(host, scribe, 'remember', args))
+    }
   } catch {
     answer = undefined
   }

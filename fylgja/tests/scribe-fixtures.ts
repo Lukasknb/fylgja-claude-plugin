@@ -2,6 +2,7 @@ import type { On } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
+import type { Ran } from '../hooks/scribe/base'
 import type { Row } from '../hooks/scribe/delta'
 import { HEADLINES, NOTES } from '../hooks/scribe/view'
 import { ACCOUNT, answer, CONNECTED, eventsOf, idOf, MANIFEST, MANIFEST_PATH, REPORT } from './fixtures'
@@ -119,6 +120,11 @@ export type StageOptions = {
   kept?: Readonly<Record<string, unknown>>
   /** A dialog holds the keys: the prompt box takes no text the plugin puts in. */
   isBoxHeld?: boolean
+  /**
+   * What git answers, handed what it was asked after the working tree (`-C <root>`) and that tree; undefined
+   * for a git that fails to start. Without it no command runs: each is refused, as a machine without git would.
+   */
+  git?: (args: readonly string[], root: string, clock: MockClock) => Ran | undefined | Promise<Ran | undefined>
 }
 
 export type Stage = {
@@ -145,6 +151,8 @@ export type Stage = {
   logged: string[]
   /** Every tool whose call was put to the permission check, in order. */
   checks: string[]
+  /** Every command the plugin ran on the machine, as its argument vector, in order. */
+  runs: (readonly string[])[]
   /** Every prompt that entered the session, as it arrived. */
   sent: string[]
   statuses: (string | undefined)[]
@@ -177,6 +185,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const reads: string[] = []
   const logged: string[] = []
   const checks: string[] = []
+  const runs: (readonly string[])[] = []
   const sent: string[] = []
   const statuses: (string | undefined)[] = []
   const kept = new Map<string, unknown>(Object.entries(options.kept ?? {}))
@@ -361,6 +370,16 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
     return typeof text === 'string' ? { value: text as never } : { deny: 'cannot be read' }
   })
+  on('process.run', async ($, e) => {
+    runs.push(e.argv)
+
+    const at = e.argv.indexOf('-C')
+    const ran = options.git === undefined || at === -1 ? undefined : await options.git(e.argv.slice(at + 2), e.argv[at + 1] ?? '', clock)
+
+    return ran === undefined
+      ? { deny: 'git did not start' }
+      : { value: { ...ran, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('store.get', ($, e) => ({ value: kept.get(e.key) as never }))
   on('store.set', ($, e) => {
     kept.set(e.key, e.value)
@@ -417,6 +436,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     reads,
     logged,
     checks,
+    runs,
     sent,
     statuses,
     kept,
