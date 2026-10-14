@@ -88,12 +88,12 @@ describe('a reference in the person’s message', () => {
 
   test('a kind this build has no glyph for is drawn with one neutral glyph, never as not found', async ($, on) => {
     const records = [
-      meetingRecord({ kind: 'organization', title: 'Zalion', date: null, extra: { nested: true }, summary: 'unused' }),
+      meetingRecord({ kind: 'organization', title: 'Northwind', date: null, extra: { nested: true }, summary: 'unused' }),
       meetingRecord({ ref: NOTE_ID, id: NOTE_ID, kind: 'aspect', title: 'Pricing' }),
     ]
     const started = scene(on, { resolve: () => answer({ records }) })
 
-    expect(await rowOf($, started, `${MEETING} ${NOTE}`)).toBe('[□ "Zalion"] [□ "Pricing" · 2026-09-30]')
+    expect(await rowOf($, started, `${MEETING} ${NOTE}`)).toBe('[□ "Northwind"] [□ "Pricing" · 2026-09-30]')
   })
 
   test('expanded, the message is shown as it was sent, and nothing is looked up', async ($, on) => {

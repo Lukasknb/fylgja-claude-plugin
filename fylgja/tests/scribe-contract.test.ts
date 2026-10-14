@@ -390,11 +390,11 @@ describe('a refusal that says what is wrong is used once', () => {
   const STATE_IN_BOTH = `refused:status_not_memory — in the reason: "cannot be handled yet" says what something is right now; in a rejected alternative: "is still pending" says what something is right now. ${RULE}`
   const REOPEN = decision({
     content: 'Reopen a thread into Ready to Sync on an ERP update.',
-    detail: 'Zahoransky has auto-sync off only because their cases cannot be handled yet.',
+    detail: 'The pilot org has auto-sync off only because its cases cannot be handled yet.',
     reason_status: 'stated',
     alternatives: ['never acting on a reopened thread', 'wait, since the migration is still pending'],
   })
-  const CAUSED = 'Zahoransky\'s cases need scheduled lines and partial sync, which auto-sync cannot handle; reopening into Ready to Sync keeps a person in the loop for exactly those.'
+  const CAUSED = 'Orders with scheduled lines need partial sync, which auto-sync cannot handle; reopening into Ready to Sync keeps a person in the loop for exactly those.'
 
   /** A server that refuses a decision whose reason says "yet", as it refuses state in a reason, and takes every other. */
   function refusingAStateReason() {
@@ -424,7 +424,7 @@ describe('a refusal that says what is wrong is used once', () => {
     await turn(
       $,
       set,
-      dev('SESSION-TEXT: Zahoransky needs scheduled lines and partial sync, auto-sync cannot do those. Reopen into Ready to Sync.'),
+      dev('SESSION-TEXT: Orders with scheduled lines need partial sync, auto-sync cannot do those. Reopen into Ready to Sync.'),
       claude('Done.', edit('src/queue/lock.ts')),
     )
 
@@ -438,7 +438,7 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(correction?.prompt, 'the field and the wording the server named reach the model').toMatch(
       'in the reason: "cannot be handled yet"',
     )
-    expect(correction?.prompt, 'the session the record was taken from is handed over').toMatch('SESSION-TEXT: Zahoransky needs scheduled lines')
+    expect(correction?.prompt, 'the session the record was taken from is handed over').toMatch('SESSION-TEXT: Orders with scheduled lines need')
     expect(correction?.prompt.match(/^<<< /gm)?.length, 'all three are fenced as data').toBe(3)
     expect(CAUSED.length > String(REOPEN.detail).length).toBe(true)
     expect(set.of('remember').length).toBe(2)
