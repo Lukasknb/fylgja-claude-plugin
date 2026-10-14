@@ -16,6 +16,8 @@ export const OWN_TOOLS: readonly string[] = [
   'remember',
   'amend_memory',
   'attach_commit',
+  // The plugin's own events about itself (`telemetry.ts`); Scribe never calls it.
+  'report_events',
 ]
 
 /** The id the engine gives a call a plugin raised itself. */
@@ -69,6 +71,12 @@ export function isOwnCall(e: Checked, raisedBy: string | undefined, server: stri
   )
 }
 
+/**
+ * The tool the plugin reports its own working to (`telemetry.ts`), under
+ * either name the server's tools go by. Claude has no business calling it.
+ */
+export const REPORT_TOOL = /^mcp__(?:plugin_fylgja_fylgja|fylgja)__report_events$/
+
 /** What the permission check answers, as much of it as is read here. */
 export type Verdict = { decision: 'allow' | 'ask' | 'deny'; reason?: string }
 
@@ -83,7 +91,13 @@ export function verdictFor<V extends Verdict>(
   raisedBy: string | undefined,
   server: string | undefined,
 ): V {
-  return verdict.decision === 'ask' && isOwnCall(e, raisedBy, server)
+  const isOwn = isOwnCall(e, raisedBy, server)
+
+  if (REPORT_TOOL.test(e.tool) && !isOwn) {
+    return { ...verdict, decision: 'deny', reason: 'Fylgja: this tool is the plugin’s own, for its reports about itself' }
+  }
+
+  return verdict.decision === 'ask' && isOwn
     ? { ...verdict, decision: 'allow', reason: 'Fylgja: the plugin’s own call to its own server' }
     : verdict
 }

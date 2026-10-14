@@ -115,6 +115,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
       outcome.statuses += text === undefined ? 0 : 1
     },
     debug: () => undefined,
+    // What the plugin reports about its own working is not the scenario's to read.
+    report: () => undefined,
     box: () => Promise.resolve(''),
     fill: () => {
       outcome.fills += 1

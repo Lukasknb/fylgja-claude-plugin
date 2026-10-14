@@ -84,8 +84,13 @@ export type Wake = {
 /** How a wake ended. Every ending but `verdict` leaves nothing done. */
 export type Ending = 'verdict' | 'unreadable' | 'steps' | 'deadline' | 'no-reply'
 
+/** Why a wake came to no reply: it was stopped, the model gave no answer, or asking it failed. */
+export type NoReply = 'stopped' | 'unanswered' | 'threw'
+
 export type Woken = {
   ending: Ending
+  /** For `no-reply`: why. */
+  noReply?: NoReply
   verdict: Verdict
   /** Every record the wake held whole, by id. */
   facts: Map<string, Fact>
@@ -127,8 +132,9 @@ function textOf(result: unknown): string {
 export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
   const facts = new Map(input.shown.map(fact => [fact.id, fact]))
   const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-  const ended = (ending: Ending, steps: number, lookups: number, verdict: Verdict = NOTHING): Woken => ({
+  const ended = (ending: Ending, steps: number, lookups: number, verdict: Verdict = NOTHING, noReply?: NoReply): Woken => ({
     ending,
+    ...(noReply === undefined ? {} : { noReply }),
     verdict,
     facts,
     steps,
@@ -157,7 +163,7 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
       }
 
       if (isStopped()) {
-        return ended('no-reply', steps, lookups)
+        return ended('no-reply', steps, lookups, NOTHING, 'stopped')
       }
 
       steps += 1
@@ -177,12 +183,14 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
       usage.cacheWrite += reply.usage.cacheWrite
 
       if (reply.text === undefined) {
-        return ended((await host.now()) - startedAt >= WAKE_DEADLINE_MS ? 'deadline' : 'no-reply', steps, lookups)
+        return (await host.now()) - startedAt >= WAKE_DEADLINE_MS
+          ? ended('deadline', steps, lookups)
+          : ended('no-reply', steps, lookups, NOTHING, isStopped() ? 'stopped' : 'unanswered')
       }
 
       // Stopped while the model answered: nothing more is asked of anyone.
       if (isStopped()) {
-        return ended('no-reply', steps, lookups)
+        return ended('no-reply', steps, lookups, NOTHING, 'stopped')
       }
 
       const asked = replyOf(reply.text)
@@ -241,7 +249,7 @@ export async function wake(host: LoopHost, input: Wake): Promise<Woken> {
 
     return ended('steps', steps, lookups)
   } catch {
-    return ended('no-reply', steps, lookups)
+    return ended('no-reply', steps, lookups, NOTHING, 'threw')
   }
 }
 

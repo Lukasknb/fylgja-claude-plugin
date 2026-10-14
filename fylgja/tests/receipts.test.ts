@@ -268,7 +268,7 @@ describe('what the plugin hooks', () => {
     }
   })
 
-  test('it hooks the prompt box, the prompt as sent, the permission check, a turn’s steps and end, its own command, its own keys, its own window, a compaction and the context of the conversation: no tool call, and nothing that rewrites the conversation', () => {
+  test('it hooks the prompt box, the prompt as sent, the description of its own reporting tool, the permission check, a turn’s steps and end, its own command, its own keys, its own window, a compaction and the context of the conversation: no tool call, and nothing that rewrites the conversation', () => {
     expect(
       hooked()
         .map(hook => hook.event)
@@ -282,6 +282,7 @@ describe('what the plugin hooks', () => {
       'prompt.context',
       'prompt.edit',
       'prompt.submit',
+      'tool.describe',
       'tool.check',
       'turn.step',
       'turn.complete',

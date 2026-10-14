@@ -293,6 +293,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
         outcome.counters.statusLines = (outcome.counters.statusLines ?? 0) + 1
       }
     },
+    // What the plugin reports about its own working is not the replay's to read.
+    report: () => undefined,
     // Scribe's own notes for the debug log hold no word of the session; they are kept as the run's notes.
     debug: text => {
       outcome.notes.push(text)

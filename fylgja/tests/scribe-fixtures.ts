@@ -4,7 +4,8 @@ import type { Engine, MockClock } from 'claude-code/testing'
 
 import type { Row } from '../hooks/scribe/delta'
 import { HEADLINES, NOTES } from '../hooks/scribe/view'
-import { ACCOUNT, answer, CONNECTED, idOf } from './fixtures'
+import { ACCOUNT, answer, CONNECTED, eventsOf, idOf, MANIFEST, MANIFEST_PATH, REPORT } from './fixtures'
+import type { Reported } from './fixtures'
 
 export const ROOT = '/work/repo'
 export const REPO = 'acme/web'
@@ -123,6 +124,10 @@ export type StageOptions = {
 export type Stage = {
   /** Every call made on Fylgja's server, in order. */
   calls: Call[]
+  /** Every batch of the plugin's own events sent to Fylgja, as the call's arguments, in order. */
+  reports: Record<string, unknown>[]
+  /** Every event of the plugin's own working sent to Fylgja so far, in order; with a name, the events of that name. */
+  events: (name?: string) => Reported[]
   /** Every request made to Scribe's model, in order. */
   asked: Asked[]
   toasts: string[]
@@ -162,6 +167,7 @@ export type Stage = {
  */
 export function stage(on: On, options: StageOptions = {}): Stage {
   const calls: Call[] = []
+  const reports: Record<string, unknown>[] = []
   const asked: Asked[] = []
   const toasts: string[] = []
   const fills: string[] = []
@@ -231,6 +237,19 @@ export function stage(on: On, options: StageOptions = {}): Stage {
       return options.whoami === undefined
         ? { value: answer(ACCOUNT) as never }
         : { value: (await options.whoami(clock)) as never }
+    }
+
+    // What the plugin reports about its own working is sent beside everything a test counts:
+    // kept apart, and answered as the server answers unless the test says how.
+    if (e.tool === REPORT) {
+      reports.push(e.args)
+
+      const denied = options.refused?.[REPORT]
+      const theirs = options.tools?.[REPORT]
+
+      return denied !== undefined
+        ? { deny: denied }
+        : { value: (theirs === undefined ? answer({ accepted: eventsOf(e.args).length, rejected: 0 }) : await theirs(e.args, clock)) as never }
     }
 
     calls.push({ tool: e.tool, args: e.args })
@@ -332,7 +351,11 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     // Any other `.mcp.json` asked for is the plugin's own, wherever the plugin is installed.
     const text =
       options.files?.[e.path] ??
-      (e.path.endsWith('/.mcp.json') && !(e.path in (options.files ?? {})) ? options.declared : undefined)
+      (e.path.endsWith(MANIFEST_PATH)
+        ? MANIFEST
+        : e.path.endsWith('/.mcp.json') && !(e.path in (options.files ?? {}))
+          ? options.declared
+          : undefined)
 
     reads.push(e.path)
 
@@ -377,6 +400,8 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
   return {
     calls,
+    reports,
+    events: name => reports.flatMap(eventsOf).filter(event => name === undefined || event.name === name),
     asked,
     toasts,
     fills,

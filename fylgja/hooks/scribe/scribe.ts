@@ -17,6 +17,9 @@ import type { Doing } from '../companion'
 import type { View as Listed } from '../listing'
 import { isRecord, payloadOf } from '../payload'
 import { drawn } from '../plain'
+import { SCHEMA } from '../telemetry-schema'
+import { wordOf } from '../telemetry'
+import type { Report, Word } from '../telemetry'
 import * as Band from './band'
 import { carried, listedOf, saidOf } from './carry'
 import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain } from './delta'
@@ -26,7 +29,7 @@ import { REFUSED } from './grant'
 import * as Ledger from './ledger'
 import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
 import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
-import type { LoopHost, NamingSession, Proposal } from './loop'
+import type { LoopHost, NamingSession, Proposal, Usage } from './loop'
 import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
 import type { Block } from './prompt'
@@ -60,6 +63,8 @@ export type ScribeHost = LoopHost & {
   mark: () => void
   /** A line for the debug log alone. Counts and fixed words; never anything a person or a record wrote. */
   debug: (text: string) => void
+  /** Notes one event of the plugin's own working (`telemetry.ts`): numbers, flags and words of fixed lists. Never fails, never waited for. */
+  report: Report
   /** `$.prompt.read`: the text in the prompt box. */
   box: () => Promise<string>
   /** `$.prompt.fill`: puts `text` in the prompt box and sends nothing; whether the box took it. */
@@ -105,8 +110,8 @@ type Identity = { sessionId: string; repo: string | null; root: string }
 /** A working tree on this machine: where it begins, and the repository it is a checkout of, as `owner/name`. */
 type Tree = { root: string; repo: string }
 
-/** A commit made in the session's own repository: its sha, and the files it holds as paths from that repository's root. */
-type Commit = { sha: string; paths: string[] }
+/** A commit made in the session's own repository: its sha, the files it holds as paths from that repository's root, and the rule they were reported by. */
+type Commit = { sha: string; paths: string[]; rule: Word<'commit', 'rule'> }
 
 /** A recorded decision whose code changed, waiting its turn; `asks` is false once another of its batch was asked about. */
 type Doubted = { fact: Fact; repo: string; asks: boolean }
@@ -329,6 +334,12 @@ export type Scribe = {
   turn: number
   /** Writes Fylgja refused or that failed. */
   refused: number
+  /** Records Fylgja took as sent, new or already held. */
+  wrote: number
+  /** The code of the first write Fylgja refused since this was last cleared; `none` for one refused with no code. */
+  refusedBy: string | undefined
+  /** Whether what is being done now was put off from an earlier turn and is tried again. */
+  isRetrying: boolean
   /** Records handed back to the model once to be put right, and those lost for good after a refusal. */
   corrections: number
   dropped: number
@@ -510,6 +521,9 @@ export function create(options: Options): Scribe {
     epoch: 0,
     turn: 0,
     refused: 0,
+    wrote: 0,
+    refusedBy: undefined,
+    isRetrying: false,
     corrections: 0,
     dropped: 0,
     lost: new Map(),
@@ -957,16 +971,33 @@ type Tried = { answer: Record<string, unknown> | undefined; refusal: string | un
  * refusal, to be read here and shown to nobody.
  */
 async function tried(host: ScribeHost, scribe: Scribe, tool: string, args: Record<string, unknown>): Promise<Tried> {
+  const began = performance.now()
+  // What came of the call, in one word of a fixed list; none of what was sent or answered.
+  const came = (outcome: Word<'call', 'outcome'>, refusal?: string): void => {
+    const name = wordOf(SCHEMA.events.call.tool.oneOf, tool, undefined)
+
+    if (name !== undefined) {
+      host.report('call', {
+        tool: name,
+        outcome,
+        duration_ms: performance.now() - began,
+        is_retry: scribe.isRetrying,
+        ...(outcome === 'refused' ? { refusal_code: refusalCodeOf(refusal) } : {}),
+      })
+    }
+  }
   const server = await connected(host)
 
   if (server === undefined) {
     MISSED.set(host, missedBy(host) + 1)
+    came('not_connected')
 
     throw new Error('Fylgja is not connected')
   }
 
   const result = await limited(host.after, host.call(server, tool, args), CALL_TIMEOUT_MS).catch((error: unknown) => {
     MISSED.set(host, missedBy(host) + 1)
+    came(error instanceof TimedOut ? 'timed_out' : error instanceof Error && error.message === REFUSED ? 'not_let_through' : 'failed')
 
     // A call that is not let through, whichever it is, ends Scribe for
     // the session: it does not go on reading and asking a model for
@@ -985,12 +1016,51 @@ async function tried(host: ScribeHost, scribe: Scribe, tool: string, args: Recor
   // this is, is the session's to say, so nothing is switched; it is noted.
   if (knownReposIn(answer) > 0 && once(scribe, 'known-repos')) {
     host.debug(`Fylgja holds nothing under this repository's name and offers ${knownReposIn(answer)} it knows`)
+    host.report('error', { component: 'scribe', kind: 'known_repos_offered' })
   }
 
   const blocks = isRecord(result) && result.isError === true && Array.isArray(result.content) ? result.content : []
   const words = blocks.map(block => (isRecord(block) && typeof block.text === 'string' ? block.text : '')).join('')
 
+  if (answer === undefined) {
+    came(failureOf(tool, words), words)
+  } else {
+    came(wordOf(SCHEMA.events.call.outcome.oneOf, answer.outcome, 'answered'))
+  }
+
   return { answer, refusal: answer === undefined ? words : undefined }
+}
+
+/**
+ * What kind of error answer a tool gave, read from the fixed words the
+ * server opens each kind with and never from what follows them: a refusal
+ * by a rule (`refused:<code>`), a call over its allowance, arguments the
+ * tool does not take, a record that is not there, or a failure of the
+ * server's own. Anything else is a refusal without a code.
+ */
+function failureOf(tool: string, words: string): Word<'call', 'outcome'> {
+  const code = codeOf(words)
+
+  if (code !== undefined) {
+    return code === 'rate_limited' ? 'rate_limited' : code === 'not_found' ? 'not_found' : 'refused'
+  }
+
+  return words.startsWith('too many ')
+    ? 'rate_limited'
+    : words.startsWith(`${tool} was called with invalid arguments`)
+      ? 'invalid_arguments'
+      : words.startsWith('record not found')
+        ? 'not_found'
+        : words.startsWith('Error calling tool') || words.startsWith(`${tool} failed on the server`)
+          ? 'server_fault'
+          : 'refused'
+}
+
+/** The code a refusal opens with, as one of the listed ones: `other` for a code not listed, `none` for a refusal with no code. */
+function refusalCodeOf(refusal: string | undefined): Word<'call', 'refusal_code'> {
+  const code = codeOf(refusal)
+
+  return code === undefined ? 'none' : wordOf(SCHEMA.events.call.refusal_code.oneOf, code, 'other')
 }
 
 /** One tool call on Fylgja, for its answer alone; see `tried`. */
@@ -1043,6 +1113,7 @@ function switchOff(host: ScribeHost, scribe: Scribe): void {
   if (once(scribe, 'off')) {
     host.status(OFF_STATUS)
     host.debug('Scribe: its own call to Fylgja was refused; off for this session')
+    host.report('error', { component: 'scribe', kind: 'not_let_through' })
   }
 
   host.redraw()
@@ -1138,9 +1209,12 @@ async function send(
 
   if (outcome !== 'created' && outcome !== 'restored' && outcome !== 'duplicate' && outcome !== 'reconfirmed') {
     scribe.refused += 1
+    scribe.refusedBy ??= refusalCodeOf(refusal)
 
     return none(codeOf(refusal))
   }
+
+  scribe.wrote += 1
 
   // Its own is what it wrote as new. A record that came back from having been removed was somebody's before.
   const isOwn = outcome === 'created' && typeof answer?.atom_id === 'string'
@@ -1245,14 +1319,97 @@ async function flush(host: ScribeHost, scribe: Scribe, who: Identity): Promise<v
       break
     }
 
-    if ('draft' in work) {
-      const one = await written(host, scribe, who, work.draft, await lone(host, scribe))
+    scribe.isRetrying = true
 
-      // Written beside a decision it may go against, because nobody said whether it replaces it: the receipt says so.
-      Band.receive(scribe.band, one === undefined ? [] : [work.against === undefined ? one : { ...one, against: work.against }])
-    } else {
-      await call(host, scribe, work.tool, work.args).catch(() => undefined)
+    try {
+      if ('draft' in work) {
+        const one = await written(host, scribe, who, work.draft, await lone(host, scribe))
+
+        // Written beside a decision it may go against, because nobody said whether it replaces it: the receipt says so.
+        Band.receive(scribe.band, one === undefined ? [] : [work.against === undefined ? one : { ...one, against: work.against }])
+      } else {
+        await call(host, scribe, work.tool, work.args).catch(() => undefined)
+      }
+    } finally {
+      scribe.isRetrying = false
     }
+  }
+}
+
+// When each question came up, by this process's own clock: how long its answer took is counted from then.
+const SHOWN = new WeakMap<Band.Question, number>()
+
+/** Notes the question now on show, once: that it came up, and which kind it is. */
+function shownNow(host: ScribeHost, scribe: Scribe): void {
+  const item = scribe.band.current
+
+  if (item?.kind === 'question' && !SHOWN.has(item)) {
+    SHOWN.set(item, performance.now())
+    host.report('question', { stage: 'shown', form: item.form })
+  }
+}
+
+/** Notes how a question that was on show ended: by which kind of key, and how long after it came up. */
+function answeredBy(host: ScribeHost, item: Band.Question, key: Word<'question', 'key'>): void {
+  const since = SHOWN.get(item)
+
+  host.report('question', {
+    stage: 'answered',
+    form: item.form,
+    key,
+    ...(since === undefined ? {} : { ms_until_answered: performance.now() - since }),
+  })
+}
+
+/** The kind of answer a key of the band is to a question; undefined for a key that answers nothing. */
+function answerOf(item: Band.Question, key: string): Word<'question', 'key'> | undefined {
+  if (key === 'skip') {
+    return 'skip'
+  }
+
+  if (item.form === 'reason') {
+    return key.startsWith('reason:') ? 'option' : key === 'no-reason' ? 'no_reason' : undefined
+  }
+
+  if (item.form === 'holds') {
+    return key === 'holds' ? 'still_holds' : key === 'no-longer' ? 'no_longer_holds' : undefined
+  }
+
+  return key === 'replaces' ? 'replaces' : key === 'different' ? 'different' : key === 'tell-claude' ? 'told_claude' : undefined
+}
+
+/**
+ * Puts a question in line (`Band.offerQuestion`). When a rule holds it
+ * back, which rule is noted: it is why nothing was asked.
+ */
+function ask(host: ScribeHost, scribe: Scribe, question: Band.Question, about: string): boolean {
+  const { band } = scribe
+  const by: Word<'question', 'held_back_by'> | undefined = band.hasAskedThisTurn
+    ? 'turn_asked'
+    : band.asked.has(about.toLowerCase())
+      ? 'asked_before'
+      : band.questions >= Band.MAX_QUESTIONS
+        ? 'session_share'
+        : band.unanswered >= Band.MAX_UNANSWERED
+          ? 'unanswered'
+          : undefined
+  const isInLine = Band.offerQuestion(band, question, about)
+
+  if (!isInLine && by !== undefined) {
+    host.report('question', { stage: 'held_back', form: question.form, held_back_by: by })
+  }
+
+  return isInLine
+}
+
+/** Takes down the question about why the record `id` was decided (`Band.withdrawQuestion`), and notes it when that question was on show. */
+function withdraw(host: ScribeHost, scribe: Scribe, id: string): void {
+  const shown = scribe.band.current
+
+  Band.withdrawQuestion(scribe.band, id)
+
+  if (shown?.kind === 'question' && scribe.band.current !== shown) {
+    answeredBy(host, shown, 'withdrawn')
   }
 }
 
@@ -1260,6 +1417,8 @@ async function flush(host: ScribeHost, scribe: Scribe, who: Identity): Promise<v
 function settle(host: ScribeHost, scribe: Scribe): void {
   const { band } = scribe
   const settled = Band.settle(band)
+
+  shownNow(host, scribe)
 
   for (const item of settled.dropped) {
     // The question is let go; the decision it was about is still recorded,
@@ -1347,6 +1506,7 @@ async function written(
 
     if (once(scribe, 'unplaced')) {
       host.debug('Scribe: a record was not written because the session has touched no file of any repository')
+      host.report('error', { component: 'scribe', kind: 'no_repository' })
     }
 
     return undefined
@@ -1464,7 +1624,7 @@ async function rewrite(host: ScribeHost, scribe: Scribe, draft: Draft, isByHand 
   scribe.recorded = scribe.recorded.map(one => (one.id === own.id ? { id: one.id, content } : one))
 
   if (draft.reasonStatus !== 'not_stated') {
-    Band.withdrawQuestion(scribe.band, own.id)
+    withdraw(host, scribe, own.id)
   }
 
   if (isByHand) {
@@ -1507,7 +1667,7 @@ async function takeBack(host: ScribeHost, scribe: Scribe, id: string, isByHand =
   scribe.written = scribe.written.filter(one => one.id !== id)
   scribe.mine.delete(id)
   scribe.recorded = scribe.recorded.filter(one => one.id !== id)
-  Band.withdrawQuestion(scribe.band, id)
+  withdraw(host, scribe, id)
 
   const gone: Written = { ...own, outcome: 'withdrawn', replaced: null }
 
@@ -1737,7 +1897,7 @@ async function apply(
     scribe.denied.delete((prior ?? against)?.id ?? '')
 
     if (against !== undefined) {
-      const ask: Band.Question = {
+      const asks: Band.Question = {
         kind: 'question',
         form: 'reversal',
         draft: checked.draft,
@@ -1746,7 +1906,7 @@ async function apply(
         isTouched: false,
       }
 
-      if (Band.offerQuestion(band, ask, draft.content)) {
+      if (ask(host, scribe, asks, draft.content)) {
         scribe.asked = [...scribe.asked, draft.content].slice(-MAX_LISTED)
         continue
       }
@@ -1756,7 +1916,7 @@ async function apply(
     // developer has said which it is. When they cannot be asked, it is
     // written beside the old one: nothing is ever replaced without their key.
     if (prior !== undefined) {
-      const ask: Band.Question = {
+      const asks: Band.Question = {
         kind: 'question',
         form: 'reversal',
         draft,
@@ -1765,7 +1925,7 @@ async function apply(
         isTouched: false,
       }
 
-      if (Band.offerQuestion(band, ask, draft.content)) {
+      if (ask(host, scribe, asks, draft.content)) {
         continue
       }
     }
@@ -1796,8 +1956,9 @@ async function apply(
       checked.isAbsent &&
       isWorthAsking
     ) {
-      Band.offerQuestion(
-        band,
+      ask(
+        host,
+        scribe,
         {
           kind: 'question',
           form: 'reason',
@@ -1933,7 +2094,7 @@ async function recalled(
  * acted on. One that the turn's tell has no room for waits for a later
  * turn's, and is told then, not asked about.
  */
-function askHolds(scribe: Scribe): void {
+function askHolds(host: ScribeHost, scribe: Scribe): void {
   const { band } = scribe
   const waiting: Doubted[] = []
   let isAsked = false
@@ -1953,7 +2114,7 @@ function askHolds(scribe: Scribe): void {
         continue
       }
 
-      if (Band.offerQuestion(band, { kind: 'question', form: 'holds', fact, repo, isTouched: false }, fact.content)) {
+      if (ask(host, scribe, { kind: 'question', form: 'holds', fact, repo, isTouched: false }, fact.content)) {
         isAsked = true
         continue
       }
@@ -2175,7 +2336,13 @@ function heldOf(rows: readonly Row[], root: string, prompts: ReadonlySet<string>
  * among these (the command that asked for it, what it reads again), so the
  * rows are kept as marks too, and the next look finds the last of them.
  */
-export function compacted(host: ScribeHost, scribe: Scribe, before: Compacting, rows: readonly Row[]): void {
+export function compacted(
+  host: ScribeHost,
+  scribe: Scribe,
+  before: Compacting,
+  rows: readonly Row[],
+  trigger: Word<'compaction', 'trigger'>,
+): void {
   // The conversation started over while it was being compacted: nothing of the one before is held.
   if (before.epoch !== scribe.epoch) {
     return
@@ -2193,7 +2360,16 @@ export function compacted(host: ScribeHost, scribe: Scribe, before: Compacting, 
 
   if (held.length < all.length) {
     host.debug(`${HELD_DROPPED} ${all.length - held.length}`)
+    host.report('error', { component: 'compaction', kind: 'held_rows_dropped' })
   }
+
+  host.report('compaction', {
+    trigger,
+    is_scribe_running: true,
+    records_carried: scribe.written.length,
+    rows_held: held.length,
+    rows_dropped: all.length - held.length,
+  })
 }
 
 /**
@@ -2335,6 +2511,7 @@ function mayWake(host: ScribeHost, scribe: Scribe, now: number, isAnswered: bool
 
   if (once(scribe, 'ceiling')) {
     host.debug(`Scribe: ${MAX_WAKES_PER_HOUR} wakes in the last hour; quiet until the hour has rolled on`)
+    host.report('error', { component: 'scribe', kind: 'wake_ceiling' })
   }
 
   return false
@@ -2415,7 +2592,7 @@ function committed(scribe: Scribe, repo: string): string[] {
  * in it, and none is pinned on a later commit. A file changed after the
  * commit's command was never among them, and is the next commit's.
  */
-function reportedWith(scribe: Scribe, who: Identity, repo: string, commit: Landed): string[] {
+function reportedWith(scribe: Scribe, who: Identity, repo: string, commit: Landed): Pick<Commit, 'paths' | 'rule'> {
   const isNew = new Set([...scribe.created].map(file => relativeTo(who.root, file) ?? file))
   const files = committed(scribe, repo)
   const inTree = (file: string): string[] => {
@@ -2430,21 +2607,21 @@ function reportedWith(scribe: Scribe, who: Identity, repo: string, commit: Lande
   scribe.created.clear()
 
   if (commit.count === null || commit.isAway !== false) {
-    return []
+    return { paths: [], rule: commit.count === null ? 'none_count_unknown' : 'none_away' }
   }
 
   const named = commit.named === null ? [] : [...new Set(commit.named)]
   const whole = commit.whole === 'tracked' ? tracked : candidates
-  const held =
-    commit.whole !== false && !commit.hasStaged
-      ? whole.size === commit.count
-        ? [...whole]
-        : []
-      : named.length === commit.count && named.every(path => candidates.has(path))
-        ? named
-        : []
 
-  return held.slice(0, MAX_COMMIT_PATHS)
+  if (commit.whole !== false && !commit.hasStaged) {
+    return whole.size === commit.count
+      ? { paths: [...whole].slice(0, MAX_COMMIT_PATHS), rule: 'count_match' }
+      : { paths: [], rule: 'none_count_mismatch' }
+  }
+
+  return named.length === commit.count && named.every(path => candidates.has(path))
+    ? { paths: named.slice(0, MAX_COMMIT_PATHS), rule: 'named_set' }
+    : { paths: [], rule: 'none_named_mismatch' }
 }
 
 /**
@@ -2472,22 +2649,50 @@ const UNKNOWN_PATHS = /\bpaths\b[\s\S]{0,200}?unexpected[ _]keyword[ _]argument|
 async function attach(host: ScribeHost, scribe: Scribe, who: Identity, repo: string, commit: Commit): Promise<void> {
   const args = { repo, sha: commit.sha, session_id: who.sessionId }
   const paths = scribe.takesPaths ? commit.paths : []
-  let { answer, refusal } = await tried(host, scribe, 'attach_commit', paths.length === 0 ? args : { ...args, paths }).catch(
-    (error: unknown): Tried => {
-      // The same refusal, where the call itself is failed for it.
-      if (paths.length > 0 && error instanceof Error && UNKNOWN_PATHS.test(error.message)) {
-        return { answer: undefined, refusal: error.message }
-      }
+  let isFallback = false
+  // How the commit went, in counts: which rule its files were reported by, how many went, and what Fylgja did with them.
+  const went = (answered: Record<string, unknown> | undefined): void => {
+    const count = (value: unknown): number => (typeof value === 'number' ? value : 0)
 
-      throw error
-    },
-  )
-
-  if (answer === undefined && paths.length > 0 && UNKNOWN_PATHS.test(refusal ?? '')) {
-    scribe.takesPaths = false
-    host.debug('Scribe: Fylgja does not take the files of a commit here; commits are attached without them in this session')
-    ;({ answer, refusal } = await tried(host, scribe, 'attach_commit', args))
+    host.report('commit', {
+      rule: commit.rule,
+      files_sent: isFallback ? 0 : paths.length,
+      is_old_server_fallback: isFallback,
+      is_attached: answered !== undefined,
+      ...(answered === undefined
+        ? {}
+        : { attached: count(answered.attached), flagged: ids(answered.flagged).length + count(answered.flagged_more) }),
+    })
   }
+  let answer: Record<string, unknown> | undefined
+  let refusal: string | undefined
+
+  try {
+    ;({ answer, refusal } = await tried(host, scribe, 'attach_commit', paths.length === 0 ? args : { ...args, paths }).catch(
+      (error: unknown): Tried => {
+        // The same refusal, where the call itself is failed for it.
+        if (paths.length > 0 && error instanceof Error && UNKNOWN_PATHS.test(error.message)) {
+          return { answer: undefined, refusal: error.message }
+        }
+
+        throw error
+      },
+    ))
+
+    if (answer === undefined && paths.length > 0 && UNKNOWN_PATHS.test(refusal ?? '')) {
+      scribe.takesPaths = false
+      isFallback = true
+      host.debug('Scribe: Fylgja does not take the files of a commit here; commits are attached without them in this session')
+      host.report('error', { component: 'scribe', kind: 'old_server_paths' })
+      ;({ answer, refusal } = await tried(host, scribe, 'attach_commit', args))
+    }
+  } catch (error) {
+    went(undefined)
+
+    throw error
+  }
+
+  went(answer)
 
   // What the commit was attached to is the session's own, whoever wrote it down.
   scribe.own = new Set([...scribe.own, ...ids(answer?.atom_ids).map(id => id.toLowerCase())].slice(-MAX_OWN))
@@ -2750,10 +2955,42 @@ async function look(host: ScribeHost, scribe: Scribe, who: Identity, epoch: numb
     taken: undefined,
   }
   let isWhole = false
+  const tally: Tally = { ending: 'stopped', noReply: undefined, steps: 0, lookups: 0, usage: undefined, proposed: 0 }
+  const began = performance.now()
+  const { wrote, refused } = scribe
+
+  scribe.refusedBy = undefined
 
   try {
-    isWhole = await looked(host, scribe, who, { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut })
+    isWhole = await looked(host, scribe, who, { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut, tally })
   } finally {
+    host.report('look', {
+      trigger: isInside ? 'answered_question' : 'turn_end',
+      ending: tally.ending,
+      ...(tally.noReply === undefined ? {} : { no_reply_reason: tally.noReply }),
+      is_whole: isWhole,
+      duration_ms: performance.now() - began,
+      steps: tally.steps,
+      lookups: tally.lookups,
+      ...(tally.usage === undefined
+        ? {}
+        : {
+            input_tokens: tally.usage.input,
+            output_tokens: tally.usage.output,
+            cache_read_tokens: tally.usage.cacheRead,
+            cache_write_tokens: tally.usage.cacheWrite,
+          }),
+      rows_read: unseen.length,
+      rows_held: held.length,
+      drafts_proposed: tally.proposed,
+      drafts_written: scribe.wrote - wrote,
+      drafts_refused: scribe.refused - refused,
+      ...(scribe.refusedBy === undefined
+        ? {}
+        : { first_refusal_code: wordOf(SCHEMA.events.look.first_refusal_code.oneOf, scribe.refusedBy, 'other') }),
+      calls_missed: missedBy(host),
+    })
+
     if (isInside && !isWhole && epoch === scribe.epoch) {
       if (compactions === scribe.compactions) {
         scribe.consumed = found.consumed
@@ -2840,6 +3077,18 @@ type Sight = {
   isAnswered: boolean
   found: Found
   cut: AbortSignal | undefined
+  tally: Tally
+}
+
+/** What a look came to, as it is reported: how it ended, and what its wake took. Counts alone. */
+type Tally = {
+  ending: Word<'look', 'ending'>
+  noReply: Word<'look', 'no_reply_reason'> | undefined
+  steps: number
+  lookups: number
+  usage: Usage | undefined
+  /** The records the verdict held. */
+  proposed: number
 }
 
 /**
@@ -2848,7 +3097,7 @@ type Sight = {
  * what the verdict held with every call to Fylgja getting through.
  */
 async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Sight): Promise<boolean> {
-  const { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut } = sight
+  const { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut, tally } = sight
   const isInside = cut !== undefined
   // Whether the turn has ended since: read anew each time, as it changes while this waits.
   const isStopped = (): boolean => cut?.aborted === true
@@ -2922,7 +3171,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
 
     scribe.toAttach = [
       ...scribe.toAttach,
-      { sha: commit.sha, paths: who.repo === null ? [] : reportedWith(scribe, who, who.repo, commit) },
+      { sha: commit.sha, ...(who.repo === null ? { paths: [], rule: 'none_no_repo' as const } : reportedWith(scribe, who, who.repo, commit)) },
     ].slice(-MAX_PENDING_COMMITS)
   }
 
@@ -2942,6 +3191,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
     host.debug(
       'Scribe: a prompt was sent and no row of the conversation holds it; the turn is read without what the developer wrote',
     )
+    host.report('error', { component: 'scribe', kind: 'no_prompt_row' })
   }
 
   // The first call of a session is waited for: whether it gets through
@@ -2972,6 +3222,8 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
   }
 
   if (scribe.identity === null || !scribe.isGranted || isStopped()) {
+    tally.ending = isStopped() ? 'stopped' : 'not_granted'
+
     return false
   }
 
@@ -3028,11 +3280,13 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
     -MAX_PROPOSALS,
   )
 
-  if (
-    (scribe.hasPrompt || scribe.hasActed || scribe.hasAnsweredInTurn) &&
-    isWorthAsking &&
-    mayWake(host, scribe, now, isAnswered)
-  ) {
+  // The developer's turn, with something in it; and then within the hour's share of wakes.
+  const isDue = (scribe.hasPrompt || scribe.hasActed || scribe.hasAnsweredInTurn) && isWorthAsking
+  const isWoken = isDue && mayWake(host, scribe, now, isAnswered)
+
+  tally.ending = !isDue ? 'skipped_gate' : !isWoken ? 'skipped_cap' : 'stopped'
+
+  if (isWoken) {
     scribe.wakingSince = now
     scribe.wakeTimes.push(now)
 
@@ -3141,8 +3395,19 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
         ...(cut === undefined ? {} : { signal: cut }),
       }))
 
+      if (woken !== undefined) {
+        tally.steps = woken.steps
+        tally.lookups = woken.lookups
+        tally.usage = woken.usage
+        tally.ending = woken.ending === 'no-reply' ? 'no_reply' : woken.ending === 'verdict' ? 'stopped' : woken.ending
+        tally.noReply = woken.noReply
+      }
+
       // A verdict that comes once the turn has ended is let go: the turn's end is reading these rows by then.
       if (woken?.ending === 'verdict' && epoch === scribe.epoch && !isStopped()) {
+        tally.ending = 'verdict'
+        tally.proposed = woken.verdict.records.length
+
         const before = scribe.written.length
         const missed = missedBy(host)
 
@@ -3234,7 +3499,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
   }
 
   // Last, so that a question the look itself came to is this turn's one question.
-  askHolds(scribe)
+  askHolds(host, scribe)
   settle(host, scribe)
 
   if (!isInside) {
@@ -3270,6 +3535,11 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
   const { band } = scribe
   const wasQuiet = band.current === null && band.receipt === null && band.queue.length === 0 && band.held.length === 0
   const item = Band.submitted(band)
+
+  // Taken down unanswered by the prompt that was sent past it.
+  if (item?.kind === 'question') {
+    answeredBy(host, item, 'expired')
+  }
 
   scribe.hasPrompt = true
   scribe.prompts.add(plain(text))
@@ -3752,6 +4022,7 @@ export async function pressed(host: ScribeHost, scribe: Scribe, key: string): Pr
   const isKeptChanged = Band.touch(band)
   const known = band.kept.known.length
   const item = band.current
+  const hadSaid = item?.kind === 'question' && item.form === 'holds' && item.said !== undefined
 
   if (key === 'about') {
     band.isAboutOpen = true
@@ -3773,6 +4044,16 @@ export async function pressed(host: ScribeHost, scribe: Scribe, key: string): Pr
     await pressedTell(host, scribe, item, key)
   } else {
     await pressedReceipt(host, scribe, key)
+  }
+
+  // A question the key settled: it is gone from the band, or its card now says what came of the answer.
+  if (item?.kind === 'question' && !hadSaid) {
+    const answer = answerOf(item, key)
+    const isSettled = scribe.band.current !== item || (item.form === 'holds' && item.said !== undefined)
+
+    if (answer !== undefined && isSettled) {
+      answeredBy(host, item, answer)
+    }
   }
 
   if (isKeptChanged || band.kept.known.length !== known) {
@@ -3821,6 +4102,7 @@ export async function entered(host: ScribeHost, scribe: Scribe, key: string, val
     const asked = band.current
 
     Band.clear(band)
+    answeredBy(host, asked, 'own_words')
 
     // "No idea" is an answer too: it is kept as one, in their words, and
     // never passed off as a reason.
@@ -3952,6 +4234,8 @@ export async function ledgerPressed(host: ScribeHost, scribe: Scribe, key: strin
       } else {
         shownAs(scribe.band, gone)
       }
+
+      host.report('window_action', { view: 'kept', action: 'remove', outcome: gone === undefined ? 'trouble' : 'done' })
     })
   } else if (action === 'putback') {
     await alone(host, ledger, id, async () => {
@@ -3965,6 +4249,8 @@ export async function ledgerPressed(host: ScribeHost, scribe: Scribe, key: strin
         ledger.selected = back.id
         shownAs(scribe.band, back)
       }
+
+      host.report('window_action', { view: 'kept', action: 'put_back', outcome: back === undefined ? 'trouble' : 'done' })
     })
   }
 
@@ -4037,6 +4323,8 @@ export async function ledgerEntered(host: ScribeHost, scribe: Scribe, value: str
         ledger.trouble.delete(id)
         shownAs(scribe.band, now)
       }
+
+      host.report('window_action', { view: 'kept', action: 'reword', outcome: now === undefined ? 'trouble' : 'done' })
     })
   }
 

@@ -21,6 +21,14 @@ export type Live = { isOpen: boolean; left?: () => void }
 /** What a call rejects with when it was asked for outside a hook that is being waited on. */
 export const DETACHED = 'detached'
 
+/**
+ * How the engine words a call of a plugin's that it did not let through:
+ * `<plugin>: $.mcp.call(<server>, <tool>) refused: <why>`. A server's own
+ * error may say "connection refused" or "access denied" and is not that.
+ * Only whether it is one is read; the words go no further.
+ */
+export const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
+
 /** How long a hook that must not hold anything up waits for Fylgja. What it started goes on; what was not started waits. */
 export const SHORT_WAIT_MS = 1500
 

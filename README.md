@@ -632,6 +632,80 @@ author, against a stand-in knowledge base, with nobody at the keys.
 
 Everything else in this README goes on working with Scribe off.
 
+## What the plugin reports about itself
+
+So that a fault on your machine can be found, the plugin reports what it
+did: that a look of Scribe's ended without a verdict, that Fylgja refused
+a write and by which rule, that the window did not open. These events go
+to Fylgja's server through the plugin's own connection, like everything
+else, and from there into Fylgja's product analytics (PostHog, hosted in
+the EU) under your Fylgja account.
+
+- **What an event is made of.** A name from a fixed list and, under keys
+  from a fixed list, whole numbers (counts, milliseconds, token counts),
+  yes/no flags, and single words from fixed lists. No key takes text.
+  **No code, no file content, no path, no file or repository name, no
+  branch, no commit sha, no record id, no error message, no prompt, no
+  reply and no word of a record is ever sent:** an event has nowhere to
+  put one. The whole list is `fylgja/hooks/telemetry-schema.ts`, and an
+  event that is not on it does not compile. Fylgja's server holds the
+  same list and drops whatever is not on it, counting only that it did,
+  so a fault in the plugin cannot send more either.
+- **With every batch:** the plugin's version, Claude Code's release
+  (`2.1.296`), where the session is drawn (`terminal`, `desktop`,
+  `vscode`, `web`, `other`, `none`), an id the plugin makes up at random
+  for the session (not Claude Code's session id, which names a transcript
+  on this machine), and with each event the time it happened.
+- **When.** Events wait in memory, at most 200 of them; over that the
+  oldest are let go and only their number is sent. They are sent at the
+  end of a turn, once Scribe is done with it, at most 50 at a time and for
+  a second and a half at most. A batch that did not arrive is not sent
+  again. Nothing is sent while Fylgja is signed out, and nothing of this
+  is written to this machine. A turn's end that Claude Code stopped
+  waiting on sends nothing and loses nothing: its batch waits for the
+  next. A Fylgja server that does not know these events is asked once in
+  a session and not again; after three batches in a row that did not
+  arrive, one last batch says so and nothing more is sent. Neither
+  changes anything for Scribe. The tool the events go to waits behind
+  ToolSearch, out of the list Claude reads, and a call of it that is not
+  the plugin's own (Claude's, or one in an agent's turn) is refused.
+- **Off.** The plugin option **Debugging events** (`/config`, or
+  `telemetry: false` under this plugin's options): nothing is noted and
+  nothing is sent, and everything else works as before. To know its own
+  version the plugin reads its `plugin.json` when a session starts; with
+  the option off it does not.
+
+The events, each with every key it may carry. Any key may be left out.
+
+| Event | Sent when | Keys |
+|-|-|-|
+| `session_started` | a session begins | `is_interactive`, `is_signed_in`, `is_scribe_on` (yes/no each) |
+| `look` | Scribe has looked at what happened, at a turn's end or after you answered a question of Claude's | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `calls_missed`; `first_refusal_code` (a refusal code, below) |
+| `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no) |
+| `question` | a question of Scribe's was held back by a rule, came up, or was answered | `stage` (held_back, shown, answered); `form` (reason, reversal, holds); `held_back_by` (turn_asked, asked_before, session_share, unanswered); `key` (option, own_words, no_reason, skip, still_holds, no_longer_holds, replaces, different, told_claude, expired, withdrawn); `ms_until_answered` (number) |
+| `window` | you asked for the window, with the mark or a command | `view` (kept, search); `opened_by` (click, command); `outcome` (opened, not_placed, failed); `records_listed` (number) |
+| `window_action` | a key of the window did something to a record | `view` (kept, search); `action` (reword, remove, put_back, open_record, cite); `outcome` (done, trouble) |
+| `search` | a search you made in the window was answered, or failed | `asked_by` (command, field, again); `outcome` (found, failed, signed_out); `results` (none, 1_3, 4_10, over_10); `duration_ms` (number) |
+| `compaction` | the conversation was compacted | `trigger` (manual, auto, plugin); `is_scribe_running` (yes/no); numbers: `records_carried`, `rows_held`, `rows_dropped` |
+| `commit` | a commit was attached to what the session recorded | `rule` (count_match, named_set, none_count_unknown, none_away, none_count_mismatch, none_named_mismatch, none_no_repo); numbers: `files_sent`, `attached`, `flagged`; `is_old_server_fallback`, `is_attached` (yes/no each) |
+| `error` | something failed, or went another way than usual | `component` (session_start, turn_step, turn_end, compaction, context, band, window, scribe); `kind` (threw, not_let_through, wake_ceiling, no_prompt_row, no_repository, held_rows_dropped, known_repos_offered, old_server_paths); `cause` (timeout, network, auth, aborted, parse, other), told from the failure's type |
+| `sign_in` | whether Fylgja is here changed in the session | `state` (here, needs_sign_in, other_account, not_here) |
+| `telemetry_stopped` | batches kept failing: the last one says so | `reason` (old_server, not_let_through, failing) |
+| `events_dropped` | more events waited than are held | `count` (number) |
+
+A refusal code is the name of the rule Fylgja refused a write by, read off
+the start of its refusal and never the words after it: `alternatives_too_many`,
+`anchor_cap`, `anchor_invalid`, `anchors_too_many`, `atom_content_removed`,
+`atom_content_taken`, `atom_ids_too_many`, `burst`, `detail_too_long`,
+`edit_conflict`, `guardrail_refused`, `invalid_arguments`, `kind_retired`,
+`leans_on_conversation`, `no_trigger`, `not_a_decision`, `not_found`, `not_imperative`,
+`not_one_sentence`, `pass_unavailable`, `project_state_error`, `rate_limited`,
+`reason_contradiction`, `reason_missing`, `recalled_gone`, `repo_mismatch`,
+`search_index_unavailable`, `server_validation`, `status_not_memory`,
+`structure_conflict`, `suggestion_state_error`, `supersedes_removed`,
+`too_long`, `validation_error`;
+`other` for a code that is not on this list, `none` for a refusal without one.
+
 ## What it never does
 
 - It adds nothing to what Claude reads, and changes nothing Claude does. No
@@ -655,9 +729,10 @@ Everything else in this README goes on working with Scribe off.
 - Text from the session, from a plan and from Fylgja is handed to the model
   fenced as data with the instruction that it is never to be followed. A
   record that says "ignore the above" is a record that says so.
-- It lets through, without asking you, exactly its own calls of eight
+- It lets through, without asking you, exactly its own calls of nine
   tools (`whoami`, `recall`, `search`, `open`, `resolve`, `remember`,
-  `amend_memory`, `attach_commit`) on the Fylgja server this plugin declares, and never past
+  `amend_memory`, `attach_commit`, and `report_events` for the events
+  about itself) on the Fylgja server this plugin declares, and never past
   a rule of yours or your organization's that refuses them. Claude's calls
   to the very same tools, and every other tool call, are decided as they
   always were. Only the plugin's own connection (`plugin:fylgja:fylgja`)
@@ -756,6 +831,10 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   bring back still carries its references. No prompt text is kept. What
   Scribe read of the session, the plan documents and the records are held
   in memory too and go with the conversation.
+- **Sent to Fylgja, about the plugin itself:** what it did, in counts
+  and fixed words, unless the option **Debugging events** is off. Every
+  event and every key is listed under "What the plugin reports about
+  itself"; none can hold text.
 - **Kept on this machine:** the pin, under `fylgja.account`: the ids of
   the user, the team and the profile of the account this machine is set
   up for. Three ids, no name, no token.
@@ -788,6 +867,15 @@ them in `fylgja/.claude-plugin/types/` (ignored by git), then
 ```bash
 npx -p typescript tsc -p fylgja
 ```
+
+`fylgja/hooks/telemetry-schema.ts` is the list of what the plugin may
+report about itself. It is written by Fylgja's server repository from its
+own list, which is the one that decides, and is not edited by hand: after
+an event or a key was added there (`apps/api/app/domain/mod_events.py`),
+run `just mod-events-schema <this repository>` in that repository and
+commit the file it writes here. An event the server does not list then
+fails the type check, and `tests/telemetry.test.ts` holds every event the
+plugin sends against the same file.
 
 `fylgja/tests/scenarios/` is a separate run, not part of the tests: Scribe
 over seventeen scripted sessions with a real model and a stand-in server,

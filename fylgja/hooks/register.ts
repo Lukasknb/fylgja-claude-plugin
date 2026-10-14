@@ -7,7 +7,7 @@ import * as Draft from './draft'
 import { restored } from './known'
 import type { Host } from './host'
 import { keyed } from './listing'
-import { briefly, called, close, line, LINE_WAIT_MS, open, passed, serve, SHORT_WAIT_MS } from './live'
+import { briefly, called, close, line, LINE_WAIT_MS, open, passed, REFUSAL, serve, SHORT_WAIT_MS } from './live'
 import type { Line, Live } from './live'
 import { flush, want } from './lookups'
 import { isOwnPrompt } from './origin'
@@ -16,12 +16,14 @@ import { isLeftToPlugin } from './project'
 import { receiptOf } from './receipts'
 import { drawn } from './plain'
 import { BLOCK } from './scribe/carry'
-import { REFUSED, verdictFor } from './scribe/grant'
+import { OWN_SERVER, REFUSED, REPORT_TOOL, verdictFor } from './scribe/grant'
 import * as Ledger from './scribe/ledger'
 import * as Scribe from './scribe/scribe'
 import type { ScribeHost } from './scribe/scribe'
 import * as Search from './search'
 import * as Session from './session'
+import * as Telemetry from './telemetry'
+import type { Report, Word } from './telemetry'
 import { referencesIn, rowTextOf } from './user-row'
 import { PANE, RINGLESS, TITLES, windowOf } from './window'
 import type { Which } from './window'
@@ -79,6 +81,7 @@ function callerOf($: EngineInterface): Caller {
  * to Fylgja goes to the session's own connection, under the name the
  * sign-in check last gave for it.
  *
+ * @param report notes an event of the plugin's own working (`telemetry.ts`)
  * @param calls given to a host whose work may go on after its hook has
  *   handed back: a call it makes then waits there, a short while, for the
  *   next hook that is being waited on, and is started by that hook. A call
@@ -86,7 +89,7 @@ function callerOf($: EngineInterface): Caller {
  *   calls are let through at all is found out by a hook that is waited on
  *   for its whole look, never by work that may have been left behind.
  */
-function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live, calls?: Line<Caller>): ScribeHost {
+function scribeHostOf($: EngineInterface, session: Session.Session, report: Report, live?: Live, calls?: Line<Caller>): ScribeHost {
   const start = (server: string, tool: string, args: Record<string, unknown>): Promise<unknown> =>
     calls === undefined
       ? called(live, () => $.mcp.call(server, tool, args))
@@ -147,6 +150,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live,
     status: text => Session.say(hostOf($, session, live), session, text),
     mark: () => remark($, session),
     debug: text => $.ui.log(drawn(text, MAX_LINE), { to: 'debug' }),
+    report,
     box: async () => (await $.prompt.read()).text,
     fill: async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled,
     stored: key => $.store.get(key),
@@ -168,6 +172,26 @@ function scribeHostOf($: EngineInterface, session: Session.Session, live?: Live,
   }
 }
 
+/**
+ * The way a batch of the plugin's own events is sent from one hook: on the
+ * session's connection, while that hook is being waited on, and only while
+ * Fylgja is here for the account this machine is set up for.
+ */
+function doorOf($: EngineInterface, session: Session.Session, live: Live): Telemetry.Door {
+  return {
+    server: session.isHere && session.server === OWN_SERVER ? session.server : undefined,
+    isOpen: () => live.isOpen,
+    call: (server, tool, args) => called(live, () => $.mcp.call(server, tool, args)),
+    now: () => $.clock.now(),
+    after: (ms, fn) => $.clock.after(ms, fn),
+  }
+}
+
+/** Sends one batch of what waits, for a moment at most; what it started goes on. Never fails. */
+function sendEvents($: EngineInterface, session: Session.Session, telemetry: Telemetry.Telemetry, live: Live): Promise<void> {
+  return briefly((ms, fn) => $.clock.after(ms, fn), Telemetry.send(telemetry, doorOf($, session, live)), SHORT_WAIT_MS)
+}
+
 /** Brings the mark above the prompt up to date; see `Session.remark`. No call to Fylgja is started for it. */
 function remark($: EngineInterface, session: Session.Session): void {
   Session.remark(hostOf($, session), session)
@@ -177,14 +201,18 @@ function remark($: EngineInterface, session: Session.Session): void {
  * Brings the mark up to date, and with it the context of a compacted
  * conversation when a record it lists was removed or reads differently now:
  * the context is asked for again, and lists the records as they stand.
+ *
+ * @param noted told once that is done: whether Fylgja is here is noted then
  */
-function refresh($: EngineInterface, session: Session.Session, scribe: Scribe.Scribe): void {
+function refresh($: EngineInterface, session: Session.Session, scribe: Scribe.Scribe, noted?: () => void): void {
   remark($, session)
 
   if (Scribe.isStale(scribe, session.isHere)) {
     scribe.noted = undefined
     $.ui.invalidate('prompt.context')
   }
+
+  noted?.()
 }
 
 /** The conversation's id, or undefined where it cannot be read. */
@@ -234,11 +262,13 @@ function noted(scribe: Scribe.Scribe, win: Win, isOpen: boolean): void {
  * text or a dialog is up, Claude Code keeps them and the window is shown all
  * the same. Escape closes it. It holds back nobody's toasts.
  */
-async function openWindow($: EngineInterface, scribe: Scribe.Scribe, win: Win): Promise<void> {
+async function openWindow($: EngineInterface, scribe: Scribe.Scribe, win: Win): Promise<Word<'window', 'outcome'>> {
   // The search view has its field above the records and its line in place of them, and opens a record to more lines than a kept one has.
   const found = win.search.hits.length
   const listed = win.which === 'kept' ? Scribe.ledgerEntries(scribe).length : found + (found === 0 ? 2 : 5)
   const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, listed + ROWS_AROUND))
+
+  let outcome: Word<'window', 'outcome'> = 'opened'
 
   noted(scribe, win, true)
 
@@ -248,24 +278,74 @@ async function openWindow($: EngineInterface, scribe: Scribe.Scribe, win: Win): 
     // Open, and no surface draws it: the person asked for it and sees nothing, so they are told why,
     // and it is not left waiting to come up later by itself.
     if (!opened.isPlaced) {
+      outcome = 'not_placed'
       $.ui.toast(drawn(`Fylgja: the window cannot be shown here. ${opened.reason}`, MAX_LINE))
       await closeWindow($, scribe, win)
     }
   } catch {
     // Not opened: nothing is drawn, and the next press asks again.
+    outcome = 'failed'
     noted(scribe, win, false)
     $.ui.toast('Fylgja: the window could not be opened here.')
   }
 
   // While it is open the mark is text, and a key again when it is not.
   $.ui.invalidate('ui.render')
+
+  return outcome
 }
 
-/** Shows what was kept: the search view, if that was up, lets go of what it held half done. */
-async function openKept($: EngineInterface, scribe: Scribe.Scribe, win: Win): Promise<void> {
+/**
+ * Shows what was kept, because the person asked for it: the search view, if
+ * that was up, lets go of what it held half done.
+ *
+ * @param by how they asked: the mark, or the command
+ */
+async function openKept(
+  $: EngineInterface,
+  scribe: Scribe.Scribe,
+  win: Win,
+  report: Report,
+  by: Word<'window', 'opened_by'>,
+): Promise<void> {
   Search.closed(win.search)
   win.which = 'kept'
-  await openWindow($, scribe, win)
+  report('window', {
+    view: 'kept',
+    opened_by: by,
+    outcome: await openWindow($, scribe, win),
+    records_listed: Scribe.ledgerEntries(scribe).length,
+  })
+}
+
+/**
+ * One search of the developer's, noted once it has been answered or has
+ * failed: how it was asked for, how it ended, how long it took and how many
+ * it found as one of four sizes. Nothing of what was looked for or found.
+ */
+async function searched(
+  report: Report,
+  session: Session.Session,
+  search: Search.Search,
+  by: Word<'search', 'asked_by'>,
+  look: () => Promise<void>,
+): Promise<void> {
+  const { asked } = search
+  const began = performance.now()
+
+  try {
+    await look()
+  } finally {
+    // Asked, and the answer was this search's: one that was not made, or that another took the place of, is not counted.
+    if (search.asked !== asked && search.phase !== 'searching') {
+      report('search', {
+        asked_by: by,
+        outcome: search.phase === 'found' ? 'found' : session.isHere ? 'failed' : 'signed_out',
+        results: Telemetry.sizeOf(search.hits.length),
+        duration_ms: performance.now() - began,
+      })
+    }
+  }
 }
 
 /**
@@ -404,8 +484,9 @@ async function caughtUp($: EngineInterface, held: Held): Promise<boolean> {
  * After a start over, in a hook that Claude Code waits on: who is signed in,
  * and the references the rows on screen noted, are asked about for a
  * moment. A start over anywhere else leaves them to the next such hook.
+ * `noted` is told once that is done, as `refresh` tells it.
  */
-async function vouch($: EngineInterface, held: Held): Promise<void> {
+async function vouch($: EngineInterface, held: Held, noted?: () => void): Promise<void> {
   const live = open()
 
   try {
@@ -414,7 +495,7 @@ async function vouch($: EngineInterface, held: Held): Promise<void> {
     await briefly(host.after, flush(host, held.session), SHORT_WAIT_MS)
   } finally {
     close(live)
-    refresh($, held.session, held.scribe)
+    refresh($, held.session, held.scribe, noted)
   }
 }
 
@@ -453,12 +534,6 @@ function ring($: EngineInterface, session: Session.Session, scribe: Scribe.Scrib
     void $.ui.scroll({ in: PANE, to: { key } }).catch(() => undefined)
   })
 }
-
-// How the engine words a call of a plugin's that it did not let through:
-// `<plugin>: $.mcp.call(<server>, <tool>) refused: <why>`. A server's own
-// error may say "connection refused" or "access denied" and is not that.
-// Only whether it is one is read; the words go no further.
-const REFUSAL = /\$\.mcp\.call\([^)\n]*\) refused:/
 
 /**
  * Fylgja inside Claude Code, quietly: it says when Fylgja needs sign-in, and
@@ -507,6 +582,32 @@ export function register(on: On, options: PluginOptions = {}): void {
   const draft = Draft.create()
   const scribe = Scribe.create({ isOn: options.scribe !== false })
   const win: Win = { which: 'kept', search: Search.create() }
+  // What the plugin reports about its own working, unless its option is off: counts and fixed words, held in memory until a hook sends them.
+  const telemetry = Telemetry.create(options.telemetry !== false)
+  // Whether Fylgja is here, as last reported: a change of it is an event of its own.
+  let signedIn: Word<'sign_in', 'state'> | undefined
+  const noteSignIn = (): void => {
+    const state: Word<'sign_in', 'state'> = session.isHere
+      ? 'here'
+      : session.account.state === 'other'
+        ? 'other_account'
+        : session.signIn.isShown
+          ? 'needs_sign_in'
+          : 'not_here'
+
+    if (signedIn !== undefined && state !== signedIn) {
+      report('sign_in', { state })
+    }
+
+    signedIn = state
+  }
+  const report: Report = (name, props) => {
+    try {
+      Telemetry.record(telemetry, name, props)
+    } catch {
+      // An event that could not be noted is nobody's trouble but its own.
+    }
+  }
 
   // What the mark says of Scribe is read from Scribe when the line is written.
   session.doing = () => Scribe.doing(scribe)
@@ -527,6 +628,8 @@ export function register(on: On, options: PluginOptions = {}): void {
     Session.revet(session)
     Scribe.started(scribe, e.isInteractive, e.surface)
     held.conversation.id = (await idOf($)) ?? held.conversation.id
+    Telemetry.started(telemetry, e.surface)
+    signedIn = undefined
 
     const started = await next(e)
     const live = open()
@@ -540,9 +643,40 @@ export function register(on: On, options: PluginOptions = {}): void {
       const host = hostOf($, session, live)
 
       await briefly(host.after, flush(host, session, true), SHORT_WAIT_MS)
+    } catch (error) {
+      report('error', { component: 'session_start', kind: 'threw', cause: Telemetry.causeOf(error) })
+
+      throw error
     } finally {
       close(live)
-      refresh($, session, scribe)
+      refresh($, session, scribe, noteSignIn)
+    }
+
+    // Which plugin and engine this is and what time it is by the engine's clock, for the events the plugin reports. None of it is asked of Fylgja.
+    if (telemetry.isOn) {
+      try {
+        Telemetry.pluginIs(telemetry, await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))
+      } catch {
+        // Reported without it.
+      }
+
+      try {
+        Telemetry.engineIs(telemetry, (await $.session.version()).base)
+      } catch {
+        // Reported without it.
+      }
+
+      try {
+        Telemetry.anchored(telemetry, await $.clock.now())
+      } catch {
+        // An event's time is then the time it is sent.
+      }
+
+      report('session_started', {
+        is_interactive: e.isInteractive,
+        is_signed_in: session.isHere,
+        is_scribe_on: options.scribe !== false,
+      })
     }
 
     // The way to the window of what was kept for a terminal that reports no clicks.
@@ -571,10 +705,10 @@ export function register(on: On, options: PluginOptions = {}): void {
   // its own: a command's line is read by Claude, and the window says it all.
   on('command.run', { command: 'fylgja-kept' }, async $ => {
     if (await caughtUp($, held)) {
-      await vouch($, held)
+      await vouch($, held, noteSignIn)
     }
 
-    await openKept($, scribe, win)
+    await openKept($, scribe, win, report, 'command')
 
     return {}
   })
@@ -589,20 +723,20 @@ export function register(on: On, options: PluginOptions = {}): void {
     const query = Search.queryOf(e.args)
 
     if (await caughtUp($, held)) {
-      await vouch($, held)
+      await vouch($, held, noteSignIn)
     }
 
     Ledger.closed(scribe.ledger)
     win.which = 'search'
     Search.current(win.search, session.epoch)
     Search.begun(win.search, query !== '')
-    await openWindow($, scribe, win)
+    report('window', { view: 'search', opened_by: 'command', outcome: await openWindow($, scribe, win) })
 
     if (query !== '' && win.search.isOpen) {
       const live = open()
 
       try {
-        await Search.look(hostOf($, session, live), session, win.search, query)
+        await searched(report, session, win.search, 'command', () => Search.look(hostOf($, session, live), session, win.search, query))
       } catch {
         // The view says what it has.
       } finally {
@@ -645,7 +779,7 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     const started = await next(e)
 
-    await vouch($, held)
+    await vouch($, held, noteSignIn)
 
     return started
   }).catch(($, e, next) => next(e))
@@ -679,9 +813,10 @@ export function register(on: On, options: PluginOptions = {}): void {
     let before: Scribe.Compacting | undefined
 
     try {
-      before = await Scribe.compacting(scribeHostOf($, session, live), scribe, e.messages)
-    } catch {
+      before = await Scribe.compacting(scribeHostOf($, session, report, live), scribe, e.messages)
+    } catch (error) {
       // Compacted as it would have been without the plugin.
+      report('error', { component: 'compaction', kind: 'threw', cause: Telemetry.causeOf(error) })
     }
 
     try {
@@ -690,11 +825,14 @@ export function register(on: On, options: PluginOptions = {}): void {
       try {
         // Called off, the conversation is as it was, and so is everything held of it.
         if (before !== undefined && done.skip === undefined) {
-          Scribe.compacted(scribeHostOf($, session, live), scribe, before, done.messages)
+          Scribe.compacted(scribeHostOf($, session, report, live), scribe, before, done.messages, e.trigger)
           $.ui.invalidate('prompt.context')
+        } else if (done.skip === undefined) {
+          report('compaction', { trigger: e.trigger, is_scribe_running: false })
         }
-      } catch {
+      } catch (error) {
         // The compaction stands as it came; the next look begins at the developer's last prompt.
+        report('error', { component: 'compaction', kind: 'threw', cause: Telemetry.causeOf(error) })
       }
 
       return done
@@ -718,10 +856,12 @@ export function register(on: On, options: PluginOptions = {}): void {
     const live = open()
 
     try {
-      const text = await Scribe.context(scribeHostOf($, session, live), scribe)
+      const text = await Scribe.context(scribeHostOf($, session, report, live), scribe)
 
       return text === undefined ? below : { ...below, blocks: [...below.blocks.filter(block => block.name !== BLOCK), { name: BLOCK, text }] }
-    } catch {
+    } catch (error) {
+      report('error', { component: 'context', kind: 'threw', cause: Telemetry.causeOf(error) })
+
       return below
     } finally {
       close(live)
@@ -738,7 +878,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     // once the box is empty. Nothing is asked of anyone for it.
     try {
       Session.typed(hostOf($, session), session, box.text)
-      Scribe.typed(scribeHostOf($, session), scribe, box.text)
+      Scribe.typed(scribeHostOf($, session, report), scribe, box.text)
     } catch {
       // The box is drawn all the same.
     }
@@ -779,7 +919,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       if (isOwnPrompt(e.origin)) {
         try {
           Session.prompted(hostOf($, session), session)
-          Scribe.prompted(scribeHostOf($, session), scribe, e.text)
+          Scribe.prompted(scribeHostOf($, session, report), scribe, e.text)
         } catch {
           // The prompt goes on as it was sent.
         }
@@ -796,7 +936,7 @@ export function register(on: On, options: PluginOptions = {}): void {
     // developer typed past is taken down.
     try {
       Session.prompted(hostOf($, session), session)
-      Scribe.prompted(scribeHostOf($, session), scribe, text)
+      Scribe.prompted(scribeHostOf($, session, report), scribe, text)
     } catch {
       // The prompt goes on as it was entered.
     }
@@ -860,6 +1000,12 @@ export function register(on: On, options: PluginOptions = {}): void {
   // person: this plugin's call, on its own server, of one of a fixed few
   // tools, and never past a refusal. Every other check is passed on as it
   // came, so nobody else's call is decided here.
+  // The tool the plugin reports its own working to is for the plugin alone: it waits behind ToolSearch,
+  // out of the prompt's list, and a call of it that is not the plugin's own is refused.
+  on('tool.describe', { tool: REPORT_TOOL }, async ($, e, next) => ({ ...(await next(e)), isDeferred: true })).catch(($, e, next) =>
+    next(e),
+  )
+
   on('tool.check', async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server)).catch(
     // Asked here when the engine keeps the hook out of a call raised beneath
     // the plugin's own code: the same rule, from the event alone.
@@ -894,9 +1040,9 @@ export function register(on: On, options: PluginOptions = {}): void {
         Scribe.began(scribe)
         void looked
           .catch(() => undefined)
-          .then(() => Scribe.stepping(scribeHostOf($, session, live, calls), scribe))
+          .then(() => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe))
           .catch(() => undefined)
-          .finally(() => refresh($, session, scribe))
+          .finally(() => refresh($, session, scribe, noteSignIn))
       }
 
       const stepped = yield* next(e)
@@ -905,13 +1051,14 @@ export function register(on: On, options: PluginOptions = {}): void {
 
       try {
         if (e.agentId === undefined) {
-          await Scribe.stepped(scribeHostOf($, session, live), scribe, e.index, stepped.toolUses)
+          await Scribe.stepped(scribeHostOf($, session, report, live), scribe, e.index, stepped.toolUses)
         } else {
           // An agent's step: the paths of the files it changes, and whether it commits. Nothing else of it.
-          await Scribe.agentStepped(scribeHostOf($, session, live), scribe, stepped.toolUses)
+          await Scribe.agentStepped(scribeHostOf($, session, report, live), scribe, stepped.toolUses)
         }
-      } catch {
+      } catch (error) {
         // The turn goes on.
+        report('error', { component: 'turn_step', kind: 'threw', cause: Telemetry.causeOf(error) })
       }
 
       return stepped
@@ -946,14 +1093,21 @@ export function register(on: On, options: PluginOptions = {}): void {
       await briefly(host.after, flush(host, session), SHORT_WAIT_MS)
 
       if (e.agentId === undefined) {
-        await Scribe.completed(scribeHostOf($, session, live), scribe)
+        await Scribe.completed(scribeHostOf($, session, report, live), scribe)
       }
-    } catch {
+    } catch (error) {
       // The turn ended as it would have without the plugin.
+      report('error', { component: 'turn_end', kind: 'threw', cause: Telemetry.causeOf(error) })
     } finally {
+      // Last, once Scribe is done with the turn: what the plugin noted about its own working is sent, a batch a turn.
+      // Only from the main conversation's turn: a call raised inside an agent's turn is not the plugin's own to the
+      // permission check, and would be put to the person.
+      if (e.agentId === undefined) {
+        await sendEvents($, session, telemetry, live)
+      }
       close(live)
       // The look at the turn's end has ended by here, however it ended.
-      refresh($, session, scribe)
+      refresh($, session, scribe, noteSignIn)
     }
 
     return done
@@ -1024,7 +1178,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       // With the window open the mark is drawn as text, so the band has
       // nothing left to hold them with: once it has been drawn so, the
       // window is asked again, and gets them.
-      await openKept($, scribe, win)
+      await openKept($, scribe, win, report, 'click')
 
       if (scribe.ledger.isOpen) {
         $.clock.after(HANDOVER_MS, () => {
@@ -1040,13 +1194,14 @@ export function register(on: On, options: PluginOptions = {}): void {
         if (key.startsWith('account-')) {
           await Session.pressed(hostOf($, session, live), session, key)
         } else {
-          await Scribe.pressed(scribeHostOf($, session, live), scribe, key)
+          await Scribe.pressed(scribeHostOf($, session, report, live), scribe, key)
         }
-      } catch {
+      } catch (error) {
         // The press is done with.
+        report('error', { component: 'band', kind: 'threw', cause: Telemetry.causeOf(error) })
       } finally {
         close(live)
-        refresh($, session, scribe)
+        refresh($, session, scribe, noteSignIn)
       }
 
       // Scribe was turned off with a key: the window has nothing left to list.
@@ -1066,12 +1221,13 @@ export function register(on: On, options: PluginOptions = {}): void {
       const live = open()
 
       try {
-        await Scribe.entered(scribeHostOf($, session, live), scribe, entry.key, entry.value)
-      } catch {
+        await Scribe.entered(scribeHostOf($, session, report, live), scribe, entry.key, entry.value)
+      } catch (error) {
         // The line is done with.
+        report('error', { component: 'band', kind: 'threw', cause: Telemetry.causeOf(error) })
       } finally {
         close(live)
-        refresh($, session, scribe)
+        refresh($, session, scribe, noteSignIn)
       }
     }
 
@@ -1125,15 +1281,36 @@ export function register(on: On, options: PluginOptions = {}): void {
 
       try {
         if (win.which !== 'search') {
-          await Scribe.ledgerPressed(scribeHostOf($, session, live), scribe, key)
+          await Scribe.ledgerPressed(scribeHostOf($, session, report, live), scribe, key)
         } else if (!Search.current(win.search, session.epoch)) {
-          await Search.pressed(hostOf($, session, live), session, win.search, draft, boxOf($), key)
+          const pressing = (): Promise<void> => Search.pressed(hostOf($, session, live), session, win.search, draft, boxOf($), key)
+
+          if (key === Search.AGAIN) {
+            await searched(report, session, win.search, 'again', pressing)
+          } else {
+            const wasActing = win.search.acting
+            const id = key.slice(key.indexOf(':') + 1)
+
+            await pressing()
+
+            // A record opened, or its reference put in the prompt box: which of the two, and whether the box took it.
+            if (key.startsWith('row:') && win.search.acting === id) {
+              report('window_action', { view: 'search', action: 'open_record' })
+            } else if (key.startsWith('cite:') && wasActing === id) {
+              report('window_action', {
+                view: 'search',
+                action: 'cite',
+                outcome: win.search.said.get(id) === 'cited' ? 'done' : 'trouble',
+              })
+            }
+          }
         }
-      } catch {
+      } catch (error) {
         // The press is done with.
+        report('error', { component: 'window', kind: 'threw', cause: Telemetry.causeOf(error) })
       } finally {
         close(live)
-        refresh($, session, scribe)
+        refresh($, session, scribe, noteSignIn)
       }
 
       ring($, session, scribe, win)
@@ -1155,15 +1332,16 @@ export function register(on: On, options: PluginOptions = {}): void {
       try {
         if (win.which === 'search') {
           Search.current(win.search, session.epoch)
-          await Search.look(hostOf($, session, live), session, win.search, value)
+          await searched(report, session, win.search, 'field', () => Search.look(hostOf($, session, live), session, win.search, value))
         } else {
-          await Scribe.ledgerEntered(scribeHostOf($, session, live), scribe, value)
+          await Scribe.ledgerEntered(scribeHostOf($, session, report, live), scribe, value)
         }
-      } catch {
+      } catch (error) {
         // The line is done with.
+        report('error', { component: 'window', kind: 'threw', cause: Telemetry.causeOf(error) })
       } finally {
         close(live)
-        refresh($, session, scribe)
+        refresh($, session, scribe, noteSignIn)
       }
 
       await fitFound($, scribe, win)

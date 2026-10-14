@@ -12,6 +12,13 @@
       "description": "Scribe follows the session and records decisions with their reasons in Fylgja, asks when a decision has none, and tells you what is recorded about the files in hand. It uses your own Claude plan for its model calls (Sonnet). Off: nothing is read, asked or written.",
       "required": false,
       "default": true
+    },
+    "telemetry": {
+      "type": "boolean",
+      "title": "Debugging events",
+      "description": "The plugin reports what it did to Fylgja, in counts and fixed words, so that a fault can be found: how a look of Scribe's ended, that a write was refused and by which rule, that the window did not open. Never code, file or repository names, paths, prompts, replies or the text of a record. Off: nothing is noted and nothing is sent.",
+      "required": false,
+      "default": true
     }
   }
 }

@@ -46,6 +46,21 @@ export const NEEDS_SIGN_IN = { isConnected: false, reason: 'auth', message: 'fyl
 
 type Call = { server: string; tool: string; args: Record<string, unknown> }
 
+/** One event of the plugin's own working, as it was sent to Fylgja. */
+export type Reported = { name: string; at: number; props: Record<string, unknown> }
+
+/** Where a plugin's manifest lies under its root, and the one every test session's plugin has. */
+export const MANIFEST_PATH = '/.claude-plugin/plugin.json'
+export const MANIFEST = '{ "name": "fylgja", "version": "1.2.3" }'
+
+/** The tool the plugin sends its own events to; its calls are kept apart from the ones a test counts. */
+export const REPORT = 'report_events'
+
+/** The events one call of `REPORT` carried. */
+export function eventsOf(args: Record<string, unknown>): Reported[] {
+  return Array.isArray(args.events) ? (args.events as Reported[]) : []
+}
+
 /** Engine calls a plugin that only draws has no business making. */
 const FORBIDDEN = [
   'ui.log',
@@ -53,7 +68,6 @@ const FORBIDDEN = [
   'prompt.read',
   'process.run',
   'http.fetch',
-  'fs.read',
   'fs.write',
   'session.repo',
   'env.get',
@@ -64,6 +78,8 @@ const FORBIDDEN = [
 export type Scene = {
   /** Every tool call made on Fylgja's server, in order. */
   calls: Call[]
+  /** Every batch of the plugin's own events sent to Fylgja, as the call's arguments, in order. */
+  reports: Record<string, unknown>[]
   /** Every value the status line was set to, in order. */
   statuses: (string | undefined)[]
   /** Every call the plugin made that it must never make, by name. */
@@ -93,6 +109,7 @@ export type SceneOptions = {
  */
 export function scene(on: On, options: SceneOptions = {}): Scene {
   const calls: Call[] = []
+  const reports: Record<string, unknown>[] = []
   const statuses: (string | undefined)[] = []
   const forbidden: string[] = []
   const pinned = new Map<string, unknown>()
@@ -122,6 +139,17 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
       return { deny: 'not for this plugin' } as never
     })
   }
+
+  // The one file such a plugin reads is its own manifest, for the version it states.
+  on('fs.read', ($, e) => {
+    if (e.path.endsWith(MANIFEST_PATH)) {
+      return { value: MANIFEST as never }
+    }
+
+    forbidden.push('fs.read')
+
+    return { deny: 'not for this plugin' }
+  })
 
   // Where the session is, and a project that holds no `.mcp.json`: the
   // plugin looks at both before it trusts Fylgja's connection.
@@ -166,6 +194,13 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
       return { value: answer(ACCOUNT) as never }
     }
 
+    // What the plugin reports about its own working is sent beside everything a test counts.
+    if (e.tool === REPORT) {
+      reports.push(e.args)
+
+      return { value: answer({ accepted: eventsOf(e.args).length, rejected: 0 }) as never }
+    }
+
     calls.push({ server: e.server, tool: e.tool, args: e.args })
 
     if (e.tool !== 'resolve' || options.resolve === undefined) {
@@ -181,7 +216,7 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
     return { value: undefined }
   })
 
-  return { calls, statuses, forbidden, connects: () => connects, whoamis: () => whoamis, clock }
+  return { calls, reports, statuses, forbidden, connects: () => connects, whoamis: () => whoamis, clock }
 }
 
 /**
