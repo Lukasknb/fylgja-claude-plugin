@@ -9,7 +9,7 @@ import * as Ledger from '../hooks/scribe/ledger'
 import type { Written } from '../hooks/scribe/types'
 import { ARMED_NOTE } from '../hooks/scribe/view'
 import { ARMED_KEY, PANE, RINGLESS } from '../hooks/window'
-import { answer, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { answer, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
 import { all, frame, pane, ringOn, scrolled } from './window-fixtures'
 import type { Node } from './window-fixtures'
 import { claude, decision, dev, edit, EMPTY, MARK, NOTHING, press, pressTwice, QUIET, shown, stage, START, turn, typing, verdict } from './scribe-fixtures'
@@ -245,7 +245,7 @@ describe('the mark opens the window', () => {
     expect(all((await band.drawn()) as unknown as Node, 'Button'), 'open, it is the only place the keys can go').toEqual([])
 
     // Closed, the mark is a key again, and opens it again.
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
 
     expect(seen.closes).toEqual([PANE])
     expect(all((await band.drawn()) as unknown as Node, 'Button').map(key => key.props?.key)).toEqual(['kept'])
@@ -311,7 +311,7 @@ describe('the mark opens the window', () => {
   test('a conversation that starts over closes it', async ($, on) => {
     const { seen } = await opened($, on)
 
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
 
     expect(seen.closes).toEqual([PANE])
 

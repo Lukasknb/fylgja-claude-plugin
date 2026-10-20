@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { ARMED_NOTE } from '../hooks/scribe/view'
 import { UNSAID_STATUS } from '../hooks/session'
-import { ACCOUNT, answer, MEETING_ID, meetingRecord, token } from './fixtures'
+import { ACCOUNT, answer, endedBy, MEETING_ID, meetingRecord, token } from './fixtures'
 import {
   EMPTY,
   band,
@@ -77,7 +77,7 @@ describe('the account this machine is set up for', () => {
     expect(set.whoamis.length).toBe(1)
     expect(set.of('remember').length).toBe(2)
 
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
     set.rows.length = 0
     await turn($, set, ...WORK)
 

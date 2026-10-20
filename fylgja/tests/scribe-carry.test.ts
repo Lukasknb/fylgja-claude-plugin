@@ -2,20 +2,19 @@ import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { BLOCK, carried, entryOf, MAX_CARRIED } from '../hooks/scribe/carry'
+import { carried, entryOf, MAX_CARRIED } from '../hooks/scribe/carry'
 import type { Row } from '../hooks/scribe/delta'
-import { HELD_DROPPED, MAX_HELD } from '../hooks/scribe/scribe'
 import type { Written } from '../hooks/scribe/types'
 import { GIVEN_UP } from '../hooks/scribe/prompt'
-import { answer, idOf, NEEDS_SIGN_IN } from './fixtures'
-import { claude, decision, dev, EMPTY, fact, finish, MARK, NOTHING, press, pressTwice, QUIET, ROOT, send, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { answer, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { claude, decision, dev, fact, finish, NOTHING, press, pressTwice, QUIET, ROOT, send, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 import type { Stage, StageOptions } from './scribe-fixtures'
 
 const FILE = 'src/queue/lock.ts'
 
 let edits = 0
 
-/** An edit of the one file, as a compaction is handed it: every call with the id the engine gave it. */
+/** An edit of the one file, as the engine holds it: every call with the id the engine gave it. */
 function edit(path: string) {
   edits += 1
 
@@ -51,34 +50,17 @@ const SUMMARY: Row = {
   toolUses: [],
 }
 
-/** The context Claude Code itself gives with a conversation. */
-const OWN = [
-  { name: 'claudeMd', text: 'Use tabs.' },
-  { name: 'currentDate', text: "Today's date is 2026-10-12." },
-]
-
 type Compaction = { trigger: string; agentId?: string; messages: readonly Row[] }
-
-type Beneath = {
-  /** Every compaction that reached Claude Code's own, in order. */
-  compactions: Compaction[]
-  /** How many times the context was asked for again, by the plugin. */
-  asks: () => number
-  /** Everything else the plugin asked to be made again. */
-  others: string[]
-}
 
 /**
  * Claude Code beneath the plugin: its own compaction (the summary, and the
- * last `keep` rows as they were), its own context blocks, and the requests
- * to compute something again.
+ * last `keep` rows as they were), which no hook of the plugin's takes part
+ * in. Every compaction that reached it is kept, in order.
  *
  * @param refuses a compaction that is called off, with the reason given
  */
-function beneath(on: On, keep = 0, refuses?: () => string | undefined): Beneath {
+function beneath(on: On, keep = 0, refuses?: () => string | undefined): Compaction[] {
   const compactions: Compaction[] = []
-  const others: string[] = []
-  let asks = 0
 
   on('session.compact', ($, e) => {
     const reason = refuses?.()
@@ -87,21 +69,15 @@ function beneath(on: On, keep = 0, refuses?: () => string | undefined): Beneath 
 
     return (reason === undefined ? { messages: [SUMMARY, ...e.messages.slice(e.messages.length - keep)] } : { skip: reason }) as never
   })
-  on('prompt.context', ($, e) => ({ blocks: e.blocks }))
-  on('ui.invalidate', ($, e) => {
-    if (e.event === 'prompt.context') {
-      asks += 1
-    } else {
-      others.push(e.event)
-    }
 
-    return { value: undefined } as never
-  })
-
-  return { compactions, asks: () => asks, others }
+  return compactions
 }
 
-/** The conversation is compacted, and reads afterwards what the compaction came to, then what Claude Code adds of its own. */
+/**
+ * The conversation is compacted, and reads afterwards what the compaction
+ * came to, then what Claude Code adds of its own. Until Claude next answers,
+ * the context window has no reading.
+ */
 async function compact($: Engine, set: Stage, trigger: 'manual' | 'auto' | 'plugin' = 'manual', after: readonly Row[] = []): Promise<readonly Row[]> {
   const done = await $.session.compact({ trigger, messages: [...set.rows] } as never)
 
@@ -110,23 +86,14 @@ async function compact($: Engine, set: Stage, trigger: 'manual' | 'auto' | 'plug
   }
 
   set.rows.splice(0, set.rows.length, ...(done.messages as readonly Row[]), ...after)
+  set.window.hasReading = false
 
   return done.messages as readonly Row[]
 }
 
-/** The context as Claude is given it: Claude Code's own blocks, and whatever the plugin adds. */
-async function context($: Engine): Promise<readonly { name: string; text: string }[]> {
-  return (await $.prompt.context({ blocks: OWN } as never)).blocks
-}
-
-/** The plugin's block in the context, or undefined when there is none. */
-async function block($: Engine): Promise<string | undefined> {
-  const blocks = await context($)
-
-  expect(blocks.filter(one => one.name !== BLOCK), 'what Claude Code gives stands as it came, first').toEqual(OWN)
-  expect(blocks.filter(one => one.name === BLOCK).length).toBeLessThan(2)
-
-  return blocks.find(one => one.name === BLOCK)?.text
+/** What the last prompt sent carried beside it for Claude. */
+function beside(set: Stage): readonly string[] | undefined {
+  return set.beside.at(-1)
 }
 
 /** A session in which Scribe has kept the lock and then the cap, its receipt put away. */
@@ -187,211 +154,149 @@ describe('what Scribe holds of the session through a compaction', () => {
 })
 
 describe('what a compacted conversation is given', () => {
-  test('before any compaction the context is Claude Code’s own', async ($, on) => {
-    const engine = beneath(on)
+  test('before any compaction no prompt carries anything', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
 
-    await kept($, on)
+    await turn($, set, ...MORE)
 
-    expect(await context($)).toEqual(OWN)
-    expect(engine.asks()).toBe(0)
+    expect(set.beside).toEqual([undefined, undefined])
   })
 
-  test('after one, the context lists the session’s records in one block, newest first, each quoted with its reason, its files and its id', async ($, on) => {
-    const engine = beneath(on, 1)
+  test('the first prompt after one carries the session’s records in one block, newest first, each quoted with its reason, its files and its id; the prompts after it carry nothing', async ($, on) => {
+    beneath(on, 1)
     const set = await kept($, on)
     const before = [...set.rows]
-    const after = await compact($, set)
 
-    expect(after, 'the compaction is Claude Code’s, summary and rows, with nothing added').toEqual([SUMMARY, before.at(-1)])
-    expect(engine.compactions.map(one => [one.trigger, one.messages]), 'and what is summarized is the conversation as it was').toEqual([['manual', before]])
-    expect(engine.asks(), 'the context is asked for again, so the first request after it has the block').toBe(1)
-    expect(await context($)).toEqual([...OWN, { name: BLOCK, text: BOTH }])
+    expect(await compact($, set), 'the compaction is Claude Code’s, summary and rows, with nothing added').toEqual([SUMMARY, before.at(-1)])
+
+    await turn($, set, ...MORE)
+
+    expect(beside(set)).toEqual([BOTH])
+
+    await turn($, set, dev('and one more thing'), claude('Done.'))
+
+    expect(beside(set)).toBeUndefined()
   })
 
-  test('the block is in the context only once the compaction stands', async ($, on) => {
-    let seen: unknown
-
-    on('session.compact', async ($$, e) => {
-      // Asked while Claude Code is still summarizing: the conversation is not compacted yet.
-      seen = (await $.prompt.context({ blocks: OWN } as never)).blocks
-
-      return { messages: [SUMMARY] } as never
-    })
-    on('prompt.context', ($$, e) => ({ blocks: e.blocks }))
-
+  test('what the prompt carried from elsewhere stays, first', async ($, on) => {
+    beneath(on)
     const set = await kept($, on)
 
     await compact($, set)
 
-    expect(seen).toEqual(OWN)
-    expect(await block($)).toBe(BOTH)
+    expect(await $.prompt.submit({ text: 'and log every retry at warn', wait: false, origin: { kind: 'composer' }, context: ['from elsewhere'] })).toEqual({
+      text: 'and log every retry at warn',
+      context: ['from elsewhere', BOTH],
+    })
   })
 
-  test('nothing is added in a session that kept nothing', async ($, on) => {
-    const engine = beneath(on)
+  test('a slash command does not take it: the prompt after it does', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
+
+    await compact($, set)
+    await $.prompt.submit({ text: '/review the queue', wait: false, origin: { kind: 'composer' }, command: { name: 'review', args: 'the queue' } })
+
+    expect(beside(set)).toBeUndefined()
+
+    await turn($, set, ...MORE)
+
+    expect(beside(set)).toEqual([BOTH])
+  })
+
+  test('nothing is carried in a session that kept nothing', async ($, on) => {
+    beneath(on)
     const set = stage(on)
 
     await $.session.start(START)
     await turn($, set, ...WORK)
 
     expect(await compact($, set)).toEqual([SUMMARY])
-    expect(await context($)).toEqual(OWN)
-    expect([set.toasts, await shown($), engine.others.filter(event => event !== 'ui.render')]).toEqual([[], QUIET, []])
+
+    await turn($, set, ...MORE)
+
+    expect([beside(set), set.toasts, await shown($)]).toEqual([undefined, [], QUIET])
   })
 
-  test('a second and a third compaction leave one block, and a record taken back in between is not in it', async ($, on) => {
-    const engine = beneath(on)
+  test('each compaction gives the next prompt one block, quoting the records that stand then: one taken back in between is not in it', async ($, on) => {
+    beneath(on)
     const set = await kept($, on, [TWO, DROPPING, NOTHING])
 
     await compact($, set)
-
-    expect(await block($)).toBe(BOTH)
-
     await turn($, set, dev('no cap after all, let them retry'), claude('Removed the cap.', edit(FILE)))
 
-    expect(engine.asks(), 'a record the block quotes is gone, so the context is asked for again').toBe(2)
-    expect(await block($)).toBe(LOCK_ALONE)
+    expect(beside(set)).toEqual([BOTH])
 
     await compact($, set, 'auto')
-
-    expect(await block($)).toBe(LOCK_ALONE)
-
     await turn($, set, ...MORE)
-    await compact($, set)
 
-    expect(await block($)).toBe(LOCK_ALONE)
-    expect(set.rows, 'and no row of the conversation is the plugin’s').toEqual([SUMMARY])
-    expect(JSON.stringify(engine.compactions.map(one => one.messages))).not.toMatch('Fylgja knowledge base')
+    expect(beside(set)).toEqual([LOCK_ALONE])
+    expect(set.beside.filter(one => one !== undefined), 'once for each compaction').toHaveLength(2)
   })
 
   test('a record that was rewritten is quoted as it reads now', async ($, on) => {
-    const engine = beneath(on)
+    beneath(on)
     const now = { ...CAP, content: 'Cap retries at three.', detail: 'Five kept the queue busy for a minute.', updates: SECOND }
-    const set = await kept($, on, [TWO, verdict({ records: [now] })])
+    const set = await kept($, on, [TWO, verdict({ records: [now] }), NOTHING])
 
-    await compact($, set)
-    await block($)
     await turn($, set, dev('make the cap three, five keeps the queue busy for a minute'), claude('Three it is.', edit(FILE)))
+    await compact($, set)
+    await turn($, set, ...MORE)
 
-    const text = (await block($)) ?? ''
+    const text = beside(set)?.[0] ?? ''
 
-    expect(engine.asks()).toBe(2)
     expect(text).toMatch(fence(SECOND, 'decision', 'Cap retries at three.', 'Why: Five kept the queue busy for a minute.', `Files: ${FILE}`))
     expect(text).not.toMatch('Cap retries at five.')
     expect(times(text, '<<< record id=')).toBe(2)
   })
 
-  test('a record kept after the compaction does not make the context be computed again; the next compaction lists it', async ($, on) => {
-    const engine = beneath(on)
-    const set = await kept($, on, [TWO, verdict({ records: [LOG] })])
+  test('a record kept after a compaction is in the block the next compaction gives', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on, [TWO, verdict({ records: [LOG] }), NOTHING])
 
     await compact($, set)
-    await block($)
     await turn($, set, ...MORE)
     await press($, 'ok')
 
     expect(await shown($)).toBe(`${QUIET} · 3 kept`)
-    expect(engine.asks(), 'Claude has the new decision in the conversation, and the prompt cache is left alone').toBe(1)
 
     await compact($, set)
+    await turn($, set, dev('and on'), claude('Sure.'))
 
-    expect(((await block($)) ?? '').split('\n').filter(line => line.startsWith('<<< ')).map(line => line.slice(14, 50))).toEqual([idOf(103), SECOND, FIRST])
+    expect((beside(set)?.[0] ?? '').split('\n').filter(line => line.startsWith('<<< ')).map(line => line.slice(14, 50))).toEqual([idOf(103), SECOND, FIRST])
   })
 
-  test('a file added to a record the block quotes is no rewording: the context is not computed again for it', async ($, on) => {
-    const engine = beneath(on)
-    const placed = JSON.stringify({ outcome: 'act', records: [], anchor: [{ id: SECOND, paths: ['src/queue/retry.ts'] }] })
-    // The cap is recorded before its code: only a record waiting for its code is given a file later.
-    const set = await kept($, on, [verdict({ records: [LOCK, { ...CAP, anchors: [] }] }), placed])
+  test('a compaction in the middle of a turn is seen by the look at its end, and is counted once; the next prompt carries the block', async ($, on) => {
+    beneath(on, 1)
+    const set = await kept($, on)
 
-    await compact($, set)
-    await block($)
-    await turn($, set, dev('the cap lives in retry.ts too'), claude('Moved.', edit('src/queue/retry.ts')))
-
-    expect(set.of('amend_memory'), 'the file was added to the record').toEqual([
-      { atom_id: SECOND, op: 'fix', anchors: [{ path: 'src/queue/retry.ts' }] },
-    ])
-    expect(engine.asks()).toBe(1)
-    expect(await block($), 'and when it is next computed, the file is there').toMatch('Files: src/queue/retry.ts')
-  })
-
-  test('signing out after a compaction takes the block down, once', async ($, on) => {
-    let isOut = false
-
-    const engine = beneath(on)
-    const set = stage(on, { replies: [TWO, NOTHING], connect: () => (isOut ? NEEDS_SIGN_IN : { isConnected: true, server: 'plugin:fylgja:fylgja' }) })
-
-    await $.session.start(START)
-    await turn($, set, ...WORK)
-    await compact($, set)
-
-    expect(await block($)).toBe(BOTH)
-
-    isOut = true
+    await send($, 'switch the lock to postgres advisory locks, redis is going away')
+    set.rows.push(dev('switch the lock to postgres advisory locks, redis is going away'), claude('MIDWAY-REPLY: rewriting acquire.', edit(FILE)))
+    await compact($, set, 'auto')
+    await finish($, set, claude('AFTER-REPLY: the lock is on postgres now.', edit(FILE)))
     await turn($, set, ...MORE)
 
-    expect(engine.asks()).toBe(2)
-    expect(await context($)).toEqual(OWN)
+    expect(beside(set)).toEqual([BOTH])
+    expect(set.events('compaction').map(one => one.props)).toEqual([{ is_scribe_running: true, records_carried: 2 }])
 
-    await turn($, set, dev('and one more thing'), claude('Done.'))
+    await turn($, set, dev('and on'), claude('Sure.'))
 
-    expect(engine.asks(), 'not asked for again while nothing is listed').toBe(2)
+    expect(beside(set)).toBeUndefined()
   })
 
-  test('switching Scribe off after a compaction takes the block down', async ($, on) => {
-    const engine = beneath(on)
-    const set = stage(on, { replies: [TWO] })
-
-    await $.session.start(START)
-    await turn($, set, ...WORK)
-    await compact($, set)
-
-    expect(await block($)).toBe(BOTH)
-
-    await press($, 'about')
-    await pressTwice($, 'off')
-
-    expect(engine.asks()).toBe(2)
-    expect(await context($)).toEqual(OWN)
-  })
-
-  test('nothing is said of it: no toast, no line, and the mark reads as before', async ($, on) => {
-    const engine = beneath(on)
+  test('a compaction between turns is seen by the prompt after it, and is counted once', async ($, on) => {
+    beneath(on, 1)
     const set = await kept($, on)
-    const [toasts, statuses, logged] = [set.toasts.length, set.statuses.length, set.logged.length]
 
     await compact($, set)
-    await block($)
+    await turn($, set, ...MORE)
+    await turn($, set, dev('and on'), claude('Sure.'))
 
-    expect([set.toasts.length, set.statuses.length, set.logged.length]).toEqual([toasts, statuses, logged])
-    expect(await shown($)).toBe(`${QUIET} · 2 kept`)
-    expect(set.asked, 'and no model was asked for it').toHaveLength(1)
-    expect(engine.others.filter(event => event !== 'ui.render')).toEqual([])
+    expect(set.events('compaction')).toHaveLength(1)
   })
 
-  test('a summary made ahead of time and a subagent’s own compaction pass as they are, and compact nothing', async ($, on) => {
-    const engine = beneath(on)
-    const set = await kept($, on)
-    const rows = [...set.rows]
-
-    const ahead = await $.session.compact({ trigger: 'precompute', messages: rows } as never)
-    const agents = await $.session.compact({ trigger: 'auto', agentId: 'agent-1', messages: rows } as never)
-
-    expect([ahead.messages, agents.messages]).toEqual([[SUMMARY], [SUMMARY]])
-    expect(engine.compactions.map(one => one.trigger)).toEqual(['precompute', 'auto'])
-    expect([await context($), engine.asks()]).toEqual([OWN, 0])
-  })
-
-  test('a conversation with no message in it is compacted as if the plugin were not there', async ($, on) => {
-    const engine = beneath(on)
-
-    await kept($, on)
-
-    expect(await $.session.compact({ trigger: 'manual', messages: [] } as never)).toEqual({ messages: [SUMMARY] })
-    expect([engine.compactions.length, engine.asks()]).toEqual([1, 0])
-  })
-
-  test('signed out, the context lists nothing', async ($, on) => {
+  test('signed out, nothing is carried', async ($, on) => {
     let isOut = false
 
     beneath(on)
@@ -402,122 +307,111 @@ describe('what a compacted conversation is given', () => {
     isOut = true
     // The turn that finds the session signed out.
     await turn($, set, ...MORE)
+    await compact($, set)
+    await turn($, set, dev('and on'), claude('Sure.'))
 
-    expect(await compact($, set)).toEqual([SUMMARY])
-    expect(await context($)).toEqual(OWN)
+    expect(set.beside.filter(one => one !== undefined)).toEqual([])
   })
 
-  test('with Scribe switched off, a compaction and the context are left alone', { options: { scribe: false } }, async ($, on) => {
-    const engine = beneath(on, 1)
+  test('with Scribe switched off, nothing is carried', { options: { scribe: false } }, async ($, on) => {
+    beneath(on)
     const set = stage(on)
 
     await $.session.start(START)
     await turn($, set, ...WORK)
+    await compact($, set)
+    await turn($, set, ...MORE)
 
-    const before = [...set.rows]
-
-    expect(await compact($, set)).toEqual([SUMMARY, before.at(-1)])
-    expect(engine.compactions[0]?.messages).toEqual(before)
-    expect([await context($), engine.asks()]).toEqual([OWN, 0])
+    expect(set.beside).toEqual([undefined, undefined])
   })
 
-  test('a compaction that is called off leaves the conversation, the context and what Scribe holds as they were', async ($, on) => {
+  test('switching Scribe off after a compaction carries nothing', async ($, on) => {
+    beneath(on)
+    const set = stage(on, { replies: [TWO] })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await compact($, set)
+    await press($, 'about')
+    await pressTwice($, 'off')
+    await turn($, set, ...MORE)
+
+    expect(beside(set)).toBeUndefined()
+  })
+
+  test('nothing is said of it: no toast, no line, the mark reads as before, and no model is asked for it', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
+    const [toasts, statuses, logged] = [set.toasts.length, set.statuses.length, set.logged.length]
+
+    await compact($, set)
+    await send($, 'and log every retry at warn')
+
+    expect([set.toasts.length, set.statuses.length, set.logged.length]).toEqual([toasts, statuses, logged])
+    expect(await shown($)).toBe(`${QUIET} · 2 kept`)
+    expect(set.asked, 'and no model was asked for it').toHaveLength(1)
+  })
+
+  test('a summary made ahead of time, a subagent’s own compaction and one that is called off carry nothing', async ($, on) => {
     let reason: string | undefined = 'a hook said no'
 
     const engine = beneath(on, 0, () => reason)
     const set = await kept($, on)
-    const before = [...set.rows]
-
-    expect(await $.session.compact({ trigger: 'manual', messages: before } as never)).toEqual({ skip: 'a hook said no' })
-    expect([await context($), engine.asks()]).toEqual([OWN, 0])
-
-    await turn($, set, ...MORE)
-
-    expect(times(told(set), '[developer] and log every retry at warn')).toBe(1)
-    expect(told(set), 'the turn before it was looked at once, and is not read again').not.toMatch('lock the retry queue')
+    const rows = [...set.rows]
 
     reason = undefined
+    await $.session.compact({ trigger: 'precompute', messages: rows } as never)
+    await $.session.compact({ trigger: 'auto', agentId: 'agent-1', messages: rows } as never)
+    reason = 'a hook said no'
     await compact($, set)
+    await turn($, set, ...MORE)
 
-    expect(await block($)).toBe(BOTH)
+    expect(engine.map(one => one.trigger)).toEqual(['precompute', 'auto', 'manual'])
+    expect(set.beside).toEqual([undefined, undefined])
+    expect(times(told(set), '[developer] and log every retry at warn')).toBe(1)
+    expect(told(set), 'the turn before it was looked at once, and is not read again').not.toMatch('lock the retry queue')
   })
 
-  test('whatever fails in the plugin after Claude Code has compacted, the compaction is handed on as it came', async ($, on) => {
-    on('session.compact', () => ({ messages: [SUMMARY] }) as never)
-    on('prompt.context', ($$, e) => ({ blocks: e.blocks }))
-    on('ui.invalidate', ($$, e) => {
-      if (e.event === 'prompt.context') {
-        throw new Error('not today')
+  test('after /clear nothing is carried: what the conversation before kept is its own', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
+
+    await compact($, set)
+    await endedBy($, 'clear')
+    set.rows.splice(0, set.rows.length)
+    await turn($, set, ...MORE)
+
+    expect(beside(set)).toBeUndefined()
+
+    await compact($, set)
+    await turn($, set, dev('and on'), claude('Sure.'))
+
+    expect(beside(set), 'nor after a compaction of the new conversation').toBeUndefined()
+  })
+
+  for (const what of ['a resume', 'a branch'] as const) {
+    test(`after ${what} into another conversation nothing is carried: what this one kept is its own`, async ($, on) => {
+      let id = idOf(201)
+
+      beneath(on)
+      const set = stage(on, { replies: [TWO, NOTHING], sessionId: () => id })
+
+      await $.session.start(START)
+      await turn($, set, ...WORK)
+      await press($, 'ok')
+      await compact($, set)
+      id = idOf(202)
+
+      if (what === 'a resume') {
+        await endedBy($, 'resume', idOf(201))
       }
 
-      return { value: undefined } as never
-    })
+      set.rows.splice(0, set.rows.length)
+      await turn($, set, ...MORE)
 
-    const set = await kept($, on)
-
-    expect(await $.session.compact({ trigger: 'auto', messages: [...set.rows] } as never)).toEqual({ messages: [SUMMARY] })
-  })
-
-  test('after /clear the session starts over: the mark is at rest, the context is asked for again and lists nothing', async ($, on) => {
-    const engine = beneath(on)
-    const set = await kept($, on)
-
-    await compact($, set)
-
-    expect(await block($)).toBe(BOTH)
-
-    await $.classic.SessionStart({ source: 'clear' })
-    set.rows.splice(0, set.rows.length)
-
-    expect(engine.asks()).toBe(2)
-    expect(await context($)).toEqual(OWN)
-    expect(await shown($)).toBe(`engine: AbovePrompt${MARK}`)
-
-    await turn($, set, ...MORE)
-    await compact($, set)
-
-    expect(await context($)).toEqual(OWN)
-  })
-
-  for (const source of ['resume', 'fork'] as const) {
-    test(`after a ${source} into another conversation the context lists nothing: what this one kept is its own`, async ($, on) => {
-      beneath(on)
-      const set = await kept($, on)
-
-      await compact($, set)
-      await block($)
-      await $.classic.SessionStart({ source, session_id: idOf(203) })
-
-      expect(await context($)).toEqual(OWN)
+      expect(beside(set)).toBeUndefined()
     })
   }
-
-  // Where an organization manages Claude Code, the classic start of the new conversation never reaches the plugin.
-  test('after a /clear Claude Code says nothing of, the changed id alone starts over: the context is asked for again and lists nothing', async ($, on) => {
-    let id = idOf(201)
-    const engine = beneath(on)
-    const set = stage(on, { replies: [TWO, NOTHING], sessionId: () => id })
-
-    await $.session.start(START)
-    await turn($, set, ...WORK)
-    await press($, 'ok')
-    await compact($, set)
-
-    expect(await block($)).toBe(BOTH)
-
-    id = idOf(202)
-    set.rows.splice(0, set.rows.length)
-
-    expect(await context($), 'the next time it is asked for').toEqual(OWN)
-    expect(engine.asks()).toBe(2)
-    // A new conversation does not change who is signed in: the mark stays.
-    expect(await shown($)).toBe(`${EMPTY}${MARK}`)
-
-    await turn($, set, ...MORE)
-    await compact($, set)
-
-    expect(await context($), 'nor after a compaction of the new conversation').toEqual(OWN)
-  })
 })
 
 describe('what Scribe holds across a compaction', () => {
@@ -591,7 +485,7 @@ describe('what Scribe holds across a compaction', () => {
     expect(told(set)).not.toMatch('lock the retry queue')
   })
 
-  test('rows compacted away in the middle of a turn, before any look, are read by the next look, once', async ($, on) => {
+  test('a compaction in the middle of a turn: the developer’s prompt that went into the summary and the rows still there are read by the next look, once', async ($, on) => {
     beneath(on, 1)
     const set = await kept($, on)
 
@@ -611,38 +505,17 @@ describe('what Scribe holds across a compaction', () => {
     expect(times(lines, '[developer] switch the lock to postgres advisory locks, redis is going away')).toBe(1)
     expect(times(lines, 'MIDWAY-REPLY')).toBe(1)
     expect(times(lines, 'AFTER-REPLY')).toBe(1)
-    expect(lines.indexOf('MIDWAY-REPLY'), 'in the order they were said').toBeLessThan(lines.indexOf('AFTER-REPLY'))
+    expect(lines.indexOf('[developer] switch the lock'), 'in the order they were said').toBeLessThan(lines.indexOf('MIDWAY-REPLY'))
+    expect(lines.indexOf('MIDWAY-REPLY')).toBeLessThan(lines.indexOf('AFTER-REPLY'))
     expect(lines).not.toMatch('lock the retry queue with redis')
+    expect(lines, 'and the summary is nobody’s word').not.toMatch('being continued from a previous conversation')
 
-    // What was held is let go once it was read.
     await turn($, set, ...MORE)
 
     expect(told(set)).not.toMatch('MIDWAY-REPLY')
     expect(told(set)).not.toMatch('AFTER-REPLY')
+    expect(told(set)).not.toMatch('switch the lock')
     expect(times(told(set), '[developer] and log every retry at warn')).toBe(1)
-  })
-
-  test('of more rows than are held, the developer’s own are never what is let go, and the debug log says how many went', async ($, on) => {
-    beneath(on)
-    const set = await kept($, on)
-    const extra = 40
-
-    await send($, 'FIRST-WORDS: move every queue to postgres')
-    set.rows.push(dev('FIRST-WORDS: move every queue to postgres'))
-    set.rows.push(...Array.from({ length: MAX_HELD + extra }, (_, at) => claude(`step ${at} done`)))
-    await send($, 'LATER-WORDS: and drop the redis client')
-    set.rows.push(dev('LATER-WORDS: and drop the redis client'))
-
-    await compact($, set, 'auto')
-
-    expect(set.logged.filter(line => line.startsWith(HELD_DROPPED))).toEqual([`${HELD_DROPPED} ${extra + 2}`])
-
-    await finish($, set, claude('All queues are on postgres.', edit(FILE)))
-
-    const prompt = set.asked.at(-1)?.prompt ?? ''
-
-    expect(times(prompt, '[developer] FIRST-WORDS: move every queue to postgres')).toBe(1)
-    expect(times(prompt, '[developer] LATER-WORDS: and drop the redis client')).toBe(1)
   })
 
   test('a look that was under way when the conversation was compacted reads its rows once, and the next look begins after them', async ($, on) => {
@@ -678,7 +551,7 @@ describe('what Scribe holds across a compaction', () => {
     expect(times(told(set), '[developer] and log every retry at warn')).toBe(1)
   })
 
-  test('rows held for a look are let go when a turn ends with no look to take them', async ($, on) => {
+  test('the rows of a turn that ended with no look, signed out, are not read by a look after a compaction', async ($, on) => {
     let isOut = false
 
     beneath(on)

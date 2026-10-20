@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { endedBy } from './fixtures'
 import { claude, decision, dev, NOTHING, REPO, ROOT, stage, START, turn, use, verdict } from './scribe-fixtures'
 
 const origin = (name: string): string =>
@@ -184,7 +185,7 @@ describe('a record is about the repository its files lie in', () => {
 
     await $.session.start({ ...START, cwd: '/work' })
     await turn($, set, dev('look at the other service'), edits('/work/other/lib/y.ts'))
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
     set.rows.length = 0
     await turn(
       $,

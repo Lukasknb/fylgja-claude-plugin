@@ -10,7 +10,7 @@ import * as Band from '../hooks/scribe/band'
 import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS } from '../hooks/scribe/scribe'
 import { ARMED_NOTE } from '../hooks/scribe/view'
 import { TWIN_STATUS } from '../hooks/session'
-import { ACCOUNT, answer, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { ACCOUNT, answer, CONNECTED, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
   EMPTY,
   claude,
@@ -787,13 +787,13 @@ describe('a conversation that is rewritten or started over', () => {
     expect(await asks()).toBe(true)
 
     await press($, 'skip')
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
     set.rows.length = 0
 
     expect(await asks(), 'two went unanswered in this session').toBe(false)
 
     id = 'bbbbbbbb-0000-4000-8000-000000000002'
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
     set.rows.length = 0
 
     expect(await asks(), 'another session').toBe(true)
@@ -807,7 +807,7 @@ describe('a conversation that is rewritten or started over', () => {
     await $.session.start(START)
     await turn($, set, ...WORK)
     await set.clock.advance(15_000)
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
     set.rows.length = 0
     await turn($, set, ...WORK)
     // The first receipt's twenty seconds are up; the second has had five.

@@ -1,6 +1,6 @@
 /**
  * What is carried over a compaction: the records Scribe kept in the session,
- * as one block of the context Claude Code gives Claude with a conversation.
+ * as one block that Claude reads beside the first prompt after it.
  *
  * A compaction puts a summary in the conversation's place, and whether a
  * decision of the session is in it is the summarizer's to say. The records
@@ -9,11 +9,12 @@
  * by.
  *
  * It is a list and nothing else. It holds what Scribe saved, in the words
- * that stand now, and nothing it did not save; a record that was removed is
- * not in it. A record is quoted as data, fenced the way Scribe fences what
- * it hands its own model, and its words cannot open or close a fence or a
- * tag: every angle bracket in them is turned into a quote mark after the
- * look-alike forms have been folded to the plain character.
+ * that stand when it is sent, and nothing it did not save; a record that
+ * was removed is not in it. A record is quoted as data, fenced the way
+ * Scribe fences what it hands its own model, and its words cannot open or
+ * close a fence or a tag: every angle bracket in them is turned into a
+ * quote mark after the look-alike forms have been folded to the plain
+ * character.
  */
 
 import { drawn } from '../plain'
@@ -30,9 +31,6 @@ const MAX_REASON = 300
 /** How many of a record's files are named, and how long one may be. */
 const MAX_PLACES = 4
 const MAX_PLACE = 120
-
-/** The name the block stands under in the context. */
-export const BLOCK = 'fylgja'
 
 /**
  * A record's words on one line, within a length. The sanitiser folds the
@@ -56,11 +54,6 @@ function linesOf(record: Written): string[] {
   ]
 }
 
-/** A record's sentence and reason as one text: what tells a record that reads differently now from one that only gained a file. */
-export function saidOf(record: Written): string {
-  return linesOf(record).join('\n')
-}
-
 /** One record as it is quoted: its sentence, its reason when it has one, and its files, under its id and kind. */
 export function entryOf(record: Written): string {
   const places = (record.anchors ?? [])
@@ -80,13 +73,6 @@ export function entryOf(record: Written): string {
 /** The records of `written` that stand, newest first; `written` holds them oldest first. */
 function standingOf(written: readonly Written[]): Written[] {
   return written.filter(record => record.outcome !== 'withdrawn').toReversed()
-}
-
-/** The records the block lists, newest first, each with what it says: what a later change is told by. */
-export function listedOf(written: readonly Written[]): [string, string][] {
-  return standingOf(written)
-    .slice(0, MAX_CARRIED)
-    .map(record => [record.id, saidOf(record)])
 }
 
 /**

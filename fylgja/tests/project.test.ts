@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { standsIn } from '../hooks/project'
 import { TWIN_STATUS } from '../hooks/session'
-import { answer, idOf, MEETING_ID, meetingRecord, token } from './fixtures'
+import { answer, endedBy, idOf, MEETING_ID, meetingRecord, token } from './fixtures'
 import { claude, decision, dev, edit, ROOT, send, stage, START, step, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 
@@ -165,7 +165,7 @@ describe('a project that leaves Fylgja to the plugin', () => {
 
     const calls = set.calls.length
 
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
 
     expect(set.statuses.at(-1), 'said as the conversation starts over, until the next prompt').toBe(TWIN_STATUS)
 

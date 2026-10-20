@@ -2,6 +2,20 @@ import type { On } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
+/** The id of the conversation a test session is in, unless the test reads another. */
+export const SESSION_ID = 'c0ffee00-0000-4000-8000-000000000001'
+
+/**
+ * The conversation ends as a `/clear` or a resume ends it, and the session
+ * goes on: under the id the test reads from then on, which may still be the
+ * one that ended.
+ *
+ * @param sessionId the id of the conversation that ends
+ */
+export function endedBy($: Engine, reason: 'clear' | 'resume', sessionId: string = SESSION_ID): Promise<unknown> {
+  return $.session.end({ reason, sessionId, resume: { id: sessionId } })
+}
+
 export const MEETING_ID = '45ada8aa-6465-45de-8e91-b967cd9bbdae'
 export const NOTE_ID = '0b1f6c1e-2a67-4a0c-9d5e-3f0f5a7b8c9d'
 
@@ -96,7 +110,7 @@ export type SceneOptions = {
   connect?: (clock: MockClock) => Record<string, unknown> | Promise<Record<string, unknown>>
   /** What `resolve` answers. Without it, and for any other tool, the call rejects. */
   resolve?: (args: Record<string, unknown>, clock: MockClock) => unknown
-  /** The conversation's id, read on every call; the test session's own without it. */
+  /** The conversation's id, read on every call; `SESSION_ID` without it. */
   sessionId?: () => string
 }
 
@@ -118,7 +132,8 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
   let whoamis = 0
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('classic.SessionStart', () => ({}))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('session.usage', () => ({ value: { context: { tokens: 1000, window: 200_000, percent: 1 } } as never }))
   on('prompt.submit', ($, e) => ({ text: e.text, context: e.context }))
   // A step of a turn in which the model says nothing and asks for no tool.
   // eslint-disable-next-line require-yield
@@ -156,11 +171,7 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('fs.stat', () => ({ deny: 'no such file' }))
 
-  if (options.sessionId !== undefined) {
-    const id = options.sessionId
-
-    on('session.id', () => ({ value: id() }))
-  }
+  on('session.id', () => ({ value: options.sessionId?.() ?? SESSION_ID }))
 
   on('mcp.connect', async () => {
     connects += 1

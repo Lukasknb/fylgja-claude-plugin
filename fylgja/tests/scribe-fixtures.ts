@@ -5,12 +5,13 @@ import type { Engine, MockClock } from 'claude-code/testing'
 import type { Ran } from '../hooks/scribe/git'
 import type { Row } from '../hooks/scribe/delta'
 import { HEADLINES, NOTES } from '../hooks/scribe/view'
-import { ACCOUNT, answer, CONNECTED, eventsOf, idOf, MANIFEST, MANIFEST_PATH, REPORT } from './fixtures'
+import { ACCOUNT, answer, CONNECTED, eventsOf, idOf, MANIFEST, MANIFEST_PATH, REPORT, SESSION_ID } from './fixtures'
+
+export { SESSION_ID }
 import type { Reported } from './fixtures'
 
 export const ROOT = '/work/repo'
 export const REPO = 'acme/web'
-export const SESSION_ID = 'c0ffee00-0000-4000-8000-000000000001'
 
 /** An interactive terminal session in a repository. */
 export const START = { surface: 'terminal', isInteractive: true, cwd: ROOT } as const
@@ -166,6 +167,14 @@ export type Stage = {
   runs: (readonly string[])[]
   /** Every prompt that entered the session, as it arrived. */
   sent: string[]
+  /** What each of those prompts carried beside it for Claude, in the same order; undefined for one that carried nothing. */
+  beside: (readonly string[] | undefined)[]
+  /**
+   * The context window as the engine reads it: whether it has a reading.
+   * A turn's end gives it one, and a test that compacts the conversation
+   * takes it away, as a compaction does until Claude next answers.
+   */
+  window: { hasReading: boolean }
   statuses: (string | undefined)[]
   /** What is kept on this machine. */
   kept: Map<string, unknown>
@@ -204,6 +213,8 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const checks: string[] = []
   const runs: (readonly string[])[] = []
   const sent: string[] = []
+  const beside: (readonly string[] | undefined)[] = []
+  const window = { hasReading: true }
   const statuses: (string | undefined)[] = []
   const kept = new Map<string, unknown>(Object.entries(options.kept ?? {}))
   const rows: Row[] = []
@@ -215,9 +226,10 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   let written = 0
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('classic.SessionStart', () => ({}))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('prompt.submit', ($, e) => {
     sent.push(e.text)
+    beside.push(e.context)
 
     return { text: e.text, context: e.context }
   })
@@ -226,7 +238,14 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
     return { text: box.text, cursor: e.start + e.inputText.length }
   })
-  on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('turn.complete', ($, e) => {
+    if (e.agentId === undefined) {
+      window.hasReading = true
+    }
+
+    return { text: e.answer }
+  })
+  on('session.usage', () => ({ value: { context: window.hasReading ? { tokens: 1000, window: 200_000, percent: 1 } : { window: 200_000 } } as never }))
   // The model's step: it asks for the tool calls a test named with `stepping`, or for none.
   // eslint-disable-next-line require-yield
   on('turn.step', async function* ($, e) {
@@ -493,6 +512,8 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     checks,
     runs,
     sent,
+    beside,
+    window,
     statuses,
     kept,
     rows,

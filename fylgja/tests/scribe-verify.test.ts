@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { choicesOf, observe } from '../hooks/scribe/delta'
 import { lookParts, MAX_LOOK_CHARS, RESTATED_SHARE, restates } from '../hooks/scribe/loop'
 import { MAX_SPOKEN_CHARS } from '../hooks/scribe/scribe'
-import { answer } from './fixtures'
+import { answer, endedBy } from './fixtures'
 import { claude, decision, dev, edit, finish, NOTHING, ROOT, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 
 const FILE = 'src/audit/list.ts'
@@ -492,7 +492,7 @@ describe('before anybody is asked why, the reason is looked for in what the deve
 
     await $.session.start(START)
     await turn($, set, ...EARLIER)
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
     set.rows.length = 0
     await turn($, set, ...NOW)
 

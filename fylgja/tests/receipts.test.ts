@@ -268,7 +268,7 @@ describe('what the plugin hooks', () => {
     }
   })
 
-  test('it hooks the prompt box, the prompt as sent, the description of its own reporting tool, the permission check, a turn’s steps and end, a change to its own settings, its own command, its own keys, its own window, a compaction and the context of the conversation: no tool call, and nothing that rewrites the conversation', () => {
+  test('it hooks the prompt box, the prompt as sent, the end of a conversation, the description of its own reporting tool, the permission check, a turn’s steps and end, a change to its own settings, its own command, its own keys and its own window: no tool call, and nothing that rewrites the conversation', () => {
     expect(
       hooked()
         .map(hook => hook.event)
@@ -277,9 +277,7 @@ describe('what the plugin hooks', () => {
       'session.start',
       'command.run',
       'command.run',
-      'classic.SessionStart',
-      'session.compact',
-      'prompt.context',
+      'session.end',
       'prompt.edit',
       'prompt.submit',
       'tool.describe',
@@ -295,6 +293,9 @@ describe('what the plugin hooks', () => {
       'ui.scroll',
       'ui.close',
     ])
+
+    // The end of a conversation only as it goes on in another.
+    expect(hooked().find(hook => hook.event === 'session.end')?.matcher).toEqual({ reason: ['clear', 'resume'] })
 
     // Everything hooked for the window names that window, and the command hooked is the plugin's own.
     const own = hooked().filter(hook => ['command.run', 'ui.focus', 'ui.scroll', 'ui.close'].includes(hook.event))

@@ -15,7 +15,6 @@ import { decorationsOf } from './paint'
 import { isLeftToPlugin } from './project'
 import { receiptOf } from './receipts'
 import { drawn } from './plain'
-import { BLOCK } from './scribe/carry'
 import { OWN_SERVER, REFUSED, REPORT_TOOL, verdictFor } from './scribe/grant'
 import * as Ledger from './scribe/ledger'
 import * as Scribe from './scribe/scribe'
@@ -214,20 +213,12 @@ function remark($: EngineInterface, session: Session.Session): void {
 }
 
 /**
- * Brings the mark up to date, and with it the context of a compacted
- * conversation when a record it lists was removed or reads differently now:
- * the context is asked for again, and lists the records as they stand.
+ * Brings the mark up to date.
  *
  * @param noted told once that is done: whether Fylgja is here is noted then
  */
-function refresh($: EngineInterface, session: Session.Session, scribe: Scribe.Scribe, noted?: () => void): void {
+function refresh($: EngineInterface, session: Session.Session, noted?: () => void): void {
   remark($, session)
-
-  if (Scribe.isStale(scribe, session.isHere)) {
-    scribe.noted = undefined
-    $.ui.invalidate('prompt.context')
-  }
-
   noted?.()
 }
 
@@ -420,22 +411,28 @@ async function closeWindow($: EngineInterface, scribe: Scribe.Scribe, win: Win):
  * resume or a branch goes on under another id in the same session.
  *
  * `seen` is a conversation started over because its id was seen to change
- * before Claude Code said that it began; its own start then drops nothing
- * more. `left` is the id Claude Code's own start moved on from, while the
+ * before Claude Code said that the one before ended; that end then drops
+ * nothing more. `left` is the id of the conversation that ended, while the
  * id read from the session may still be that one: read then, it is not
- * another conversation.
+ * another conversation. `ending` is how it ended, until the id of the one
+ * that begins is read.
  */
-type Conversation = { id: string | undefined; seen: string | undefined; left: string | undefined }
+type Conversation = {
+  id: string | undefined
+  seen: string | undefined
+  left: string | undefined
+  ending: 'clear' | 'resume' | undefined
+}
 
 /** Everything the plugin holds of the conversation it is in. */
 type Held = { session: Session.Session; draft: Draft.Draft; scribe: Scribe.Scribe; win: Win; conversation: Conversation }
 
 /**
  * What was known of the conversation before is dropped: the references
- * looked up, the draft, what Scribe held of it and the context that listed
- * its records. The rows that are still on screen, or come back, are drawn
- * again and have their references noted for the next hook that may ask
- * Fylgja. Who is signed in stands: a new conversation does not change it.
+ * looked up, the draft and what Scribe held of it. The rows that are still
+ * on screen, or come back, are drawn again and have their references noted
+ * for the next hook that may ask Fylgja. Who is signed in stands: a new
+ * conversation does not change it.
  *
  * What is held is dropped first, all of it. Then Claude Code is asked to
  * draw again, each ask on its own, so one it turns down leaves the others.
@@ -443,21 +440,10 @@ type Held = { session: Session.Session; draft: Draft.Draft; scribe: Scribe.Scrib
  */
 async function startOver($: EngineInterface, held: Held): Promise<void> {
   const { session, draft, scribe, win } = held
-  const wasListed = scribe.noted !== undefined
 
   Session.startOver(session)
   Draft.startOver(draft)
-  // The context of a compacted conversation listed its records; the one that begins now lists none.
-  scribe.noted = undefined
   Scribe.startOver(scribe)
-
-  if (wasListed) {
-    try {
-      $.ui.invalidate('prompt.context')
-    } catch {
-      // Asked for again after the next compaction, when it is all there is to list.
-    }
-  }
 
   // What the window listed was the conversation's before. The search view stays up, and lets go of what it found when it is next looked at.
   if (scribe.ledger.isOpen) {
@@ -472,37 +458,40 @@ async function startOver($: EngineInterface, held: Held): Promise<void> {
 }
 
 /**
- * Starts over when the conversation is another than the one last seen.
- * Claude Code says that a cleared, resumed or branched conversation began
- * only through a classic hook, and passes that hook over where an
- * organization manages it; the id it reads changes all the same. It is read
- * where the conversation is next touched: the box typed into, a prompt
- * sent, its context asked for, a command of the plugin's.
+ * Takes up the conversation the session is in when it is another than the
+ * one last seen, by the id the session reads. A conversation that ended
+ * (see `ended`) was started over at its end, and the one that begins is
+ * followed from here: its own log is the one picked up. A branch has no
+ * end of its own to say so, and starts over here when its id is first
+ * read. It is read where the conversation is next touched: the box typed
+ * into, a prompt sent, a command of the plugin's.
+ *
+ * True when the conversation in hand is another one, so that a hook Claude
+ * Code waits on can ask who is signed in again (`vouch`).
  */
 async function caughtUp($: EngineInterface, held: Held): Promise<boolean> {
   const id = await idOf($)
   const { conversation } = held
   const before = conversation.id
+  const { ending } = conversation
 
   if (id === undefined || id === conversation.left) {
     return false
   }
 
-  if (id === before) {
-    // The id read has caught up with the one Claude Code's start gave.
-    conversation.left = undefined
+  conversation.left = undefined
 
+  if (id === before) {
     return false
   }
 
   conversation.id = id
+  conversation.ending = undefined
 
   // The first id read is the conversation the plugin started in.
-  if (before === undefined) {
+  if (before === undefined && ending === undefined) {
     return false
   }
-
-  conversation.seen = id
 
   // A resumed conversation may be another directory's: its project is looked at before Fylgja is next asked anything.
   try {
@@ -511,11 +500,45 @@ async function caughtUp($: EngineInterface, held: Held): Promise<boolean> {
     // Looked at again when the session is next found to have moved.
   }
 
-  await startOver($, held)
+  if (ending === undefined) {
+    conversation.seen = id
+    await startOver($, held)
+  }
+
   // Still the conversation the plugin was loaded for, when no turn has ended since: see `Scribe.followed`.
-  Scribe.followed(held.scribe, id)
+  // What it kept before is picked up from its own log: none after a `/clear`.
+  Scribe.followed(held.scribe, id, ending)
 
   return true
+}
+
+/**
+ * The conversation ended by a `/clear` or a resume, under the id `id`, and
+ * the session goes on with another. Everything held of it is dropped now,
+ * and who is signed in is to be asked again before Fylgja is next asked
+ * anything. The one that begins is taken up once its id is read (see
+ * `caughtUp`). Where that id was read first, the conversation was started
+ * over then, and only what its end says is taken from here: a `/clear`
+ * picks up nothing.
+ */
+async function ended($: EngineInterface, held: Held, id: string, reason: 'clear' | 'resume'): Promise<void> {
+  const { conversation, session, scribe } = held
+
+  Session.revet(session)
+
+  if (conversation.seen !== undefined && conversation.seen === conversation.id && id !== conversation.id) {
+    conversation.seen = undefined
+    Scribe.followed(scribe, conversation.id, reason)
+
+    return
+  }
+
+  conversation.seen = undefined
+  conversation.left = id
+  conversation.id = undefined
+  conversation.ending = reason
+  await startOver($, held)
+  Scribe.ended(scribe)
 }
 
 /**
@@ -523,17 +546,57 @@ async function caughtUp($: EngineInterface, held: Held): Promise<boolean> {
  * and the references the rows on screen noted, are asked about for a
  * moment. A start over anywhere else leaves them to the next such hook.
  * `noted` is told once that is done, as `refresh` tells it.
+ *
+ * @param ms how long the moment is at most
  */
-async function vouch($: EngineInterface, held: Held, noted?: () => void): Promise<void> {
+async function vouch($: EngineInterface, held: Held, noted?: () => void, ms = SHORT_WAIT_MS): Promise<void> {
   const live = open()
 
   try {
     const host = hostOf($, held.session, live)
 
-    await briefly(host.after, flush(host, held.session), SHORT_WAIT_MS)
+    await briefly(host.after, flush(host, held.session), ms)
   } finally {
     close(live)
-    refresh($, held.session, held.scribe, noted)
+    refresh($, held.session, noted)
+  }
+}
+
+/**
+ * What a prompt being sent carries beside it for Claude: what it came with,
+ * and the records the session kept when the conversation was compacted since
+ * the last prompt that took them; undefined when it takes nothing more.
+ *
+ * A compaction since Claude last answered leaves the context window with no
+ * reading until the next answer, so the window is read here, from the
+ * engine, while Scribe has a compaction to look out for. Never fails.
+ */
+async function carriedWith(
+  $: EngineInterface,
+  held: Held,
+  report: Report,
+  e: { command?: unknown; context?: readonly string[] },
+): Promise<readonly string[] | undefined> {
+  const { session, scribe } = held
+
+  if (e.command !== undefined) {
+    return undefined
+  }
+
+  try {
+    if (Scribe.watchesWindow(scribe)) {
+      const usage = await $.session.usage()
+
+      Scribe.windowRead(scribeHostOf($, session, report), scribe, usage.context.tokens !== undefined)
+    }
+
+    const text = Scribe.handed(scribe, session.isHere)
+
+    return text === undefined ? undefined : [...(e.context ?? []), text]
+  } catch (error) {
+    report('error', { component: 'context', kind: 'threw', cause: Telemetry.causeOf(error) })
+
+    return undefined
   }
 }
 
@@ -599,11 +662,22 @@ function ring($: EngineInterface, session: Session.Session, scribe: Scribe.Scrib
  * is added to what Claude reads, and no prompt waits for it.
  *
  * The one exception is a conversation that was compacted. The summary that
- * takes its place may or may not hold what was decided in it, so from then
- * on the records Scribe kept in the session are listed in the context
- * Claude Code gives Claude with the conversation, as one block of the
- * plugin's own (see `scribe/carry.ts`). Nothing is added to the
- * conversation for it, and the summary is left as Claude Code made it.
+ * takes its place may or may not hold what was decided in it, so the first
+ * prompt after it takes the records Scribe kept in the session along, once,
+ * as one block of the plugin's own that Claude reads beside the prompt and
+ * the developer never sees (see `scribe/carry.ts`). The summary is left as
+ * Claude Code made it.
+ *
+ * Every hook here works the same where an organization seats its own guard
+ * ahead of a person's plugins. Such a guard sends the events it keeps out of
+ * a person's reach (the classic settings hooks, the context and the system
+ * prompt, the rows Claude Code makes for the model, a compaction, settings)
+ * on past them, and Claude Code then says that each hook of theirs there
+ * was skipped; so none is hooked. What the plugin needs of them it learns
+ * from what stays in view: the end of a conversation (`session.end`), the
+ * id the session reads, the rows of the conversation and the context
+ * window's reading. The one hook the guard can still pass over is the
+ * permission check, for the plugin's own calls (see below).
  *
  * What Scribe kept in the session is listed in a window the developer
  * opens, by pressing the mark above the prompt or with `/fylgja-kept`. It
@@ -658,7 +732,7 @@ export function register(on: On, options: PluginOptions = {}): void {
   const lines: string[] = []
   // The calls to Fylgja of a look that outlived the hook it began in.
   const calls = line<Caller>()
-  const held: Held = { session, draft, scribe, win, conversation: { id: undefined, seen: undefined, left: undefined } }
+  const held: Held = { session, draft, scribe, win, conversation: { id: undefined, seen: undefined, left: undefined, ending: undefined } }
 
   on('session.start', async ($, e, next) => {
     Session.startOver(session)
@@ -669,6 +743,8 @@ export function register(on: On, options: PluginOptions = {}): void {
     const id = await idOf($)
 
     held.conversation.id = id ?? held.conversation.id
+    held.conversation.left = undefined
+    held.conversation.ending = undefined
     Scribe.loaded(scribe, id)
     Telemetry.started(telemetry, e.surface)
     signedIn = undefined
@@ -693,7 +769,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       throw error
     } finally {
       close(live)
-      refresh($, session, scribe, noteSignIn)
+      refresh($, session, noteSignIn)
     }
 
     // Which plugin and engine this is and what time it is by the engine's clock, for the events the plugin reports. None of it is asked of Fylgja.
@@ -797,122 +873,26 @@ export function register(on: On, options: PluginOptions = {}): void {
     return {}
   })
 
-  // A cleared, resumed or branched conversation, as Claude Code says it
-  // began where it runs this hook, under the id the event names: it starts
-  // over unless the change of its id was seen first. Who is signed in is
-  // asked again either way, along with the rows on screen, while the hook
-  // is waited on, so that costs the mark nothing. Where Claude Code passes
-  // this event over, the change of the id alone starts it over (see
-  // `caughtUp`).
-  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
-    const { conversation } = held
-    const id = e.session_id === '' ? undefined : e.session_id
-    const isSeen = id !== undefined && id === conversation.seen
-
-    conversation.seen = undefined
-
-    if (id !== undefined && id !== conversation.id) {
-      conversation.left = conversation.id
-      conversation.id = id
+  // A conversation that ends by a `/clear` or a resume, while the session
+  // goes on with another: everything held of it is dropped as it ends, and
+  // the one that begins is taken up once the session reads its id, which may
+  // be the moment this end is through. Who is signed in is asked again,
+  // along with the rows on screen, once the end is through. The end has one
+  // short while that every hook on it shares, so this takes half of what is
+  // left of it at most; what is not answered by then is asked in the next
+  // hook Claude Code waits on. A branch has no end of its own, and is started
+  // over when its id is first read (see `caughtUp`).
+  on('session.end', { reason: ['clear', 'resume'] }, async ($, e, next) => {
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await ended($, held, e.sessionId, e.reason)
     }
 
-    Session.revet(session)
+    const done = await next(e)
 
-    if (!isSeen) {
-      await startOver($, held)
-      // What the conversation that begins kept before is picked up from its own log: none after a `/clear`.
-      Scribe.followed(scribe, id, e.source === 'clear' || e.source === 'resume' || e.source === 'fork' ? e.source : undefined)
-    }
-
-    const started = await next(e)
-
-    await vouch($, held, noteSignIn)
-
-    return started
-  }).catch(($, e, next) => next(e))
-
-  // The main conversation is compacted: by the developer, by Claude Code at
-  // its threshold, or by another plugin. What comes of it is handed on
-  // exactly as it came, summary and rows, whatever happens here.
-  //
-  // Scribe's records, their count on the mark and the window stay: they are
-  // the session's. The rows Scribe has not looked at yet are held and read
-  // by its next look. They are not looked at here, because a look asks a
-  // model and the compaction would wait for the answer. From here on the
-  // context of the conversation lists what the session kept, and it is
-  // asked for again so that the first request after the compaction has it.
-  // No toast, no line and no change to the band says any of this.
-  //
-  // A summary made ahead of time puts nothing in the conversation yet: the
-  // compaction that uses it comes through here again. A subagent compacting
-  // its own conversation is not the session's.
-  //
-  // The hook is for a conversation that holds a message. One that holds none
-  // (commands alone) has nothing to hold back, and Claude Code refuses an
-  // empty list handed down the chain, so such a compaction is not taken up
-  // at all: a list is matched when one of its items is.
-  on('session.compact', { trigger: ['manual', 'auto', 'plugin'], messages: { role: /^(?:user|assistant)$/ } }, async ($, e, next) => {
-    if (e.agentId !== undefined) {
-      return next(e)
-    }
-
-    const live = open()
-    let before: Scribe.Compacting | undefined
-
-    try {
-      before = await Scribe.compacting(scribeHostOf($, session, report, live), scribe, e.messages)
-    } catch (error) {
-      // Compacted as it would have been without the plugin.
-      report('error', { component: 'compaction', kind: 'threw', cause: Telemetry.causeOf(error) })
-    }
-
-    try {
-      const done = await next(e)
-
-      try {
-        // Called off, the conversation is as it was, and so is everything held of it.
-        if (before !== undefined && done.skip === undefined) {
-          Scribe.compacted(scribeHostOf($, session, report, live), scribe, before, done.messages, e.trigger)
-          $.ui.invalidate('prompt.context')
-        } else if (done.skip === undefined) {
-          report('compaction', { trigger: e.trigger, is_scribe_running: false })
-        }
-      } catch (error) {
-        // The compaction stands as it came; the next look begins at the developer's last prompt.
-        report('error', { component: 'compaction', kind: 'threw', cause: Telemetry.causeOf(error) })
-      }
-
-      return done
-    } finally {
-      close(live)
-    }
-  }).catch(($, e, next) => next(e))
-
-  // The context Claude Code gives Claude with a conversation, asked for once
-  // per conversation and again after a compaction or a `/clear`. In a
-  // conversation that was compacted it gains one block, the records Scribe
-  // kept in the session, after everything that is already there. Claude
-  // Code frames it as it frames its own blocks. Before the first compaction,
-  // signed out, with Scribe off and in a session that kept nothing there is
-  // no such block, and whatever comes from beneath is handed on as it came.
-  on('prompt.context', async ($, e, next) => {
-    // A conversation that began since the records were listed lists none of them.
     await caughtUp($, held)
+    await vouch($, held, noteSignIn, Math.min(SHORT_WAIT_MS, next.budget.remainingMs / 2))
 
-    const below = await next(e)
-    const live = open()
-
-    try {
-      const text = await Scribe.context(scribeHostOf($, session, report, live), scribe)
-
-      return text === undefined ? below : { ...below, blocks: [...below.blocks.filter(block => block.name !== BLOCK), { name: BLOCK, text }] }
-    } catch (error) {
-      report('error', { component: 'context', kind: 'threw', cause: Telemetry.causeOf(error) })
-
-      return below
-    } finally {
-      close(live)
-    }
+    return done
   }).catch(($, e, next) => next(e))
 
   on('prompt.edit', async ($, e, next) => {
@@ -953,13 +933,20 @@ export function register(on: On, options: PluginOptions = {}): void {
 
   // A prompt entered at the prompt box only; no other prompt passed through
   // it, so no other holds a chip. Everything before `next` is work on the
-  // text in hand and a read of the conversation's id, so the prompt is
-  // never made to wait on Fylgja; if it fails, the prompt goes on as it was
-  // entered. Nothing is forgotten here: a prompt brought back into the box
-  // has its chips, and is sent with its references. The first prompt of
-  // another conversation is the first of what Scribe holds of it.
+  // text in hand and reads of the session (which conversation it is, and
+  // whether the context window has a reading), so the prompt is never made
+  // to wait on Fylgja; if it fails, the prompt goes on as it was entered.
+  // Nothing is forgotten here: a prompt brought back into the box has its
+  // chips, and is sent with its references. The first prompt of another
+  // conversation is the first of what Scribe holds of it.
+  //
+  // The first prompt after the conversation was compacted, whoever sent it,
+  // takes the records the session kept along, once, as what Claude reads
+  // beside it (see `Scribe.handed`); a slash command does not.
   on('prompt.submit', async ($, e, next) => {
     await caughtUp($, held)
+
+    const context = await carriedWith($, held, report, e)
 
     if (e.origin.kind !== 'composer') {
       // A prompt sent from the person's phone or browser is theirs too.
@@ -972,7 +959,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         }
       }
 
-      return next(e)
+      return next(context === undefined ? e : { ...e, context })
     }
 
     const text = restored(draft.known, e.text)
@@ -988,7 +975,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       // The prompt goes on as it was entered.
     }
 
-    return text === e.text ? next(e) : next({ ...e, text })
+    return text === e.text && context === undefined ? next(e) : next({ ...e, text, ...(context === undefined ? {} : { context }) })
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'UserMessage' }, ($, e, next) => {
@@ -1047,8 +1034,19 @@ export function register(on: On, options: PluginOptions = {}): void {
   // person: this plugin's call, on its own server, of one of a fixed few
   // tools, and never past a refusal. Every other check is passed on as it
   // came, so nobody else's call is decided here.
+  //
+  // `$.mcp.call` takes no grant of its own: a call a plugin makes goes
+  // through the same permission check as Claude's, under an id of the
+  // plugin's kind, and outside auto mode its ask is put to the person. So
+  // the ask is turned into an allow here, which is the one answer that
+  // loosens a verdict. Where an organization's guard sits ahead of a
+  // person's plugins it runs such a check once more without them; the
+  // person's mode asked and nothing stands behind the ask, so the allow
+  // stands, and Claude Code says that this hook was skipped in that second
+  // run. No other way to spare the person the question exists.
   // The tool the plugin reports its own working to is for the plugin alone: it waits behind ToolSearch,
-  // out of the prompt's list, and a call of it that is not the plugin's own is refused.
+  // out of the prompt's list, and a call of it that is not the plugin's own is refused. That only ever
+  // tightens a verdict, so a guard runs nothing again for it.
   on('tool.describe', { tool: REPORT_TOOL }, async ($, e, next) => ({ ...(await next(e)), isDeferred: true })).catch(($, e, next) =>
     next(e),
   )
@@ -1090,7 +1088,7 @@ export function register(on: On, options: PluginOptions = {}): void {
           .catch(() => undefined)
           .then(() => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe, e.index))
           .catch(() => undefined)
-          .finally(() => refresh($, session, scribe, noteSignIn))
+          .finally(() => refresh($, session, noteSignIn))
       }
 
       const stepped = yield* next(e)
@@ -1147,6 +1145,11 @@ export function register(on: On, options: PluginOptions = {}): void {
       void serve(calls, live, callerOf($))
 
       if (e.agentId === undefined) {
+        // Claude answered: from here a context window with no reading means a compaction since.
+        if (!e.isAborted && e.reason !== 'error') {
+          Scribe.answered(scribe)
+        }
+
         // A session that has moved is in another project; what that one holds is looked at before anything else.
         Session.located(session, await $.session.cwd())
       }
@@ -1170,7 +1173,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       }
       close(live)
       // The look at the turn's end has ended by here, however it ended.
-      refresh($, session, scribe, noteSignIn)
+      refresh($, session, noteSignIn)
     }
 
     return done
@@ -1265,7 +1268,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         report('error', { component: 'band', kind: 'threw', cause: Telemetry.causeOf(error) })
       } finally {
         close(live)
-        refresh($, session, scribe, noteSignIn)
+        refresh($, session, noteSignIn)
       }
 
       // Scribe was turned off with a key: the window has nothing left to list.
@@ -1291,7 +1294,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         report('error', { component: 'band', kind: 'threw', cause: Telemetry.causeOf(error) })
       } finally {
         close(live)
-        refresh($, session, scribe, noteSignIn)
+        refresh($, session, noteSignIn)
       }
     }
 
@@ -1374,7 +1377,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         report('error', { component: 'window', kind: 'threw', cause: Telemetry.causeOf(error) })
       } finally {
         close(live)
-        refresh($, session, scribe, noteSignIn)
+        refresh($, session, noteSignIn)
       }
 
       ring($, session, scribe, win)
@@ -1405,7 +1408,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         report('error', { component: 'window', kind: 'threw', cause: Telemetry.causeOf(error) })
       } finally {
         close(live)
-        refresh($, session, scribe, noteSignIn)
+        refresh($, session, noteSignIn)
       }
 
       await fitFound($, scribe, win)

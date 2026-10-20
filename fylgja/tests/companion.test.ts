@@ -3,7 +3,7 @@ import type { Engine, MockClock } from 'claude-code/testing'
 
 import { markOf, RUNE } from '../hooks/companion'
 import { OFF_STATUS } from '../hooks/scribe/scribe'
-import { ACCOUNT, CONNECTED, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { ACCOUNT, CONNECTED, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
   carded,
   claude,
@@ -247,7 +247,7 @@ describe('the mark above the prompt', () => {
     await set.clock.advance(1000)
     await turn($, set, ...WORK)
     await pressTwice($, 'remove:0')
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
 
     expect(runes(set)).toEqual([])
     expect(set.statuses.filter(line => line !== undefined)).toEqual([])
@@ -351,7 +351,7 @@ describe('the mark while Scribe reads', () => {
 
     expect(await shown($)).toBe(READING)
 
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
 
     expect(await shown($), 'at rest in the conversation that begins').toBe(QUIET)
 
@@ -423,7 +423,7 @@ describe('the mark counts what Scribe wrote in the session and still stands', ()
 
     await $.session.start(START)
     await turn($, set, ...WORK)
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
 
     expect(await shown($)).toBe(QUIET)
   })

@@ -32,7 +32,7 @@ import { baseOf, isUnknownBase, rootOf } from './base'
 import type { Base } from './base'
 import { gitIn } from './git'
 import type { Run } from './git'
-import { carried, listedOf, saidOf } from './carry'
+import { carried } from './carry'
 import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain } from './delta'
 import type { Landed, Offer, Row } from './delta'
 import { changedLine, factsOf, isAnchoredTo, knownReposIn } from './facts'
@@ -215,23 +215,45 @@ export type Scribe = {
   /** The last row a wake went through, so rows that were rewritten under it are noticed. */
   mark: string | undefined
   /**
-   * The rows a compaction took out of the conversation before any look had
-   * been through them, oldest first: the next look reads them ahead of the
-   * rows it finds. At most `MAX_HELD`, the newest.
+   * Rows a look inside a turn read and did not go all the way through,
+   * from a conversation that was compacted meanwhile: they are in no
+   * conversation any more, so the next look reads them ahead of the rows
+   * it finds, oldest first.
    */
   held: readonly Row[]
-  /** How many times the conversation was compacted: a look that was under way across one knows by it. */
+  /** How many times the conversation was seen to be compacted: a look that was under way across one knows by it. */
   compactions: number
-  /** Whether this conversation has been compacted: only then is there anything to carry over. */
+  /** Whether this conversation has been seen to be compacted. */
   hasCompacted: boolean
   /**
-   * The rows the last compaction left, each as its mark, in order, until a
-   * look has been through them: what the rows that came after are told
-   * from, however many rows the engine has put among them.
+   * The rows a compaction left, each as its mark, in order, until a look
+   * has been through them: what the rows that came after are told from,
+   * however many rows the engine has put among them. Picked up from the
+   * session log of a load that came before.
    */
   seam: readonly string[] | undefined
-  /** The records the context last listed for Claude, each with the words it was quoted in; undefined when it listed none. */
-  noted: readonly [string, string][] | undefined
+  /**
+   * The first row of the conversation as a look last read it, as its mark;
+   * undefined until one has, and while the conversation is longer than the
+   * engine hands out whole. A compaction puts its summary there, so another
+   * first row is how a look learns that the conversation was compacted.
+   */
+  opening: string | undefined
+  /**
+   * Whether Claude has answered in this conversation since it began, or
+   * since it was last seen to be compacted. Until the next answer after a
+   * compaction the engine has no reading of the context window, and the
+   * prompt that finds none after an answer is the first after a compaction.
+   */
+  hasAnswered: boolean
+  /** Whether the records the session kept are to go with the next prompt, once: the conversation was compacted. */
+  isOwed: boolean
+  /**
+   * Whether the conversation ended (a `/clear`, a resume) and the one that
+   * begins is not known by its id yet: nothing is picked up from any log
+   * until it is (`followed`).
+   */
+  isBetween: boolean
   /** When the wake under way began; 0 with none under way. */
   wakingSince: number
   /** When each wake of the last hour began. */
@@ -598,10 +620,6 @@ const MAX_LOOKUP_PATHS = 30
 const MAX_DEFERRED = 10
 const MAX_LISTED = 40
 const MAX_PROMPTS = 100
-/** How many rows a compaction took away unread are held for the next look: far more than a turn has. */
-export const MAX_HELD = 600
-/** Said in the debug log when rows held for the next look were let go for their number; the count follows. */
-export const HELD_DROPPED = 'Scribe: rows compacted away before it looked at them were let go for their number, none of them written or chosen by the developer:'
 const FLUSH_BUDGET_MS = 20_000
 const PROBE = 'README.md'
 
@@ -625,7 +643,10 @@ export function create(options: Options): Scribe {
     compactions: 0,
     hasCompacted: false,
     seam: undefined,
-    noted: undefined,
+    opening: undefined,
+    hasAnswered: false,
+    isOwed: false,
+    isBetween: false,
     wakingSince: 0,
     wakeTimes: [],
     past: [],
@@ -720,7 +741,7 @@ export function create(options: Options): Scribe {
  * (`recover`): a conversation resumed has one, a cleared one has none. Only
  * where the conversation goes on under the id the plugin was loaded for is
  * the one it went on from looked for by its rows. A compaction is not such
- * a start; see `compacted`.
+ * a start; see `compactionSeen`.
  */
 export function startOver(scribe: Scribe): void {
   const { kept } = scribe.band
@@ -747,6 +768,9 @@ export function startOver(scribe: Scribe): void {
   scribe.held = []
   scribe.hasCompacted = false
   scribe.seam = undefined
+  scribe.opening = undefined
+  scribe.hasAnswered = false
+  scribe.isOwed = false
   scribe.wakingSince = 0
   scribe.past = []
   scribe.folded = { wakes: 0, block: undefined }
@@ -808,6 +832,7 @@ export function isOff(scribe: Scribe): boolean {
 /** A session began: whether a person is at it, and whether it draws where the band is. */
 export function started(scribe: Scribe, isInteractive: boolean, surface: string | null): void {
   startOver(scribe)
+  scribe.isBetween = false
   // A load of its own: its entries are its own, and what an earlier one wrote is picked up like any other's.
   scribe.log.writer = Journal.writerId()
   scribe.carry = undefined
@@ -849,8 +874,19 @@ export function followed(scribe: Scribe, id: string | undefined, source?: 'clear
     scribe.loadedFor = id
   }
 
+  scribe.isBetween = false
   scribe.replayFor = source === 'clear' ? null : id
   scribe.log.conv = id
+}
+
+/**
+ * The conversation ended, by a `/clear` or a resume, and the plugin has
+ * started over; the one that begins is told by its id once the session
+ * reads it (`followed`). Until then nothing is picked up from any log: the
+ * id read may still be the one that ended.
+ */
+export function ended(scribe: Scribe): void {
+  scribe.isBetween = true
 }
 
 /** A load's log before it has picked up or written anything. */
@@ -1199,7 +1235,7 @@ async function saltFor(host: ScribeHost, scribe: Scribe): Promise<string | undef
  * Never fails.
  */
 export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
-  if (scribe.recovery !== 'pending') {
+  if (scribe.recovery !== 'pending' || scribe.isBetween) {
     return
   }
 
@@ -3543,9 +3579,10 @@ function markOf(row: Row | undefined): string | undefined {
 
 /**
  * Where the rows not yet seen begin: after the ones a wake went through. A
- * compaction sets that count itself, and keeps the rows it left to tell the
- * later ones from where the engine's list is not the one it was handed (see
- * `compacted`). Anything else that rewrites the conversation leaves the
+ * compaction a look saw sets that count itself (see `opened`), and the rows
+ * a compaction left, picked up from a session log, tell the later ones from
+ * the rest wherever the engine's list moved them. Anything else that
+ * rewrites the conversation, a compaction a prompt saw among it, leaves the
  * count pointing into another list; then, and when nothing is known yet,
  * they begin at the developer's last prompt.
  */
@@ -3587,157 +3624,109 @@ function startOf(scribe: Scribe, rows: readonly Row[]): number {
   return rows.length
 }
 
-/** What Scribe has in hand of a conversation that is about to be compacted. */
-export type Compacting = {
-  /** The rows no look has been through, oldest first. */
-  unseen: readonly Row[]
-  /** The working tree's root: what a row's files are named from. */
-  root: string
-  epoch: number
-}
-
 /**
- * The conversation is about to be compacted: `rows` is what the summary is
- * made of. The rows no look has been through yet are picked out, so that
- * they can be held when the compaction stands; a look made here instead
- * would hold the compaction up for as long as a model takes to answer.
- * Nothing is changed yet, because a compaction may still be called off.
+ * The conversation was seen to be compacted. What Scribe holds of the
+ * session stays as it is: its records, their count above the prompt and the
+ * window that lists them are the session's, not the conversation's. The
+ * records go with the next prompt, once (`handed`), and the next look finds
+ * where to begin among the rows the compaction left (`startOf`).
  *
- * Undefined where Scribe does not run: such a conversation has nothing of
- * Scribe's to carry over.
+ * Claude Code says that a compaction happened only to hooks an organization
+ * may keep a person's plugins out of, so it is learned from what stays in
+ * view: a prompt that finds no reading of the context window after Claude
+ * has answered (`windowRead`), or a look that finds another first row
+ * (`opened`). A compaction learned one way is not learned again the other.
  */
-export async function compacting(host: ScribeHost, scribe: Scribe, rows: readonly Row[]): Promise<Compacting | undefined> {
-  const who = await identityOf(host, scribe)
-
-  if (who === null) {
-    return undefined
-  }
-
-  // Read last, with nothing awaited after it: a look that ends meanwhile has moved the count by then.
-  return { unseen: rows.slice(startOf(scribe, rows)), root: who.root, epoch: scribe.epoch }
-}
-
-/**
- * `rows` cut to `MAX_HELD`, oldest first. What the developer wrote, chose
- * or turned down is never what goes: without it the next look could not
- * tell whose turn it reads. The oldest of the other rows go first.
- */
-function heldOf(rows: readonly Row[], root: string, prompts: ReadonlySet<string>): readonly Row[] {
-  let over = rows.length - MAX_HELD
-
-  return over <= 0
-    ? rows
-    : rows.filter(row => {
-        if (over <= 0) {
-          return true
-        }
-
-        const seen = observe([row], root, prompts)
-
-        if (seen.developer.length > 0 || seen.acts.length > 0) {
-          return true
-        }
-
-        over -= 1
-
-        return false
-      })
-}
-
-/**
- * The conversation was compacted and now reads `rows`. What Scribe holds of
- * the session stays as it is: its records, their count above the prompt and
- * the window that lists them are the session's, not the conversation's.
- *
- * The rows no look had been through are held for the next one, and every
- * row the conversation holds now counts as gone through: what is in the
- * summary and in the rows kept beside it was either looked at or is held.
- * The engine may hold the compacted conversation with rows of its own
- * among these (the command that asked for it, what it reads again), so the
- * rows are kept as marks too, and the next look finds the last of them.
- */
-export function compacted(
-  host: ScribeHost,
-  scribe: Scribe,
-  before: Compacting,
-  rows: readonly Row[],
-  trigger: Word<'compaction', 'trigger'>,
-): void {
-  // The conversation started over while it was being compacted: nothing of the one before is held.
-  if (before.epoch !== scribe.epoch) {
-    return
-  }
-
-  const all = [...scribe.held, ...before.unseen]
-  const held = heldOf(all, before.root, scribe.prompts)
-
-  scribe.held = held
+function compactionSeen(host: ScribeHost, scribe: Scribe): void {
   scribe.compactions += 1
   scribe.hasCompacted = true
-  scribe.consumed = rows.length
-  scribe.mark = markOf(rows.at(-1))
-  scribe.seam = rows.flatMap(row => markOf(row) ?? [])
-
-  if (held.length < all.length) {
-    host.debug(`${HELD_DROPPED} ${all.length - held.length}`)
-    host.report('error', { component: 'compaction', kind: 'held_rows_dropped' })
-  }
-
-  host.report('compaction', {
-    trigger,
-    is_scribe_running: true,
-    records_carried: scribe.written.length,
-    rows_held: held.length,
-    rows_dropped: all.length - held.length,
-  })
+  scribe.isOwed = true
+  scribe.hasAnswered = false
+  scribe.opening = undefined
+  scribe.consumed = -1
+  scribe.mark = undefined
+  scribe.seam = undefined
+  host.report('compaction', { is_scribe_running: true, records_carried: scribe.written.length })
   logged(host, scribe)
 }
 
 /**
- * What the context of the conversation says of the session's records, or
- * undefined when it says nothing: before the first compaction Claude has
- * the conversation itself, a session that kept nothing has nothing to
- * list, and one that is signed out or has Scribe off is not spoken for.
- * What it lists is noted, so that a later change to it is noticed.
+ * The first row of `rows`, as a look reads it, against the one the last
+ * look read: another one is a compaction's summary. The next look then
+ * begins at the developer's last prompt the compaction kept, or else right
+ * after the summary, so the rows that came since are read once and the
+ * rows before it, gone into the summary, are not looked for. A prompt of
+ * the developer's that no look has been through and that went into the
+ * summary is still read, ahead of the rest: without it the look could not
+ * tell whose turn it reads.
+ *
+ * Claude's rows that a compaction took away before any look had read them
+ * are not read: a look comes at every turn's end and, unless the
+ * developer's setting says otherwise, every few steps, so that is at most
+ * the steps since.
  */
-export async function context(host: ScribeHost, scribe: Scribe): Promise<string | undefined> {
-  scribe.noted = undefined
+function opened(host: ScribeHost, scribe: Scribe, rows: readonly Row[]): void {
+  const opening = rows.length > 0 && rows.length < Journal.MAX_ROWS ? markOf(rows[0]) : undefined
 
-  if (!scribe.hasCompacted || (await reader(host, scribe)) === null) {
-    return undefined
+  if (scribe.opening !== undefined && opening !== undefined && opening !== scribe.opening) {
+    compactionSeen(host, scribe)
+
+    const prompt = rows.findLastIndex(row => isPrompt(row, scribe.prompts))
+    const from = prompt === -1 ? 1 : prompt
+    const latest = [...scribe.prompts].at(-1)
+
+    scribe.consumed = from
+    scribe.mark = markOf(rows[from - 1])
+
+    if (prompt === -1 && scribe.hasPrompt && latest !== undefined) {
+      scribe.held = [...scribe.held, { role: 'user', text: latest, toolUses: [] }]
+    }
   }
 
-  const text = carried(scribe.written)
+  scribe.opening = opening
+}
 
-  scribe.noted = text === undefined ? undefined : listedOf(scribe.written)
-
-  return text
+/** Whether a prompt should read the context window for a compaction: Claude has answered since the last, and Scribe runs. */
+export function watchesWindow(scribe: Scribe): boolean {
+  return scribe.hasAnswered && scribe.identity !== null && scribe.identity !== undefined && scribe.options.isOn
 }
 
 /**
- * Whether what the context lists is no longer so: a record it quotes was
- * removed, or its sentence or its reason reads differently now. A record
- * kept since is no such change, and neither is a file added to one. The
- * context says what the session had saved when it was compacted, the new
- * record and the new file are in the conversation Claude has, and
- * computing the context again costs the conversation its place in the
- * prompt cache; the next compaction lists them.
+ * A prompt read the context window: with no reading of it after Claude
+ * had answered, the conversation was compacted since.
+ *
+ * @param hasReading whether the engine has a reading of the context window
+ */
+export function windowRead(host: ScribeHost, scribe: Scribe, hasReading: boolean): void {
+  if (!hasReading && watchesWindow(scribe)) {
+    compactionSeen(host, scribe)
+  }
+}
+
+/** Claude answered in the main conversation: a turn of it ended neither stopped nor failed. */
+export function answered(scribe: Scribe): void {
+  scribe.hasAnswered = true
+}
+
+/**
+ * What goes with the prompt being sent of the records the session kept,
+ * once after a compaction, or undefined. The summary that takes the
+ * conversation's place may or may not hold what was decided in it, so the
+ * records are listed for Claude (see `carry.ts`). Nothing goes before the
+ * first compaction, Claude has the conversation itself then, nor in a
+ * session that kept nothing, nor signed out or with Scribe off. Nothing of
+ * it waits on Fylgja: it is what the plugin already holds.
  *
  * @param isHere whether the session is signed in to Fylgja as the account this machine is set up for
  */
-export function isStale(scribe: Scribe, isHere: boolean): boolean {
-  if (scribe.noted === undefined) {
-    return false
+export function handed(scribe: Scribe, isHere: boolean): string | undefined {
+  if (!scribe.isOwed) {
+    return undefined
   }
 
-  // Signed out, or Scribe switched off, since: the session is not spoken for any more.
-  if (!isHere || !scribe.hasCompacted || isOff(scribe)) {
-    return true
-  }
+  scribe.isOwed = false
 
-  const now = new Map(scribe.written.map(record => [record.id, record.outcome === 'withdrawn' ? '' : saidOf(record)]))
-
-  return scribe.noted.some(([id, entry]) => now.get(id) !== entry)
+  return !isHere || isOff(scribe) || scribe.identity === undefined ? undefined : carried(scribe.written)
 }
 
 function summaryOf(verdict: Verdict, written: readonly Written[]): string {
@@ -4352,6 +4341,8 @@ async function look(
   if (epoch !== scribe.epoch) {
     return
   }
+
+  opened(host, scribe, rows)
 
   const from = startOf(scribe, rows)
   const { held, compactions } = scribe
@@ -5028,6 +5019,8 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
   }
 
   scribe.hasPrompt = true
+  // The newest last, so the one the developer sent latest is known.
+  scribe.prompts.delete(plain(text))
   scribe.prompts.add(plain(text))
 
   // The developer's own words are kept for the session: a reason they gave

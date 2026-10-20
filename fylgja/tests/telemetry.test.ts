@@ -718,12 +718,10 @@ describe('each event is noted where the thing happens, and sent when the turn en
     expect(propsOf(set, 'search')).toMatchObject([{ asked_by: 'command', outcome: 'failed', results: 'none' }])
   })
 
-  test('a compaction says what set it off and how much of the session was carried over it', async ($, on) => {
+  test('a compaction says how much of the session was carried over it', async ($, on) => {
     const set = stage(on, { replies: [RECORDS, NOTHING] })
 
     on('session.compact', ($$, e) => ({ messages: e.messages.slice(-1) }) as never)
-    on('prompt.context', ($$, e) => ({ blocks: e.blocks }))
-    on('ui.invalidate', () => ({ value: undefined }) as never)
 
     await $.session.start(START)
     // A row as the engine holds it: its tool call has the id the engine gave it.
@@ -735,7 +733,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
     set.rows.splice(0, set.rows.length, ...(done.messages as never[]))
     await turn($, set, ...QUIET)
 
-    expect(propsOf(set, 'compaction')).toEqual([{ trigger: 'auto', is_scribe_running: true, records_carried: 1, rows_held: 2, rows_dropped: 0 }])
+    expect(propsOf(set, 'compaction')).toEqual([{ is_scribe_running: true, records_carried: 1 }])
     nothingPrivateIn(set)
   })
 })

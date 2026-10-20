@@ -4,7 +4,7 @@ import { GIVEN_UP } from '../hooks/scribe/prompt'
 import { MAX_COMMIT_PATHS, OFF_STATUS } from '../hooks/scribe/scribe'
 import { namedAfter } from '../hooks/scribe/staged'
 import { ARMED_NOTE, NOTES, SAID } from '../hooks/scribe/view'
-import { answer, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { answer, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
   carded,
   claude,
@@ -728,7 +728,7 @@ describe('Scribe asks whether a recorded decision still holds', () => {
     await turn($, set, ...TALK, commit())
     await press($, 'no-longer')
     await press($, 'ok')
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
     await turn($, set, dev('The lock is a Postgres advisory lock now, Redis is gone from the queue.'), claude('Done.', edit(FILE)))
 
     expect(set.asked.length).toBe(2)

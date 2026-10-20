@@ -83,7 +83,9 @@ export type Verdict = { decision: 'allow' | 'ask' | 'deny'; reason?: string }
 /**
  * The verdict this plugin gives a call being checked: its own call is let
  * through where the engine would have asked, and every other verdict is
- * handed back as it came. A refusal is never turned into anything else.
+ * handed back as it came. A refusal is never turned into anything else, nor
+ * reworded: a refusal from beneath of a call of the reporting tool that is
+ * not the plugin's own stands in its own words.
  */
 export function verdictFor<V extends Verdict>(
   verdict: V,
@@ -93,7 +95,7 @@ export function verdictFor<V extends Verdict>(
 ): V {
   const isOwn = isOwnCall(e, raisedBy, server)
 
-  if (REPORT_TOOL.test(e.tool) && !isOwn) {
+  if (REPORT_TOOL.test(e.tool) && !isOwn && verdict.decision !== 'deny') {
     return { ...verdict, decision: 'deny', reason: 'Fylgja: this tool is the plugin’s own, for its reports about itself' }
   }
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { MAX_PLAN_CHARS } from '../hooks/scribe/plans'
+import { endedBy } from './fixtures'
 import { claude, decision, dev, edit, gitStatus, NOTHING, ROOT, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 
 const PLAN = [
@@ -219,7 +220,7 @@ describe('Scribe reads the plan the session works from', () => {
 
     await $.session.start(START)
     await turn($, set, dev('write the plan'), claude('Written.', wrote(IN_TREE)))
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear')
     set.rows.length = 0
     await turn($, set, dev('something else'), claude('Done.'))
 

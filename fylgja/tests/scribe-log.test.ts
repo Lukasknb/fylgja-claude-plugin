@@ -8,7 +8,7 @@ import * as Ledger from '../hooks/scribe/ledger'
 import { LEGENDS } from '../hooks/listing'
 import type { Row } from '../hooks/scribe/delta'
 import type { Written } from '../hooks/scribe/types'
-import { answer, idOf } from './fixtures'
+import { answer, endedBy, idOf } from './fixtures'
 import { frame, pane } from './window-fixtures'
 import { claude, decision, dev, edit, fact, finish, NOTHING, press, pressTwice, QUIET, send, SESSION_ID, shown, stage, START, turn, verdict } from './scribe-fixtures'
 import type { Asked, Stage, StageOptions } from './scribe-fixtures'
@@ -614,7 +614,7 @@ describe('a conversation that is another one', () => {
   test('after /clear the window lists nothing, though the id read from the session is still the one before', async ($, on) => {
     const set = await kept($, on, () => SESSION_ID)
 
-    await $.classic.SessionStart({ source: 'clear', session_id: idOf(902) })
+    await endedBy($, 'clear')
 
     expect(await listed($)).toContain(Ledger.QUIET.empty)
 
@@ -630,7 +630,7 @@ describe('a conversation that is another one', () => {
 
     id = idOf(902)
     set.rows.splice(0, set.rows.length)
-    await $.classic.SessionStart({ source: 'clear', session_id: id })
+    await endedBy($, 'clear', SESSION_ID)
     set.rows.push(dev('something else'), claude('Sure.', { ...edit(FILE), tool_use_id: 'toolu_03' }))
     await reloaded($, set)
 
@@ -639,23 +639,33 @@ describe('a conversation that is another one', () => {
 
   test('a resume into another conversation lists that conversation’s own records, and a resume back lists these again', async ($, on) => {
     const OTHER = idOf(910)
-    const set = await kept($, on, () => SESSION_ID, {
+    let id = SESSION_ID
+    const set = await kept($, on, () => id, {
       kept: { [Journal.keyOf(OTHER, 'otherload') ?? '']: entry(OTHER, 'otherload', 1, [written(THIRD, 'Log every retry at warn.')]) },
     })
 
-    await $.classic.SessionStart({ source: 'resume', session_id: OTHER })
+    id = OTHER
+    await endedBy($, 'resume', SESSION_ID)
 
     expect((await listed($)).filter(line => line.includes('◆'))).toEqual(['▸ ◆ Decision · Log every retry at warn.'])
 
-    await $.classic.SessionStart({ source: 'resume', session_id: SESSION_ID })
+    id = SESSION_ID
+    await endedBy($, 'resume', OTHER)
 
     expect((await listed($))[0]).toBe(' ᚠ fylgja  | kept in this session | 2 kept')
   })
 
   for (const source of ['resume', 'fork'] as const) {
     test(`a ${source} into a conversation with no log of its own lists nothing, though its rows hold the tool call`, async ($, on) => {
-      await kept($, on, () => SESSION_ID)
-      await $.classic.SessionStart({ source, session_id: idOf(904) })
+      let id = SESSION_ID
+
+      await kept($, on, () => id)
+      id = idOf(904)
+
+      // A branch has no end of its own: it is seen by its id, as the window is opened.
+      if (source === 'resume') {
+        await endedBy($, source, SESSION_ID)
+      }
 
       expect(await listed($)).toContain(Ledger.QUIET.empty)
     })
@@ -858,7 +868,8 @@ describe('a load at an awkward moment', () => {
 
   test('a fork in the session right after a load, before any turn ended, is still the conversation loaded for: its records, not its question', async ($, on) => {
     const UNEXPLAINED = decision({ detail: '', reason_status: 'not_stated', alternatives: ['Redis with Redlock'] })
-    const set = await kept($, on, () => SESSION_ID, {
+    let id = SESSION_ID
+    const set = await kept($, on, () => id, {
       replies: [verdict({ records: [UNEXPLAINED], question: { form: 'reason', record: 0, options: ['One less service to run'] } })],
     })
 
@@ -866,29 +877,33 @@ describe('a load at an awkward moment', () => {
 
     expect(await shown($)).toMatch('? Why')
 
-    await $.classic.SessionStart({ source: 'fork', session_id: idOf(920) })
+    // A branch has no end of its own: it is seen by its id, as the window is opened.
+    id = idOf(920)
 
     expect((await listed($))[0]).toBe(' ᚠ fylgja  | kept in this session | 1 kept')
     expect(await shown($)).toBe(`${QUIET} · 1 kept`)
   })
 
   test('a fork in the session after a turn has ended picks up nothing', async ($, on) => {
-    const set = await kept($, on, () => SESSION_ID, { replies: [verdict({ records: [LOCK, CAP] }), NOTHING] })
+    let id = SESSION_ID
+    const set = await kept($, on, () => id, { replies: [verdict({ records: [LOCK, CAP] }), NOTHING] })
 
     await turn($, set, dev('and on'), claude('Sure.'))
-    await $.classic.SessionStart({ source: 'fork', session_id: idOf(922) })
+    id = idOf(922)
 
     expect(await listed($)).toContain(Ledger.QUIET.empty)
   })
 
   test('a resume right after a load, before any turn ended, picks up the conversation it goes into', async ($, on) => {
     const OTHER = idOf(921)
-    const set = await kept($, on, () => SESSION_ID, {
+    let id = SESSION_ID
+    const set = await kept($, on, () => id, {
       kept: { [Journal.keyOf(OTHER, 'otherload') ?? '']: entry(OTHER, 'otherload', 1, [written(THIRD, 'Log every retry at warn.')]) },
     })
 
     await reloaded($, set)
-    await $.classic.SessionStart({ source: 'resume', session_id: OTHER })
+    id = OTHER
+    await endedBy($, 'resume', SESSION_ID)
 
     expect((await listed($)).filter(line => line.includes('◆'))).toEqual(['▸ ◆ Decision · Log every retry at warn.'])
   })

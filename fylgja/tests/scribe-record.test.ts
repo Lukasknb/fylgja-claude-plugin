@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { ARMED_NOTE, NOTES } from '../hooks/scribe/view'
-import { answer, idOf } from './fixtures'
+import { answer, endedBy, idOf } from './fixtures'
 import {
   band,
   carded,
@@ -526,7 +526,7 @@ describe('Scribe records', () => {
     await $.session.start(START)
     await turn($, set, ...TALK)
     id = 'bbbbbbbb-0000-4000-8000-000000000002'
-    await $.classic.SessionStart({ source: 'clear' })
+    await endedBy($, 'clear', 'aaaaaaaa-0000-4000-8000-000000000001')
     set.rows.length = 0
     await turn($, set, ...TALK)
 
