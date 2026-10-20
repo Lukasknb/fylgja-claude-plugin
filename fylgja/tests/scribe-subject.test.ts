@@ -289,6 +289,8 @@ describe('a commit is where a decision gets its place', () => {
     await step($, 1, agentUses, 'agent-1')
     agentUses = []
 
+    const before = set.of('recall').length
+
     await turn($, set, dev(`the agent is done, anything else to do here ${TALK}`), claude('It built and committed the lock.'))
 
     const asked = set.asked[1]?.prompt ?? ''
@@ -297,10 +299,13 @@ describe('a commit is where a decision gets its place', () => {
     expect(asked).toMatch('The files the commit holds:\n- src/queue/lock.ts')
     expect(asked, 'the path only: nothing of what the agent wrote').not.toMatch(/SECRET-OLD|SECRET-NEW/)
     expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'fix', anchors: [{ path: 'src/queue/lock.ts' }] }])
-    expect(
-      set.of('recall').some(args => JSON.stringify(args.paths ?? []).includes('src/queue/lock.ts')),
-      'nothing is looked up for an agent’s step',
-    ).toBe(false)
+    expect(set.of('recall').slice(0, before), 'nothing is looked up in an agent’s step itself').not.toContainEqual(
+      expect.objectContaining({ paths: ['src/queue/lock.ts'] }),
+    )
+    expect(set.of('recall').slice(before), 'the file it changed is looked up at the turn’s end').toContainEqual({
+      repo: 'acme/web',
+      paths: ['src/queue/lock.ts'],
+    })
   })
 
   test('a commit with no record waiting for a place asks nothing, and a record that fits no file stays without one', async ($, on) => {

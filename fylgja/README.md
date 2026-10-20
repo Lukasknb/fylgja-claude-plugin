@@ -413,7 +413,8 @@ card around them.
   record's id. Fylgja's own linker may later propose the replacement for
   review in Fylgja; the plugin does nothing more about it.
 - **It tells.** When Claude reads or changes a file that a recorded decision
-  or gotcha is anchored to:
+  or gotcha is anchored to, or an agent Claude started changes one (that
+  file is looked up when the turn ends):
 
   `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12   1 Open  2 Tell Claude  3 Knew this  0 Dismiss`
 

@@ -158,6 +158,23 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     expect(await shown($, true)).toBe(TELL)
   })
 
+  test('a file an agent of the session changed is looked up at the turn’s end, and a record anchored to it is shown', async ($, on) => {
+    let agentUses: { name: string; input: unknown }[] = []
+    const set = stage(on, { tools: found(fact(1)) })
+
+    stepping(on, () => agentUses)
+    await $.session.start(START)
+
+    agentUses = [{ name: 'Edit', input: { file_path: `${ROOT}/${FILE}`, old_string: 'a', new_string: 'b' } }]
+    await step($, 0, agentUses, 'agent-1')
+    agentUses = []
+
+    await turn($, set, dev('have an agent make the mailer retry'), claude('The agent made it retry.'))
+
+    expect(set.of('recall')).toEqual([{ repo: REPO, paths: [FILE] }])
+    expect(await shown($)).toBe(TELL)
+  })
+
   test('a slow lookup does not hold the step past a second and a half, and its late answer is still shown', async ($, on) => {
     const set = stage(on, {
       tools: {

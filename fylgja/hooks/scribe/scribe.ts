@@ -4189,8 +4189,9 @@ const MAX_PENDING_COMMITS = 5
  * One step of an agent the session started ended. Only the paths of the
  * files it writes or changes are taken, never their content and nothing the
  * agent said: they are files of this session, a record may point at them,
- * and a commit the agent makes holds them. Nothing is looked up or asked
- * here.
+ * and a commit the agent makes holds them. They are noted for the next
+ * lookup of what is recorded about the session's files, as Claude's own
+ * are; nothing is looked up or asked here.
  *
  * Whether an agent's commit went through cannot be seen from its step: the
  * command is taken as the commit, and the files changed in that repository
@@ -4216,6 +4217,9 @@ export async function agentStepped(
   const places = (await placed(host, scribe, who, files)) ?? []
 
   noteEdits(scribe, who, files, places)
+  // The files an agent changes are the session's work as much as Claude's
+  // own: what is recorded about them is looked up with the next lookup.
+  wanted(scribe, who, places)
   scribe.agentRepo = places.at(-1)?.repo ?? scribe.agentRepo
 
   if (hasCommit && scribe.agentRepo !== null) {
