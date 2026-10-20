@@ -406,6 +406,12 @@ export type Scribe = {
   /** Whether Fylgja's server takes the commit a decision was written at: true until it turned a write down for it. */
   takesBase: boolean
   /**
+   * Whether it takes that commit with places added to a record later: true
+   * until it turned such a fix down for it. A server may take it with a
+   * write and not yet with a fix, so the two are known apart.
+   */
+  amendTakesBase: boolean
+  /**
    * Recorded decisions whose code a commit changed after they were last
    * confirmed, not yet asked about: one of them is asked about when a look
    * ends, and the others are told like any other record.
@@ -712,6 +718,7 @@ export function create(options: Options): Scribe {
     toAttach: [],
     takesPaths: true,
     takesBase: true,
+    amendTakesBase: true,
     doubted: [],
     denied: new Map(),
     index: cleared(false),
@@ -862,6 +869,7 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   scribe.hasAsked = false
   scribe.takesPaths = true
   scribe.takesBase = true
+  scribe.amendTakesBase = true
   scribe.index = cleared(false)
   scribe.created.clear()
   scribe.own.clear()
@@ -995,6 +1003,7 @@ function nowOf(scribe: Scribe): Journal.Now {
         own: [...scribe.own].slice(-Journal.MAX_LIST),
         takesPaths: scribe.takesPaths,
         takesBase: scribe.takesBase,
+        amendTakesBase: scribe.amendTakesBase,
         filesIn: [...scribe.filesIn],
       },
       places: [...scribe.places].slice(-MAX_LOGGED_PLACES),
@@ -1574,6 +1583,7 @@ function restoreWork(scribe: Scribe, work: Journal.Work): void {
   scribe.own = new Set([...work.own, ...scribe.own].slice(-MAX_OWN))
   scribe.takesPaths &&= work.takesPaths
   scribe.takesBase &&= work.takesBase
+  scribe.amendTakesBase &&= work.amendTakesBase
 
   for (const [repo, files] of work.filesIn) {
     scribe.filesIn.set(repo, Math.max(scribe.filesIn.get(repo) ?? 0, files))
@@ -2215,14 +2225,18 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
  * one of those files is changed there; undefined for anything but a
  * decision about files, on a server that does not take it, and whenever git
  * does not say at once.
+ *
+ * @param isTaken whether the server takes it with the call it is meant for:
+ *   a write (`takesBase`) or places added later (`amendTakesBase`)
  */
 async function baseFor(
   host: ScribeHost,
   scribe: Scribe,
   who: Identity,
   draft: Pick<Draft, 'kind' | 'repo' | 'anchors'>,
+  isTaken: boolean,
 ): Promise<Base | undefined> {
-  if (!scribe.takesBase || draft.kind !== 'decision' || draft.anchors.length === 0 || draft.repo === null) {
+  if (!isTaken || draft.kind !== 'decision' || draft.anchors.length === 0 || draft.repo === null) {
     return undefined
   }
 
@@ -2274,7 +2288,7 @@ async function send(
   let answer: Record<string, unknown> | undefined
   let refusal: string | undefined
   // The commit the code is at goes with a new decision; a confirmation writes nothing new.
-  const base = recalled === undefined ? await baseFor(host, scribe, who, draft) : undefined
+  const base = recalled === undefined ? await baseFor(host, scribe, who, draft, scribe.takesBase) : undefined
 
   try {
     ;({ answer, refusal } = await tried(host, scribe, 'remember', base === undefined ? args : { ...args, ...base }))
@@ -3110,12 +3124,12 @@ async function anchorMore(
   }
 
   const args = { atom_id: id, op: 'fix', anchors: all }
-  const base = await baseFor(host, scribe, who, { kind: own.kind, repo: own.repo ?? null, anchors: fresh })
+  const base = await baseFor(host, scribe, who, { kind: own.kind, repo: own.repo ?? null, anchors: fresh }, scribe.amendTakesBase)
   let done = await tried(host, scribe, 'amend_memory', base === undefined ? args : { ...args, ...base }).catch(() => undefined)
 
   if (done !== undefined && done.answer === undefined && base !== undefined && isUnknownBase(done.refusal ?? '')) {
-    scribe.takesBase = false
-    host.debug('Scribe: Fylgja does not take the commit a decision was written at here; decisions are written without it in this session')
+    scribe.amendTakesBase = false
+    host.debug('Scribe: Fylgja does not take the commit with places added later here; places are added without it in this session')
     done = await tried(host, scribe, 'amend_memory', args).catch(() => undefined)
   }
 

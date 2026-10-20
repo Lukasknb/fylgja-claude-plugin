@@ -171,6 +171,7 @@ export type Work = {
   own: string[]
   takesPaths: boolean
   takesBase: boolean
+  amendTakesBase: boolean
   filesIn: [string, number][]
 }
 
@@ -720,6 +721,7 @@ const GROUPS: { [K in keyof Groups]: (value: unknown) => Groups[K] | undefined }
           own: texts(value.own, 120),
           takesPaths: value.takesPaths !== false,
           takesBase: value.takesBase !== false,
+          amendTakesBase: value.amendTakesBase !== false,
           filesIn: pairsOf(value.filesIn, one => (typeof one === 'number' && Number.isInteger(one) && one > 0 ? one : undefined)),
         }
       : undefined,

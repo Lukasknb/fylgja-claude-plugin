@@ -161,6 +161,7 @@ function groupsOf(more: Partial<Groups> = {}): Groups {
       own: [],
       takesPaths: true,
       takesBase: true,
+      amendTakesBase: true,
       filesIn: [],
     },
     places: [],

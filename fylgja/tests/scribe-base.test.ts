@@ -236,7 +236,7 @@ describe('the commit a decision written before its code is given with that code'
     expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'fix', anchors: [{ path: FILE }], base_sha: SHA, base_dirty: true }])
   })
 
-  test('a server that does not take the commit with a fix is given the code without it', async ($, on) => {
+  test('a server that does not take the commit with a fix is given the code without it, and still gets it with a later decision', async ($, on) => {
     const untaken = {
       content: [
         {
@@ -247,7 +247,7 @@ describe('the commit a decision written before its code is given with that code'
       isError: true,
     }
     const set = stage(on, {
-      replies: [verdict({ records: [PLANNED] }), pairs],
+      replies: [verdict({ records: [PLANNED] }), pairs, verdict({ records: [decision({ content: 'Use B.' })] })],
       tools: { amend_memory: args => ('base_sha' in args ? untaken : answer({ atom_id: OWN, outcome: 'fixed' })) },
       git: gitWith(''),
     })
@@ -255,6 +255,12 @@ describe('the commit a decision written before its code is given with that code'
     await $.session.start(START)
     await turn($, set, ...PLANNING)
     await turn($, set, ...BUILDING)
+    await turn($, set, dev('and the retry?'), claude('Done.', edit(FILE)))
+
+    expect(set.of('remember').map(args => [args.content, args.base_sha]), 'a write still takes the commit').toEqual([
+      [PLANNED.content, undefined],
+      ['Use B.', SHA],
+    ])
 
     expect(set.of('amend_memory')).toEqual([
       { atom_id: OWN, op: 'fix', anchors: [{ path: FILE }], base_sha: SHA, base_dirty: false },
