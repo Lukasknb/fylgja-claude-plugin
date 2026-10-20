@@ -1282,6 +1282,11 @@ export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
       return
     }
 
+    // Started over while the rows were read: they are another conversation's.
+    if (epoch !== scribe.epoch) {
+      return
+    }
+
     // Its first row, so a compaction before its first look is told by its summary.
     if (scribe.opening === undefined && !scribe.wasLong) {
       opened(scribe, rows)
@@ -3802,7 +3807,9 @@ const NEAR_GROWTH = 0.05
  * `NEAR_GROWTH` of it since the last such look, if there was one since the
  * last compaction. A compaction in the middle of a turn takes the turn's
  * rows with it, and a look made before it reads them. Never at a turn's
- * first step: Claude has written nothing of the turn yet.
+ * first step: Claude has written nothing of the turn yet. Only a look that
+ * starts counts (see `stepping`): one that gives way to a look under way is
+ * asked for again at the next step.
  *
  * @param tokens the context window's reading, undefined when it has none
  * @param index the step's place in its turn
@@ -3814,13 +3821,7 @@ export function isNearCompaction(scribe: Scribe, tokens: number | undefined, ind
     return false
   }
 
-  if (scribe.nearAt !== undefined && tokens - scribe.nearAt < at * NEAR_GROWTH) {
-    return false
-  }
-
-  scribe.nearAt = tokens
-
-  return true
+  return scribe.nearAt === undefined || tokens - scribe.nearAt >= at * NEAR_GROWTH
 }
 
 /**
@@ -4335,8 +4336,9 @@ export const WIDEN_TWICE = 20
  *
  * @param index the step's place in its turn, from 0: this many steps of it have ended
  * @param isDue whether the step found a compaction near or just made
+ * @param near the window's reading, when the step found a compaction near: noted once the look starts
  */
-export async function stepping(host: ScribeHost, scribe: Scribe, index = 0, isDue = false): Promise<void> {
+export async function stepping(host: ScribeHost, scribe: Scribe, index = 0, isDue = false, near?: number): Promise<void> {
   const { epoch } = scribe
   let trigger: Trigger | undefined = scribe.isAsking ? 'answered' : isDue ? 'cadence' : undefined
 
@@ -4364,6 +4366,10 @@ export async function stepping(host: ScribeHost, scribe: Scribe, index = 0, isDu
   scribe.cut ??= new AbortController()
 
   const cut = scribe.cut.signal
+
+  if (near !== undefined) {
+    scribe.nearAt = near
+  }
 
   await inTurn(host, scribe, epoch, () => look(host, scribe, who, epoch, cut, trigger))
 }

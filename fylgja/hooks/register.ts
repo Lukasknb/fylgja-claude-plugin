@@ -567,18 +567,25 @@ async function vouch($: EngineInterface, held: Held, noted?: () => void, ms = SH
  * a turn ends, for a compaction since it was last read
  * (`Scribe.windowRead`). A step also learns whether a compaction is near
  * (`Scribe.isNearCompaction`), and as a turn begins the count it comes at
- * is read again. True when the step should have Scribe look now: the
- * conversation was just compacted, or is about to be. Never fails, and asks
- * nothing of Fylgja.
+ * is read again. `isDue` when the step should have Scribe look now: the
+ * conversation was just compacted, or is about to be, and then `near` is
+ * the window's reading that a look made for that is noted at. Never fails,
+ * and asks nothing of Fylgja.
  *
  * @param when as a prompt is sent, a step begins or a turn ends
  * @param step the step's place in its turn, for a step
  */
-async function watchWindow($: EngineInterface, held: Held, report: Report, when: 'prompt' | 'step' | 'end', step = 0): Promise<boolean> {
+async function watchWindow(
+  $: EngineInterface,
+  held: Held,
+  report: Report,
+  when: 'prompt' | 'step' | 'end',
+  step = 0,
+): Promise<{ isDue: boolean; near?: number }> {
   const { session, scribe } = held
 
   if (!Scribe.watchesWindow(scribe)) {
-    return false
+    return { isDue: false }
   }
 
   try {
@@ -586,7 +593,7 @@ async function watchWindow($: EngineInterface, held: Held, report: Report, when:
     const isCompacted = await Scribe.windowRead(scribeHostOf($, session, report), scribe, context.tokens !== undefined, when)
 
     if (when !== 'step') {
-      return isCompacted
+      return { isDue: isCompacted }
     }
 
     if (step === 0) {
@@ -595,11 +602,15 @@ async function watchWindow($: EngineInterface, held: Held, report: Report, when:
       Scribe.compactsAt(scribe, breakdown === undefined || !breakdown.isAutoCompactEnabled ? null : (breakdown.autoCompactThreshold ?? null))
     }
 
-    return isCompacted || Scribe.isNearCompaction(scribe, context.tokens, step)
+    if (Scribe.isNearCompaction(scribe, context.tokens, step)) {
+      return { isDue: true, near: context.tokens }
+    }
+
+    return { isDue: isCompacted }
   } catch (error) {
     report('error', { component: 'context', kind: 'threw', cause: Telemetry.causeOf(error) })
 
-    return false
+    return { isDue: false }
   }
 }
 
@@ -1152,7 +1163,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         Scribe.began(scribe)
         // A compaction just made, or about to be, has Scribe look now, whatever the developer's setting.
         void Promise.all([looked.catch(() => undefined), watchWindow($, held, report, 'step', e.index)])
-          .then(([, isDue]) => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe, e.index, isDue))
+          .then(([, due]) => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe, e.index, due.isDue, due.near))
           .catch(() => undefined)
           .finally(() => refresh($, session, noteSignIn))
       }

@@ -455,6 +455,76 @@ describe('what a compacted conversation is given', () => {
     expect(set.asked, 'nor at every turn while the window stays near').toHaveLength(before)
   })
 
+  test('a near look that gives way to a look under way is asked for again at the next step, though the window has hardly grown', async ($, on) => {
+    beneath(on, 1)
+    const set = await kept($, on, [
+      TWO,
+      async (asked, clock) => {
+        await clock.sleep(5000)
+
+        return NOTHING
+      },
+      NOTHING,
+      NOTHING,
+    ])
+
+    await send($, 'switch the lock to postgres advisory locks, redis is going away')
+    set.rows.push(dev('switch the lock to postgres advisory locks, redis is going away'))
+    // The turn's first step reads the count Claude Code compacts at.
+    await stepped($, set, 0)
+    set.rows.push(claude('FIRST-REPLY.', edit(FILE)))
+    // The developer's setting has Scribe look at the fifth step: that look takes its time.
+    await stepped($, set, 5)
+
+    expect(set.asked).toHaveLength(2)
+
+    set.window.tokens = 150_000
+    set.rows.push(claude('NEAR-REPLY: rewriting acquire.', edit(FILE)))
+    await stepped($, set, 6)
+    await set.clock.advance(5000)
+    await set.clock.settle()
+
+    expect(set.asked, 'the near look gave way to the one under way').toHaveLength(2)
+
+    set.window.tokens = 151_000
+    set.rows.push(claude('LATER-REPLY.', edit(FILE)))
+    await stepped($, set, 7)
+
+    expect(set.asked).toHaveLength(3)
+    expect(told(set)).toMatch('NEAR-REPLY')
+  })
+
+  test('a /clear while the log of the conversation is being picked up leaves nothing of the cleared one to tell a summary by', async ($, on) => {
+    let id = idOf(301)
+    let wait = 0
+
+    beneath(on)
+    const set = stage(on, { replies: [TWO, NOTHING], sessionId: () => id, rowsWait: () => wait })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'ok')
+    set.window.hasReading = false
+    await set.clock.settle()
+    // Loaded afresh, and the rows are slow to come: the conversation is cleared meanwhile.
+    wait = 1000
+
+    const loading = $.session.start(START)
+
+    await set.clock.settle()
+    id = idOf(302)
+    set.rows.splice(0, set.rows.length)
+    await endedBy($, 'clear', idOf(301))
+    await set.clock.advance(2000)
+    await loading
+    wait = 0
+    set.rows.push(dev('<local-command-stdout>Cleared</local-command-stdout>'))
+    await turn($, set, ...MORE)
+
+    expect(set.events('compaction')).toEqual([])
+    expect(set.beside.filter(one => one !== undefined)).toEqual([])
+  })
+
   test('a compaction between turns is seen by the prompt after it, and is counted once', async ($, on) => {
     beneath(on, 1)
     const set = await kept($, on)

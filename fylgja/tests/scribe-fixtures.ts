@@ -97,6 +97,8 @@ type Call = { tool: string; args: Record<string, unknown> }
 export type Asked = { model: string; prompt: string; system: string; effort: unknown; timeoutMs: unknown }
 
 export type StageOptions = {
+  /** How long a read of the conversation's rows takes, read for each one; the rows are those there when it was asked. None by default. */
+  rowsWait?: () => number
   /** Why a hook beneath turns the prompt being sent back, read for each one; undefined, it enters. */
   turnsBack?: () => string | undefined
   /** What Scribe's model answers, in order; the last is repeated. "Nothing" by default. A function is handed the request. */
@@ -389,12 +391,18 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     }
   })
 
-  on('session.messages', ($, e) => {
+  on('session.messages', async ($, e) => {
     const asked = e as { agentId?: string } | undefined
+    const wait = options.rowsWait?.() ?? 0
+    const held = wait === 0 ? rows : [...rows]
 
     conversations.push(asked?.agentId)
 
-    return { value: rows as never }
+    if (wait > 0) {
+      await clock.sleep(wait)
+    }
+
+    return { value: held as never }
   })
   // A row changed in the menu: the plugin's own fields are written where `$.config.list` reads them.
   on('config.set', ($, e) => {
