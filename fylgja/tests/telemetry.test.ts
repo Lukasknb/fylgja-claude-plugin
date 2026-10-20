@@ -731,6 +731,8 @@ describe('each event is noted where the thing happens, and sent when the turn en
     const done = await $.session.compact({ trigger: 'auto', messages: [...set.rows] } as never)
 
     set.rows.splice(0, set.rows.length, ...(done.messages as never[]))
+    // Until Claude next answers, the context window has no reading.
+    set.window.hasReading = false
     await turn($, set, ...QUIET)
 
     expect(propsOf(set, 'compaction')).toEqual([{ is_scribe_running: true, records_carried: 1 }])

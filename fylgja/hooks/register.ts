@@ -1,4 +1,4 @@
-import type { EngineInterface, On, PluginOptions } from 'claude-code'
+import type { EngineInterface, On, PluginOptions, PromptSubmitResult } from 'claude-code'
 
 import { destinationOf } from './account'
 import { cardOf } from './card'
@@ -563,13 +563,50 @@ async function vouch($: EngineInterface, held: Held, noted?: () => void, ms = SH
 }
 
 /**
- * What a prompt being sent carries beside it for Claude: what it came with,
- * and the records the session kept when the conversation was compacted since
- * the last prompt that took them; undefined when it takes nothing more.
+ * Reads the context window, as a prompt is sent, a step of a turn begins or
+ * a turn ends, for a compaction since it was last read (`Scribe.windowRead`). A step also
+ * learns whether a compaction is near (`Scribe.isNearCompaction`), and as a
+ * turn begins the count it comes at is read again. True when the step should
+ * have Scribe look now: the conversation was just compacted, or is about to
+ * be. Never fails, and asks nothing of Fylgja.
  *
- * A compaction since Claude last answered leaves the context window with no
- * reading until the next answer, so the window is read here, from the
- * engine, while Scribe has a compaction to look out for. Never fails.
+ * @param step the step's place in its turn; undefined for a prompt or a turn's end
+ * @param isBetween whether it is read between turns: as a prompt is sent, or at a turn's end
+ */
+async function watchWindow($: EngineInterface, held: Held, report: Report, step?: number, isBetween = false): Promise<boolean> {
+  const { session, scribe } = held
+
+  if (!Scribe.watchesWindow(scribe)) {
+    return false
+  }
+
+  try {
+    const { context } = await $.session.usage()
+    const isCompacted = await Scribe.windowRead(scribeHostOf($, session, report), scribe, context.tokens !== undefined, isBetween)
+
+    if (step === undefined) {
+      return isCompacted
+    }
+
+    if (step === 0) {
+      const { breakdown } = (await $.session.usage({ breakdown: 'summary' })).context
+
+      Scribe.compactsAt(scribe, breakdown === undefined || !breakdown.isAutoCompactEnabled ? null : (breakdown.autoCompactThreshold ?? null))
+    }
+
+    return isCompacted || Scribe.isNearCompaction(scribe, context.tokens)
+  } catch (error) {
+    report('error', { component: 'context', kind: 'threw', cause: Telemetry.causeOf(error) })
+
+    return false
+  }
+}
+
+/**
+ * What a prompt being sent carries beside it for Claude: what it came with,
+ * and the records the session kept while they are owed after a compaction
+ * (see `Scribe.handed`); undefined when it takes nothing more. A slash
+ * command takes nothing. Never fails.
  */
 async function carriedWith(
   $: EngineInterface,
@@ -577,27 +614,15 @@ async function carriedWith(
   report: Report,
   e: { command?: unknown; context?: readonly string[] },
 ): Promise<readonly string[] | undefined> {
-  const { session, scribe } = held
-
   if (e.command !== undefined) {
     return undefined
   }
 
-  try {
-    if (Scribe.watchesWindow(scribe)) {
-      const usage = await $.session.usage()
+  await watchWindow($, held, report, undefined, true)
 
-      Scribe.windowRead(scribeHostOf($, session, report), scribe, usage.context.tokens !== undefined)
-    }
+  const text = Scribe.handed(held.scribe, held.session.isHere)
 
-    const text = Scribe.handed(scribe, session.isHere)
-
-    return text === undefined ? undefined : [...(e.context ?? []), text]
-  } catch (error) {
-    report('error', { component: 'context', kind: 'threw', cause: Telemetry.causeOf(error) })
-
-    return undefined
-  }
+  return text === undefined ? undefined : [...(e.context ?? []), text]
 }
 
 /** The prompt box as the search view reaches it: read as it stands, and written at the cursor alone. */
@@ -662,11 +687,11 @@ function ring($: EngineInterface, session: Session.Session, scribe: Scribe.Scrib
  * is added to what Claude reads, and no prompt waits for it.
  *
  * The one exception is a conversation that was compacted. The summary that
- * takes its place may or may not hold what was decided in it, so the first
- * prompt after it takes the records Scribe kept in the session along, once,
- * as one block of the plugin's own that Claude reads beside the prompt and
- * the developer never sees (see `scribe/carry.ts`). The summary is left as
- * Claude Code made it.
+ * takes its place may or may not hold what was decided in it, so the
+ * records Scribe kept in the session go to Claude once after it, as one
+ * block of the plugin's own that Claude reads beside the next tool result or
+ * prompt and the developer never sees (see `scribe/carry.ts`). The summary is
+ * left as Claude Code made it.
  *
  * Every hook here works the same where an organization seats its own guard
  * ahead of a person's plugins. Such a guard sends the events it keeps out of
@@ -942,11 +967,19 @@ export function register(on: On, options: PluginOptions = {}): void {
   //
   // The first prompt after the conversation was compacted, whoever sent it,
   // takes the records the session kept along, once, as what Claude reads
-  // beside it (see `Scribe.handed`); a slash command does not.
+  // beside it (see `Scribe.handed`), unless a tool result took them first; a
+  // slash command does not. They are owed until the prompt has entered: one
+  // that a hook beneath turns back leaves them for the next.
   on('prompt.submit', async ($, e, next) => {
     await caughtUp($, held)
 
-    const context = await carriedWith($, held, report, e)
+    const entered = (done: PromptSubmitResult, context: readonly string[] | undefined): PromptSubmitResult => {
+      if (context !== undefined && done.drop === undefined) {
+        Scribe.takenIn(scribe)
+      }
+
+      return done
+    }
 
     if (e.origin.kind !== 'composer') {
       // A prompt sent from the person's phone or browser is theirs too.
@@ -959,7 +992,9 @@ export function register(on: On, options: PluginOptions = {}): void {
         }
       }
 
-      return next(context === undefined ? e : { ...e, context })
+      const context = await carriedWith($, held, report, e)
+
+      return entered(await next(context === undefined ? e : { ...e, context }), context)
     }
 
     const text = restored(draft.known, e.text)
@@ -975,7 +1010,9 @@ export function register(on: On, options: PluginOptions = {}): void {
       // The prompt goes on as it was entered.
     }
 
-    return text === e.text && context === undefined ? next(e) : next({ ...e, text, ...(context === undefined ? {} : { context }) })
+    const context = await carriedWith($, held, report, e)
+
+    return entered(await (text === e.text && context === undefined ? next(e) : next({ ...e, text, ...(context === undefined ? {} : { context }) })), context)
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'UserMessage' }, ($, e, next) => {
@@ -1057,6 +1094,34 @@ export function register(on: On, options: PluginOptions = {}): void {
     async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server),
   )
 
+  // A compaction in the middle of a turn: the records the session kept go
+  // to Claude with the first result of a tool of the main conversation's
+  // that ends after it, as what Claude reads beside that result, unless a
+  // prompt took them first. The request a step had already made when the
+  // compaction was seen cannot take them: nothing a person's plugin may hook
+  // adds to it. The call itself, and its result, are handed on as they came.
+  on('tool.call', async ($, e, next) => {
+    const done = await next(e)
+
+    if (done.deny !== undefined || e.agentId !== undefined) {
+      return done
+    }
+
+    try {
+      const text = Scribe.handed(scribe, session.isHere)
+
+      if (text === undefined) {
+        return done
+      }
+
+      Scribe.takenIn(scribe)
+
+      return { ...done, context: [...(done.context ?? []), text] }
+    } catch {
+      return done
+    }
+  })
+
   // A step of a turn is the first hook Claude Code waits on after a prompt.
   // Who is signed in, and the references of the rows on screen, are asked
   // about as the step begins and waited for a moment after it, so the step
@@ -1084,9 +1149,9 @@ export function register(on: On, options: PluginOptions = {}): void {
       if (e.agentId === undefined) {
         // Claude is working from here until the turn ends, whoever began the turn.
         Scribe.began(scribe)
-        void looked
-          .catch(() => undefined)
-          .then(() => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe, e.index))
+        // A compaction just made, or about to be, has Scribe look now, whatever the developer's setting.
+        void Promise.all([looked.catch(() => undefined), watchWindow($, held, report, e.index)])
+          .then(([, isDue]) => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe, e.index, isDue))
           .catch(() => undefined)
           .finally(() => refresh($, session, noteSignIn))
       }
@@ -1145,11 +1210,6 @@ export function register(on: On, options: PluginOptions = {}): void {
       void serve(calls, live, callerOf($))
 
       if (e.agentId === undefined) {
-        // Claude answered: from here a context window with no reading means a compaction since.
-        if (!e.isAborted && e.reason !== 'error') {
-          Scribe.answered(scribe)
-        }
-
         // A session that has moved is in another project; what that one holds is looked at before anything else.
         Session.located(session, await $.session.cwd())
       }
@@ -1158,6 +1218,8 @@ export function register(on: On, options: PluginOptions = {}): void {
 
       if (e.agentId === undefined) {
         await Scribe.completed(scribeHostOf($, session, report, live), scribe)
+        // Claude answered: the window's reading now is what a later one is told from.
+        await watchWindow($, held, report, undefined, true)
       } else {
         Scribe.reported(scribe, e.agentId, e.answer, e.isAborted ? 'aborted' : e.reason)
       }

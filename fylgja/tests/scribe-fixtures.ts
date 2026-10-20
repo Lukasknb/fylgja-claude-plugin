@@ -97,6 +97,8 @@ type Call = { tool: string; args: Record<string, unknown> }
 export type Asked = { model: string; prompt: string; system: string; effort: unknown; timeoutMs: unknown }
 
 export type StageOptions = {
+  /** Why a hook beneath turns the prompt being sent back, read for each one; undefined, it enters. */
+  turnsBack?: () => string | undefined
   /** What Scribe's model answers, in order; the last is repeated. "Nothing" by default. A function is handed the request. */
   replies?: readonly (string | ((asked: Asked, clock: MockClock) => string | undefined | Promise<string | undefined>))[]
   /** What each Fylgja tool answers; a tool not named answers as the server would for an ordinary call. */
@@ -170,11 +172,12 @@ export type Stage = {
   /** What each of those prompts carried beside it for Claude, in the same order; undefined for one that carried nothing. */
   beside: (readonly string[] | undefined)[]
   /**
-   * The context window as the engine reads it: whether it has a reading.
-   * A turn's end gives it one, and a test that compacts the conversation
+   * The context window as the engine reads it: whether it has a reading,
+   * and if so how many tokens, and the count Claude Code compacts at. A
+   * turn's end gives it a reading, and a test that compacts the conversation
    * takes it away, as a compaction does until Claude next answers.
    */
-  window: { hasReading: boolean }
+  window: { hasReading: boolean; tokens: number; compactsAt: number }
   statuses: (string | undefined)[]
   /** What is kept on this machine. */
   kept: Map<string, unknown>
@@ -214,7 +217,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const runs: (readonly string[])[] = []
   const sent: string[] = []
   const beside: (readonly string[] | undefined)[] = []
-  const window = { hasReading: true }
+  const window = { hasReading: true, tokens: 1000, compactsAt: 160_000 }
   const statuses: (string | undefined)[] = []
   const kept = new Map<string, unknown>(Object.entries(options.kept ?? {}))
   const rows: Row[] = []
@@ -228,6 +231,12 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('prompt.submit', ($, e) => {
+    const drop = options.turnsBack?.()
+
+    if (drop !== undefined) {
+      return { drop }
+    }
+
     sent.push(e.text)
     beside.push(e.context)
 
@@ -245,7 +254,12 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
     return { text: e.answer }
   })
-  on('session.usage', () => ({ value: { context: window.hasReading ? { tokens: 1000, window: 200_000, percent: 1 } : { window: 200_000 } } as never }))
+  on('session.usage', ($, e) => {
+    const breakdown = e.breakdown === undefined ? {} : { breakdown: { isAutoCompactEnabled: true, autoCompactThreshold: window.compactsAt } }
+    const reading = window.hasReading ? { tokens: window.tokens, percent: Math.round((window.tokens / 200_000) * 100) } : {}
+
+    return { value: { context: { window: 200_000, ...reading, ...breakdown } } as never }
+  })
   // The model's step: it asks for the tool calls a test named with `stepping`, or for none.
   // eslint-disable-next-line require-yield
   on('turn.step', async function* ($, e) {

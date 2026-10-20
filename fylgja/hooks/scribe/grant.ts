@@ -77,12 +77,45 @@ export function isOwnCall(e: Checked, raisedBy: string | undefined, server: stri
  */
 export const REPORT_TOOL = /^mcp__(?:plugin_fylgja_fylgja|fylgja)__report_events$/
 
-/** What the permission check answers, as much of it as is read here. */
-export type Verdict = { decision: 'allow' | 'ask' | 'deny'; reason?: string }
+/**
+ * What the permission check answers, as much of it as is read here: the
+ * decision, and what stands behind an ask or puts it to whom. Claude Code
+ * names a settings rule, a classic hook, a setting whose own check asked or
+ * an organization's ceiling on the tool, and the one who answers the ask (a
+ * host, or a person a hook put it to); newer releases name more of them. A
+ * ceiling of `allow` caps nothing.
+ */
+export type Verdict = {
+  decision: 'allow' | 'ask' | 'deny'
+  reason?: string
+  rule?: string
+  hook?: string
+  setting?: string
+  ceiling?: string
+  decider?: string
+}
+
+/**
+ * Whether an ask is the mode's own: nothing stands behind it and nobody is
+ * named to answer it. Only such an ask is the plugin's to answer for its own
+ * calls. Any other is somebody's, the person's own rule or an organization's,
+ * and is left to whoever it is put to, with or without a guard ahead of the
+ * plugin, which would hold it all the same.
+ */
+function isPlainAsk(verdict: Verdict): boolean {
+  return (
+    verdict.decision === 'ask' &&
+    verdict.rule === undefined &&
+    verdict.hook === undefined &&
+    verdict.setting === undefined &&
+    (verdict.ceiling === undefined || verdict.ceiling === 'allow') &&
+    verdict.decider === undefined
+  )
+}
 
 /**
  * The verdict this plugin gives a call being checked: its own call is let
- * through where the engine would have asked, and every other verdict is
+ * through where the mode would have asked, and every other verdict is
  * handed back as it came. A refusal is never turned into anything else, nor
  * reworded: a refusal from beneath of a call of the reporting tool that is
  * not the plugin's own stands in its own words.
@@ -99,7 +132,5 @@ export function verdictFor<V extends Verdict>(
     return { ...verdict, decision: 'deny', reason: 'Fylgja: this tool is the plugin’s own, for its reports about itself' }
   }
 
-  return verdict.decision === 'ask' && isOwn
-    ? { ...verdict, decision: 'allow', reason: 'Fylgja: the plugin’s own call to its own server' }
-    : verdict
+  return isPlainAsk(verdict) && isOwn ? { ...verdict, decision: 'allow', reason: 'Fylgja: the plugin’s own call to its own server' } : verdict
 }

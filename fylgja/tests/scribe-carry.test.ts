@@ -67,7 +67,11 @@ function beneath(on: On, keep = 0, refuses?: () => string | undefined): Compacti
 
     compactions.push(e as Compaction)
 
-    return (reason === undefined ? { messages: [SUMMARY, ...e.messages.slice(e.messages.length - keep)] } : { skip: reason }) as never
+    // Each summary of its own: the first is `SUMMARY`.
+    const made = compactions.filter(one => one.trigger !== 'precompute' && one.agentId === undefined).length
+    const summary = made <= 1 ? SUMMARY : { ...SUMMARY, text: `${SUMMARY.text} (summary ${made})` }
+
+    return (reason === undefined ? { messages: [summary, ...e.messages.slice(e.messages.length - keep)] } : { skip: reason }) as never
   })
 
   return compactions
@@ -89,6 +93,25 @@ async function compact($: Engine, set: Stage, trigger: 'manual' | 'auto' | 'plug
   set.window.hasReading = false
 
   return done.messages as readonly Row[]
+}
+
+/** A step of the turn under way begins, as Claude Code makes its next request, and what it starts is let finish. */
+async function stepped($: Engine, set: Stage, index: number): Promise<void> {
+  const stream = $.turn.step({ turnId: 'turn-under-way', index, model: 'claude-opus', messageCount: set.rows.length })
+
+  for await (const chunk of stream) {
+    void chunk
+  }
+
+  await stream.result
+  await set.clock.settle()
+}
+
+/** A tool of the main conversation runs, and what Claude reads beside its result. */
+async function toolRan($: Engine): Promise<readonly string[] | undefined> {
+  const done = await $.tool.call({ tool: 'Read', file_path: `${ROOT}/${FILE}` } as never)
+
+  return 'context' in done ? (done.context as readonly string[] | undefined) : undefined
 }
 
 /** What the last prompt sent carried beside it for Claude. */
@@ -191,6 +214,41 @@ describe('what a compacted conversation is given', () => {
     })
   })
 
+  test('a prompt that a hook beneath turns back does not take it: the prompt after it does', async ($, on) => {
+    let isTurnedBack = false
+
+    beneath(on)
+    const set = stage(on, { replies: [TWO, NOTHING], turnsBack: () => (isTurnedBack ? 'not now' : undefined) })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'ok')
+    await compact($, set)
+    isTurnedBack = true
+    await send($, 'and log every retry at warn')
+    isTurnedBack = false
+    await turn($, set, ...MORE)
+
+    expect(beside(set)).toEqual([BOTH])
+  })
+
+  test('a conversation that was compacted, loaded afresh (as a resume in another process is), has the block go with its next prompt', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
+
+    await compact($, set)
+    await turn($, set, ...MORE)
+
+    expect(beside(set)).toEqual([BOTH])
+
+    await set.clock.settle()
+    await $.session.start(START)
+    await set.clock.settle()
+    await turn($, set, dev('and on'), claude('Sure.'))
+
+    expect(beside(set)).toEqual([BOTH])
+  })
+
   test('a slash command does not take it: the prompt after it does', async ($, on) => {
     beneath(on)
     const set = await kept($, on)
@@ -267,22 +325,71 @@ describe('what a compacted conversation is given', () => {
     expect((beside(set)?.[0] ?? '').split('\n').filter(line => line.startsWith('<<< ')).map(line => line.slice(14, 50))).toEqual([idOf(103), SECOND, FIRST])
   })
 
-  test('a compaction in the middle of a turn is seen by the look at its end, and is counted once; the next prompt carries the block', async ($, on) => {
+  test('a compaction in the middle of a turn is seen as the next step begins, and is counted once; the first tool result after it carries the block, and no prompt after that', async ($, on) => {
     beneath(on, 1)
+    on('tool.call', () => ({ result: 'read', text: 'read' }) as never)
     const set = await kept($, on)
 
     await send($, 'switch the lock to postgres advisory locks, redis is going away')
     set.rows.push(dev('switch the lock to postgres advisory locks, redis is going away'), claude('MIDWAY-REPLY: rewriting acquire.', edit(FILE)))
     await compact($, set, 'auto')
+    await stepped($, set, 1)
+
+    expect(await toolRan($)).toEqual([BOTH])
+    expect(await toolRan($), 'once').toBeUndefined()
+
     await finish($, set, claude('AFTER-REPLY: the lock is on postgres now.', edit(FILE)))
     await turn($, set, ...MORE)
 
-    expect(beside(set)).toEqual([BOTH])
-    expect(set.events('compaction').map(one => one.props)).toEqual([{ is_scribe_running: true, records_carried: 2 }])
-
-    await turn($, set, dev('and on'), claude('Sure.'))
-
     expect(beside(set)).toBeUndefined()
+    expect(set.events('compaction').map(one => one.props)).toEqual([{ is_scribe_running: true, records_carried: 2 }])
+  })
+
+  test('a compaction right after a prompt, before the turn’s first request, is seen as that step begins', async ($, on) => {
+    beneath(on, 1)
+    on('tool.call', () => ({ result: 'read', text: 'read' }) as never)
+    const set = await kept($, on)
+
+    await send($, 'and log every retry at warn')
+    set.rows.push(dev('and log every retry at warn'))
+    await compact($, set, 'auto')
+    await stepped($, set, 0)
+
+    expect(await toolRan($)).toEqual([BOTH])
+  })
+
+  test('a rewind to the first prompt, sent again in other words, is no compaction, though the window has no reading', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
+
+    // The conversation goes back to before its first prompt, and another is sent in its place.
+    set.rows.splice(0, set.rows.length)
+    set.window.hasReading = false
+    await send($, 'lock the retry queue with postgres instead')
+    set.rows.push(dev('lock the retry queue with postgres instead'))
+    await stepped($, set, 0)
+    await finish($, set, claude('Done.', edit(FILE)))
+    await turn($, set, ...MORE)
+
+    expect(set.beside.filter(one => one !== undefined)).toEqual([])
+    expect(set.events('compaction')).toEqual([])
+  })
+
+  test('a step near the count Claude Code compacts at has Scribe look then, so a compaction after it takes no row unread', async ($, on) => {
+    beneath(on, 1)
+    const set = await kept($, on, [TWO, NOTHING, NOTHING, NOTHING])
+
+    await send($, 'switch the lock to postgres advisory locks, redis is going away')
+    set.rows.push(dev('switch the lock to postgres advisory locks, redis is going away'), claude('NEAR-REPLY: rewriting acquire.', edit(FILE)))
+    set.window.tokens = 150_000
+    await stepped($, set, 0)
+
+    expect(set.asked, 'a look before the compaction').toHaveLength(2)
+    expect(told(set)).toMatch('NEAR-REPLY')
+
+    await stepped($, set, 1)
+
+    expect(set.asked, 'one such look a turn').toHaveLength(2)
   })
 
   test('a compaction between turns is seen by the prompt after it, and is counted once', async ($, on) => {
@@ -487,7 +594,7 @@ describe('what Scribe holds across a compaction', () => {
 
   test('a compaction in the middle of a turn: the developer’s prompt that went into the summary and the rows still there are read by the next look, once', async ($, on) => {
     beneath(on, 1)
-    const set = await kept($, on)
+    const set = await kept($, on, [TWO, NOTHING, NOTHING, NOTHING])
 
     // A turn under way: the developer's prompt and Claude's first reply are in the conversation, and no look has been through them.
     await send($, 'switch the lock to postgres advisory locks, redis is going away')
@@ -497,18 +604,25 @@ describe('what Scribe holds across a compaction', () => {
 
     expect(set.asked, 'the compaction asks no model and waits for none').toHaveLength(1)
 
-    await finish($, set, claude('AFTER-REPLY: the lock is on postgres now.', edit(FILE)))
+    // Seen as the next step begins: Scribe looks right then.
+    await stepped($, set, 1)
+
+    expect(set.asked).toHaveLength(2)
+
+    set.rows.push(claude('AFTER-REPLY: the lock is on postgres now.', edit(FILE)))
 
     const lines = told(set)
 
-    expect(set.asked).toHaveLength(2)
     expect(times(lines, '[developer] switch the lock to postgres advisory locks, redis is going away')).toBe(1)
     expect(times(lines, 'MIDWAY-REPLY')).toBe(1)
-    expect(times(lines, 'AFTER-REPLY')).toBe(1)
     expect(lines.indexOf('[developer] switch the lock'), 'in the order they were said').toBeLessThan(lines.indexOf('MIDWAY-REPLY'))
-    expect(lines.indexOf('MIDWAY-REPLY')).toBeLessThan(lines.indexOf('AFTER-REPLY'))
     expect(lines).not.toMatch('lock the retry queue with redis')
     expect(lines, 'and the summary is nobody’s word').not.toMatch('being continued from a previous conversation')
+
+    await finish($, set)
+
+    expect(times(told(set), 'AFTER-REPLY'), 'what came after is read at the turn’s end').toBe(1)
+    expect(told(set)).not.toMatch('MIDWAY-REPLY')
 
     await turn($, set, ...MORE)
 

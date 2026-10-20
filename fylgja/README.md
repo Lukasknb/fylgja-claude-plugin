@@ -21,8 +21,8 @@ quiet touches that make working with it feel at home.
   you. It runs beside the conversation, never in it.
 - **A compaction does not lose what was decided.** Once a conversation
   has been compacted, the records Scribe kept in the session go to Claude
-  with your next prompt, once, so Claude still knows what you decided and
-  why.
+  once, with the next tool result or your next prompt, so Claude still
+  knows what you decided and why.
 - **Search Fylgja without leaving the prompt.** `/fylgja-search` finds what
   was decided, by what it says, in a window of your own: Claude does not
   see what you found. Cite a record and its reference goes into your
@@ -890,8 +890,9 @@ author, against a stand-in knowledge base, with nobody at the keys.
 A compaction puts a summary in the conversation's place: when you type
 `/compact`, when Claude Code reaches its threshold, or when another plugin
 asks for one. Whether a decision of the session is in that summary is the
-summarizer's to say. So the first prompt after a compaction takes one
-block along, what Claude reads beside your prompt and you do not see:
+summarizer's to say. So once after a compaction the plugin hands Claude one
+block, what Claude reads beside your prompt or a tool's result and you do
+not see:
 
 ```
 This conversation was compacted. Before that, this session saved 2
@@ -916,20 +917,27 @@ that id.
 
 - **When Claude is given it.** Not before the first compaction: until
   then Claude has the conversation itself. Once after each compaction,
-  with the first prompt that follows it, whoever sent it (a slash command
-  does not take it; the prompt after it does). From then on it is part of
-  that prompt in the conversation, and the next compaction summarizes it
-  with the rest.
+  with whichever comes first: the result of a tool of the main
+  conversation's that ends after the compaction was seen, or a prompt,
+  whoever sent it (a slash command does not take it). It counts as given
+  only once the prompt has entered: a prompt a hook turns back leaves it
+  for the next. The request Claude Code had already made when the
+  compaction was seen cannot take it: nothing a plugin may hook adds to
+  that request, so after a compaction in the middle of a turn it reaches
+  Claude one step later, with the next tool result. From then on it is
+  part of the conversation, and the next compaction summarizes it with
+  the rest. A conversation that was compacted and is loaded afresh (a
+  resume, `/reload-plugins`) gives it once more.
 - **How the plugin knows.** Claude Code tells of a compaction only to
   hooks that an organization's guard may keep a person's plugins out of
-  (below), so the plugin learns it from what it can always see. After a
-  compaction Claude Code has no reading of the context window until
-  Claude next answers, so a prompt that finds none after Claude has
-  answered is the first after a compaction: that is how a `/compact`
-  between turns is told. A compaction in the middle of a turn puts its
-  summary where the conversation's first row was, and Scribe's look at
-  the turn's end finds it there; the block then goes with your next
-  prompt. A compaction seen both ways counts once.
+  (below), so the plugin learns it from what it can always see, as a
+  prompt is sent, as each step of a turn begins and as a turn ends, and
+  only from two signs together: the context window had a reading and has
+  none now (Claude Code has none after a compaction until Claude next
+  answers), and the conversation's first row is a summary in place of
+  what it was, not a prompt of yours. Either alone is no compaction: a
+  rewind to your first prompt changes the first row, and the reading may
+  go for other reasons. A compaction seen counts once.
 - **What is in it.** The records that stand when it is sent, each quoted
   in a fence: its sentence as it reads then (a record you reworded is in
   your words), its reason when it has one, at most four of its files,
@@ -957,14 +965,17 @@ that id.
   compaction change nothing the plugin looks at, and neither does a
   compaction that was called off.
 - **What Scribe keeps.** Everything: its records, the count on the mark
-  and the window are the session's, not the conversation's. Its next look
-  begins at your prompt that the compaction kept, or else right after the
-  summary, so what came since is read once and nothing is read twice. A
-  prompt of yours that went into the summary before any look had read it
-  is still read, ahead of the rest. Claude's own rows that went into the
-  summary before a look had read them are not: a look comes at every
-  turn's end and, unless you set it otherwise, every few steps, so that
-  is at most the steps since the last look.
+  and the window are the session's, not the conversation's. A step of a
+  turn that finds the context window past 85% of the count Claude Code
+  compacts at has Scribe look right then, once a turn, whatever you set,
+  so a compaction after it takes no row unread; one that finds the
+  conversation just compacted has Scribe look right then too. The next
+  look begins at your prompt that the compaction kept, or else right
+  after the summary, so what came since is read once and nothing is read
+  twice. A prompt of yours that went into the summary before any look had
+  read it is still read, ahead of the rest. Claude's own rows that went
+  into the summary before any look had read them are not: that is at most
+  the steps since the last look, the near-threshold one included.
 - **`/clear`.** You cleared on purpose. Scribe starts over with the
   conversation: the mark is at rest, the window lists nothing, no block
   of the cleared conversation's records goes to Claude, and rows it had
@@ -1064,7 +1075,9 @@ that id.
   once more without your plugins; nothing stands behind the ask but your
   mode, so the allow stands, and Claude Code may say that the plugin's
   `tool.check` hook was skipped. There is no other way to spare you the
-  question. The plugin's refusal of its reporting tool to anyone but
+  question. Only such a plain ask is answered: an ask a rule of yours, a
+  classic hook, a setting, an organization's ceiling or a named decider
+  stands behind is left as it came, with or without a guard. The plugin's refusal of its reporting tool to anyone but
   itself only ever tightens a verdict, and leaves a refusal from beneath
   in its own words, so no check is run again for it.
 
@@ -1155,15 +1168,14 @@ the start of its refusal and never the words after it: `alternatives_too_many`,
 ## What it never does
 
 - It adds nothing to the conversation, and changes nothing Claude does. No
-  context is attached to a prompt (but the one after a compaction) or a
-  tool call, no row is added to the
+  context is attached to a prompt or a tool's result (but the one first
+  after a compaction), no row is added to the
   conversation, no prompt is sent for you, no tool is offered to Claude, no
   agent is started, and no prompt, reply, tool call or summary is
   rewritten. The one change to a prompt is that each chip is put back as
   the reference you pasted. Two things from Scribe reach Claude: what you
-  send after pressing `Tell Claude`, and, with the first prompt after a
-  compaction, the block of the session's records (see "Across a
-  compaction").
+  send after pressing `Tell Claude`, and, once after a compaction, the
+  block of the session's records (see "Across a compaction").
 - It never delays a prompt. Putting the references back needs no network,
   and taking down an offer you typed past needs none either. If either
   fails, the prompt is sent as typed. The lookup for a message's chip is
@@ -1181,8 +1193,9 @@ the start of its refusal and never the words after it: `alternatives_too_many`,
 - It lets through, without asking you, exactly its own calls of nine
   tools (`whoami`, `recall`, `search`, `open`, `resolve`, `remember`,
   `amend_memory`, `attach_commit`, and `report_events` for the events
-  about itself) on the Fylgja server this plugin declares, and never past
-  a rule of yours or your organization's that refuses them. Claude's calls
+  about itself) on the Fylgja server this plugin declares, where only your
+  mode would have asked: never past a rule, hook, setting or ceiling of
+  yours or your organization's that refuses them or asks. Claude's calls
   to the very same tools, and every other tool call, are decided as they
   always were. Only the plugin's own connection (`plugin:fylgja:fylgja`)
   counts: the same address configured anywhere else is never covered, and

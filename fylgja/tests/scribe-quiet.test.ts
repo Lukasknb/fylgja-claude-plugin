@@ -366,6 +366,15 @@ describe('Scribe’s own calls to Fylgja', () => {
     expect(verdictFor({ decision: 'ask' }, OWN, 'fylgja', SERVER).decision).toBe('allow')
   })
 
+  test('only the mode’s own ask is turned into an allow: an ask a rule, a hook, a setting, an organization’s ceiling or a named decider stands behind is left as it came', () => {
+    for (const behind of [{ rule: 'mcp__plugin_fylgja_fylgja__remember' }, { hook: 'PreToolUse' }, { setting: 'permissions.blockReadsOutsideWorkingDirectories' }, { ceiling: 'ask' }, { decider: 'host' }]) {
+      expect(verdictFor({ decision: 'ask', ...behind }, OWN, 'fylgja', SERVER), JSON.stringify(behind)).toEqual({ decision: 'ask', ...behind })
+    }
+
+    expect(verdictFor({ decision: 'ask', ceiling: 'allow' }, OWN, 'fylgja', SERVER).decision, 'a ceiling of allow caps nothing').toBe('allow')
+    expect(verdictFor({ decision: 'ask', reason: 'the mode asks' }, OWN, 'fylgja', SERVER).decision).toBe('allow')
+  })
+
   test('where the same address is configured outside the plugin, the engine answers that entry’s name, and nothing of it is let through', () => {
     // A repository's `.mcp.json` can name the plugin's address with any account's token.
     for (const theirs of ['fylgja', 'kb']) {
