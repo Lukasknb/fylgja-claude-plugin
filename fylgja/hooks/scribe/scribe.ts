@@ -2216,7 +2216,12 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
  * decision about files, on a server that does not take it, and whenever git
  * does not say at once.
  */
-async function baseFor(host: ScribeHost, scribe: Scribe, who: Identity, draft: Draft): Promise<Base | undefined> {
+async function baseFor(
+  host: ScribeHost,
+  scribe: Scribe,
+  who: Identity,
+  draft: Pick<Draft, 'kind' | 'repo' | 'anchors'>,
+): Promise<Base | undefined> {
   if (!scribe.takesBase || draft.kind !== 'decision' || draft.anchors.length === 0 || draft.repo === null) {
     return undefined
   }
@@ -3069,10 +3074,16 @@ async function askGit(host: ScribeHost, scribe: Scribe): Promise<void> {
  * turn touched that carry out a decision recorded before they existed. The
  * record's own anchors are kept and the new ones added, up to what the
  * server takes. Nothing is shown for it: the record says the same.
+ *
+ * A decision goes with the commit the working tree of those files is at
+ * now: it was written before its code, and this is the first commit the
+ * code it describes can be read against. A server from before it took the
+ * commit with a fix is asked again without it.
  */
 async function anchorMore(
   host: ScribeHost,
   scribe: Scribe,
+  who: Identity,
   id: string,
   anchors: readonly Draft['anchors'][number][],
 ): Promise<void> {
@@ -3098,7 +3109,16 @@ async function anchorMore(
     return
   }
 
-  const done = await tried(host, scribe, 'amend_memory', { atom_id: id, op: 'fix', anchors: all }).catch(() => undefined)
+  const args = { atom_id: id, op: 'fix', anchors: all }
+  const base = await baseFor(host, scribe, who, { kind: own.kind, repo: own.repo ?? null, anchors: fresh })
+  let done = await tried(host, scribe, 'amend_memory', base === undefined ? args : { ...args, ...base }).catch(() => undefined)
+
+  if (done !== undefined && done.answer === undefined && base !== undefined && isUnknownBase(done.refusal ?? '')) {
+    scribe.takesBase = false
+    host.debug('Scribe: Fylgja does not take the commit a decision was written at here; decisions are written without it in this session')
+    done = await tried(host, scribe, 'amend_memory', args).catch(() => undefined)
+  }
+
   const outcome = done?.answer?.outcome
 
   if (done?.answer === undefined && isGone(done?.refusal)) {
@@ -3133,7 +3153,7 @@ async function apply(
   }
 
   for (const late of verdict.anchored ?? []) {
-    await anchorMore(host, scribe, late.id, late.anchors)
+    await anchorMore(host, scribe, who, late.id, late.anchors)
   }
 
   for (const id of verdict.withdrawn) {

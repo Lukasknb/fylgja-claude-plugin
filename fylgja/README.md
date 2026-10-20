@@ -450,10 +450,13 @@ card around them.
   that tree (a worktree or a repository checked out inside another is
   its own), without taking its lock or starting a file monitor, a second
   and a half at most; when it does not answer, or the tree has no commit
-  yet, the decision is written without them. A commit made at that very
+  yet, the decision is written without them. A decision recorded before
+  its code existed is given them when its code is added as its place:
+  the commit that code's working tree is at then, and whether those
+  files had changes not yet committed. A commit made at that very
   commit never marks the decision as one whose code changed. A Fylgja
-  server from before it took them gets the decision without them, and
-  is not sent them again for the session.
+  server from before it took them gets the decision, or its places,
+  without them, and is not sent them again for the session.
 - **It notes the commit.** After a `git commit` in this repository, the
   commit is attached to what the session recorded, Claude's own records
   included. Only a commit the command itself shows to be this repository's:

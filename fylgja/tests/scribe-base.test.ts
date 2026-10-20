@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { GIT_TIMEOUT_MS } from '../hooks/scribe/git'
-import { answer } from './fixtures'
+import { answer, idOf } from './fixtures'
 import { claude, decision, dev, edit, REPO, ROOT, stage, START, turn, use, verdict } from './scribe-fixtures'
 import type { StageOptions } from './scribe-fixtures'
 
@@ -202,6 +202,63 @@ describe('the commit a decision was written at', () => {
     expect(set.of('remember').map(args => [args.content, args.base_sha])).toEqual([
       ['Use A.', SHA],
       ['Use B.', SHA],
+    ])
+  })
+})
+
+describe('the commit a decision written before its code is given with that code', () => {
+  const PLAN = 'docs/queue/plan-lock.md'
+  const OWN = idOf(101)
+  const PLANNED = decision({ anchors: [{ path: PLAN }] })
+  const pairs = JSON.stringify({ outcome: 'act', records: [], anchor: [{ id: OWN, paths: [FILE] }] })
+  /** A git at `SHA` that never had the plan, and prints `changed` for the files asked about. */
+  const gitWith =
+    (changed: string): NonNullable<StageOptions['git']> =>
+    args =>
+      args[0] === 'rev-parse'
+        ? { exitCode: 0, stdout: `${SHA}\n` }
+        : args.some(arg => arg.startsWith('--ignored'))
+          ? { exitCode: 0, stdout: args.includes(PLAN) ? `?? ${PLAN}\0` : '' }
+          : { exitCode: 0, stdout: changed }
+  const PLANNING = [dev(`plan the queue lock ${'x'.repeat(260)}`), claude('Planned.', use('Write', { file_path: `${ROOT}/${PLAN}`, content: '# lock' }))]
+  const BUILDING = [dev('now build the lock'), claude('Built.', edit(FILE))]
+
+  test('the code added later goes with the commit its tree is at, and whether it was changed there', async ($, on) => {
+    const set = stage(on, { replies: [verdict({ records: [PLANNED] }), pairs], git: gitWith(` M ${FILE}\n`) })
+
+    await $.session.start(START)
+    await turn($, set, ...PLANNING)
+
+    expect(set.of('remember')[0]?.base_sha, 'a decision about no code has no commit yet').toBeUndefined()
+
+    await turn($, set, ...BUILDING)
+
+    expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'fix', anchors: [{ path: FILE }], base_sha: SHA, base_dirty: true }])
+  })
+
+  test('a server that does not take the commit with a fix is given the code without it', async ($, on) => {
+    const untaken = {
+      content: [
+        {
+          type: 'text',
+          text: 'amend_memory was called with invalid arguments — an argument this tool does not take (it takes: alternatives, anchors, atom_id, content, detail, op, reason_status, remove_anchors)',
+        },
+      ],
+      isError: true,
+    }
+    const set = stage(on, {
+      replies: [verdict({ records: [PLANNED] }), pairs],
+      tools: { amend_memory: args => ('base_sha' in args ? untaken : answer({ atom_id: OWN, outcome: 'fixed' })) },
+      git: gitWith(''),
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...PLANNING)
+    await turn($, set, ...BUILDING)
+
+    expect(set.of('amend_memory')).toEqual([
+      { atom_id: OWN, op: 'fix', anchors: [{ path: FILE }], base_sha: SHA, base_dirty: false },
+      { atom_id: OWN, op: 'fix', anchors: [{ path: FILE }] },
     ])
   })
 })
