@@ -926,8 +926,9 @@ that id.
   that request, so after a compaction in the middle of a turn it reaches
   Claude one step later, with the next tool result. From then on it is
   part of the conversation, and the next compaction summarizes it with
-  the rest. A conversation that was compacted and is loaded afresh (a
-  resume, `/reload-plugins`) gives it once more.
+  the rest. The session log says whether it was given since the latest
+  compaction, so a conversation loaded afresh (a resume, `/reload-plugins`,
+  a background job) gives it only if it was not.
 - **How the plugin knows.** Claude Code tells of a compaction only to
   hooks that an organization's guard may keep a person's plugins out of
   (below), so the plugin learns it from what it can always see, as a
@@ -937,7 +938,10 @@ that id.
   answers), and the conversation's first row is a summary in place of
   what it was, not a prompt of yours. Either alone is no compaction: a
   rewind to your first prompt changes the first row, and the reading may
-  go for other reasons. A compaction seen counts once.
+  go for other reasons. Where the plugin has seen no reading at all yet
+  (a resumed conversation, before Claude first answers in it), the first
+  row alone, against the one the session log or the first prompt showed,
+  tells it. A compaction seen counts once.
 - **What is in it.** The records that stand when it is sent, each quoted
   in a fence: its sentence as it reads then (a record you reworded is in
   your words), its reason when it has one, at most four of its files,
@@ -966,9 +970,10 @@ that id.
   compaction that was called off.
 - **What Scribe keeps.** Everything: its records, the count on the mark
   and the window are the session's, not the conversation's. A step of a
-  turn that finds the context window past 85% of the count Claude Code
-  compacts at has Scribe look right then, once a turn, whatever you set,
-  so a compaction after it takes no row unread; one that finds the
+  turn, past its first, that finds the context window past 85% of the
+  count Claude Code compacts at has Scribe look right then, whatever you
+  set, and again each time the window has grown by another 5% of that
+  count, so a compaction takes few rows unread; one that finds the
   conversation just compacted has Scribe look right then too. The next
   look begins at your prompt that the compaction kept, or else right
   after the summary, so what came since is read once and nothing is read

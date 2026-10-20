@@ -238,7 +238,7 @@ export type Scribe = {
    * engine hands out whole (`wasLong`). A compaction puts its summary there.
    */
   opening: string | undefined
-  /** Whether the conversation was longer, when a look last read it, than the engine hands out whole. */
+  /** Whether the conversation was longer, when its first row was last noted, than the engine hands out whole. */
   wasLong: boolean
   /**
    * Whether the context window has been seen with a reading since the
@@ -246,10 +246,16 @@ export type Scribe = {
    * compaction the engine has no reading until Claude next answers.
    */
   hasReading: boolean
+  /**
+   * Whether the context window has been seen with a reading at all since the
+   * plugin took the conversation up. A resumed conversation has none until
+   * Claude first answers in it, so the loss of one is no sign there.
+   */
+  sawReading: boolean
   /** The token count the engine compacts the conversation at, as last read; null when it does not, undefined until read. */
   compactsAt: number | null | undefined
-  /** The turn in which a look was last made because a compaction was near: one such look a turn. */
-  nearTurn: number
+  /** The window's reading when a look was last made because a compaction was near; undefined when none was since the conversation began or was compacted. */
+  nearAt: number | undefined
   /**
    * Whether the records the session kept are to go to Claude, once: the
    * conversation was compacted, and no prompt or tool result that took
@@ -654,8 +660,9 @@ export function create(options: Options): Scribe {
     opening: undefined,
     wasLong: false,
     hasReading: false,
+    sawReading: false,
     compactsAt: undefined,
-    nearTurn: -1,
+    nearAt: undefined,
     isOwed: false,
     isBetween: false,
     wakingSince: 0,
@@ -782,7 +789,9 @@ export function startOver(scribe: Scribe): void {
   scribe.opening = undefined
   scribe.wasLong = false
   scribe.hasReading = false
+  scribe.sawReading = false
   scribe.compactsAt = undefined
+  scribe.nearAt = undefined
   scribe.isOwed = false
   scribe.wakingSince = 0
   scribe.past = []
@@ -970,6 +979,7 @@ function nowOf(scribe: Scribe): Journal.Now {
         hasActed: scribe.hasActed,
         compactions: scribe.compactions,
         hasCompacted: scribe.hasCompacted,
+        isOwed: scribe.isOwed,
         prompts: prompts.slice(-Journal.MAX_PROMPT_HASHES),
       },
       work: {
@@ -1272,6 +1282,11 @@ export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
       return
     }
 
+    // Its first row, so a compaction before its first look is told by its summary.
+    if (scribe.opening === undefined && !scribe.wasLong) {
+      opened(scribe, rows)
+    }
+
     const who = await identityOf(host, scribe)
 
     if (who === null || epoch !== scribe.epoch) {
@@ -1320,11 +1335,6 @@ export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
     }
 
     restore(host, scribe, folded, rows)
-
-    // A conversation that was compacted before this load: what it kept goes to Claude again, once.
-    if (scribe.hasCompacted && carried(scribe.written) !== undefined) {
-      scribe.isOwed = true
-    }
     log.conv = id
     log.lines = []
     log.book = Journal.bookOf(folded)
@@ -1498,6 +1508,8 @@ function restoreCursor(scribe: Scribe, cursor: Journal.Cursor, rows: readonly Ro
   scribe.hasActed ||= cursor.hasActed
   scribe.compactions = Math.max(scribe.compactions, cursor.compactions)
   scribe.hasCompacted ||= cursor.hasCompacted
+  // Owed when the conversation was compacted and Claude has not been given the records since: they are in its transcript once it has.
+  scribe.isOwed ||= cursor.isOwed
 
   const hashes = new Set(cursor.prompts)
   const found: string[] = []
@@ -3672,6 +3684,7 @@ function compactionSeen(host: ScribeHost, scribe: Scribe, rows: readonly Row[], 
   scribe.hasCompacted = true
   scribe.isOwed = true
   scribe.hasReading = false
+  scribe.nearAt = undefined
   scribe.consumed = from
   scribe.mark = markOf(rows[from - 1])
   scribe.seam = undefined
@@ -3709,30 +3722,44 @@ function isCompacted(scribe: Scribe, rows: readonly Row[]): boolean {
   return scribe.opening === undefined ? scribe.wasLong : markOf(first) !== scribe.opening
 }
 
-/** Whether the context window is to be read for a compaction: Scribe runs in this conversation. */
+/** Whether the context window is to be read for a compaction: Scribe is on, and not known to stay out of this conversation. */
 export function watchesWindow(scribe: Scribe): boolean {
-  return scribe.identity !== null && scribe.identity !== undefined && scribe.options.isOn
+  return scribe.identity !== null && scribe.options.isOn
 }
 
 /**
- * The context window was read, as a prompt is sent or a step of a turn
- * begins: true when the conversation was compacted since it was last read.
+ * The context window was read, as a prompt is sent, a step of a turn begins
+ * or a turn ends: true when the conversation was compacted since.
  *
  * Claude Code says that a compaction happened only to hooks an organization
  * may keep a person's plugins out of, so it is learned from what stays in
- * view, and only from two signs together: the window had a reading and has
- * none now, as after a compaction until Claude next answers, and the
- * conversation's first row is a summary in place of what it was. Either
- * alone is no compaction: a rewind changes the first row, and the reading
- * may go for other reasons.
+ * view: the window has no reading, as after a compaction until Claude next
+ * answers, and the conversation's first row is another than it was and none
+ * of the developer's prompts, as a summary is. Where the window was seen
+ * with a reading, it must have lost it since the last compaction, too. A
+ * rewind to the first prompt puts the prompt sent after it first; neither
+ * sign alone is a compaction.
+ *
+ * The first row is noted by a look, by picking up the conversation's log,
+ * and, where neither has yet, as a prompt is sent: a compaction before
+ * Scribe's first look in a resumed conversation is seen all the same.
  *
  * @param hasReading whether the engine has a reading of the context window
- * @param isBetween whether it is read between turns: as a prompt is sent, or at a turn's end
+ * @param when as a prompt is sent, a step begins or a turn ends
  */
-export async function windowRead(host: ScribeHost, scribe: Scribe, hasReading: boolean, isBetween: boolean): Promise<boolean> {
-  if (hasReading || !scribe.hasReading || !watchesWindow(scribe)) {
-    scribe.hasReading ||= hasReading
+export async function windowRead(host: ScribeHost, scribe: Scribe, hasReading: boolean, when: 'prompt' | 'step' | 'end'): Promise<boolean> {
+  if (!watchesWindow(scribe)) {
+    return false
+  }
 
+  scribe.hasReading ||= hasReading
+  scribe.sawReading ||= hasReading
+
+  const isUnknown = scribe.opening === undefined && !scribe.wasLong
+  const mayNote = when === 'prompt' && isUnknown
+  const mayBeCompacted = !hasReading && !isUnknown && (scribe.hasReading || !scribe.sawReading)
+
+  if (!mayNote && !mayBeCompacted) {
     return false
   }
 
@@ -3744,6 +3771,12 @@ export async function windowRead(host: ScribeHost, scribe: Scribe, hasReading: b
     return false
   }
 
+  if (mayNote) {
+    opened(scribe, rows)
+
+    return false
+  }
+
   // No compaction: nothing is read again until the window has had a reading.
   if (!isCompacted(scribe, rows)) {
     scribe.hasReading = false
@@ -3751,7 +3784,7 @@ export async function windowRead(host: ScribeHost, scribe: Scribe, hasReading: b
     return false
   }
 
-  compactionSeen(host, scribe, rows, isBetween)
+  compactionSeen(host, scribe, rows, when !== 'step')
 
   return true
 }
@@ -3759,25 +3792,33 @@ export async function windowRead(host: ScribeHost, scribe: Scribe, hasReading: b
 /** How near the compaction threshold the context window is before a look is made, to read the rows a compaction would take. */
 const NEAR_COMPACTION = 0.85
 
+/** How much of the compaction threshold the window grows by, past `NEAR_COMPACTION`, before another such look. */
+const NEAR_GROWTH = 0.05
+
 /**
  * Whether a step of a turn should have Scribe look now, because the
  * conversation is about to be compacted: the context window is past
- * `NEAR_COMPACTION` of the count Claude Code compacts at, and no such look
- * was made in this turn. A compaction in the middle of a turn takes the
- * turn's rows with it, and a look made before it reads them.
+ * `NEAR_COMPACTION` of the count Claude Code compacts at, and has grown by
+ * `NEAR_GROWTH` of it since the last such look, if there was one since the
+ * last compaction. A compaction in the middle of a turn takes the turn's
+ * rows with it, and a look made before it reads them. Never at a turn's
+ * first step: Claude has written nothing of the turn yet.
  *
  * @param tokens the context window's reading, undefined when it has none
+ * @param index the step's place in its turn
  */
-export function isNearCompaction(scribe: Scribe, tokens: number | undefined): boolean {
-  if (tokens === undefined || scribe.compactsAt === null || scribe.compactsAt === undefined || scribe.nearTurn === scribe.turn) {
+export function isNearCompaction(scribe: Scribe, tokens: number | undefined, index: number): boolean {
+  const at = scribe.compactsAt
+
+  if (index === 0 || tokens === undefined || at === null || at === undefined || tokens < at * NEAR_COMPACTION) {
     return false
   }
 
-  if (tokens < scribe.compactsAt * NEAR_COMPACTION) {
+  if (scribe.nearAt !== undefined && tokens - scribe.nearAt < at * NEAR_GROWTH) {
     return false
   }
 
-  scribe.nearTurn = scribe.turn
+  scribe.nearAt = tokens
 
   return true
 }
@@ -3804,11 +3845,12 @@ export function compactsAt(scribe: Scribe, at: number | null): void {
  * @param isHere whether the session is signed in to Fylgja as the account this machine is set up for
  */
 export function handed(scribe: Scribe, isHere: boolean): string | undefined {
-  if (!scribe.isOwed) {
+  // Who the session is, is not known yet: they wait for it.
+  if (!scribe.isOwed || scribe.identity === undefined) {
     return undefined
   }
 
-  const text = !isHere || isOff(scribe) || scribe.identity === undefined ? undefined : carried(scribe.written)
+  const text = !isHere || isOff(scribe) ? undefined : carried(scribe.written)
 
   // Nothing to hand: nothing is owed.
   if (text === undefined) {
@@ -3818,9 +3860,14 @@ export function handed(scribe: Scribe, isHere: boolean): string | undefined {
   return text
 }
 
-/** What `handed` gave was taken in: the prompt it went with entered, or the tool's result it went with stood. */
-export function takenIn(scribe: Scribe): void {
+/**
+ * What `handed` gave was taken in: the prompt it went with entered, or the
+ * tool's result it went with stood. The log says so at once, so a load
+ * after it does not hand them again: they are in Claude's transcript.
+ */
+export function takenIn(host: ScribeHost, scribe: Scribe): void {
   scribe.isOwed = false
+  logged(host, scribe)
 }
 
 function summaryOf(verdict: Verdict, written: readonly Written[]): string {

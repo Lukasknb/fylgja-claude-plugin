@@ -232,7 +232,7 @@ describe('what a compacted conversation is given', () => {
     expect(beside(set)).toEqual([BOTH])
   })
 
-  test('a conversation that was compacted, loaded afresh (as a resume in another process is), has the block go with its next prompt', async ($, on) => {
+  test('a conversation loaded afresh after Claude was given the block is not given it again: it is in Claude’s transcript', async ($, on) => {
     beneath(on)
     const set = await kept($, on)
 
@@ -246,7 +246,45 @@ describe('what a compacted conversation is given', () => {
     await set.clock.settle()
     await turn($, set, dev('and on'), claude('Sure.'))
 
+    expect(beside(set)).toBeUndefined()
+  })
+
+  test('a conversation loaded afresh after a compaction whose block no prompt or tool result took yet gives it with its next prompt', async ($, on) => {
+    beneath(on, 1)
+    const set = await kept($, on)
+
+    await send($, 'switch the lock to postgres advisory locks, redis is going away')
+    set.rows.push(dev('switch the lock to postgres advisory locks, redis is going away'), claude('MIDWAY-REPLY: rewriting acquire.', edit(FILE)))
+    await compact($, set, 'auto')
+    await stepped($, set, 1)
+    await $.session.start(START)
+    await set.clock.settle()
+    await turn($, set, ...MORE)
+
     expect(beside(set)).toEqual([BOTH])
+  })
+
+  test('a compaction before the first look of a conversation loaded afresh, with no reading of the window yet, is seen as the step begins', async ($, on) => {
+    beneath(on, 1)
+    on('tool.call', () => ({ result: 'read', text: 'read' }) as never)
+    const set = await kept($, on)
+
+    // Loaded afresh, as a resume in another process is: the window has no reading until Claude first answers.
+    set.window.hasReading = false
+    await set.clock.settle()
+    await $.session.start(START)
+    await set.clock.settle()
+    await send($, 'and log every retry at warn')
+    set.rows.push(dev('and log every retry at warn'))
+    await compact($, set, 'auto')
+    await stepped($, set, 0)
+
+    expect(await toolRan($)).toEqual([BOTH])
+
+    await finish($, set, claude('Logged.', edit(FILE)))
+
+    expect(told(set)).toMatch('[developer] and log every retry at warn')
+    expect(told(set), 'and the summary is nobody’s word').not.toMatch('being continued from a previous conversation')
   })
 
   test('a slash command does not take it: the prompt after it does', async ($, on) => {
@@ -375,21 +413,46 @@ describe('what a compacted conversation is given', () => {
     expect(set.events('compaction')).toEqual([])
   })
 
-  test('a step near the count Claude Code compacts at has Scribe look then, so a compaction after it takes no row unread', async ($, on) => {
+  test('a step near the count Claude Code compacts at has Scribe look then, not at a turn’s first step, and again only once the window has grown', async ($, on) => {
     beneath(on, 1)
-    const set = await kept($, on, [TWO, NOTHING, NOTHING, NOTHING])
+    const set = await kept($, on, [TWO, NOTHING, NOTHING, NOTHING, NOTHING])
 
-    await send($, 'switch the lock to postgres advisory locks, redis is going away')
-    set.rows.push(dev('switch the lock to postgres advisory locks, redis is going away'), claude('NEAR-REPLY: rewriting acquire.', edit(FILE)))
     set.window.tokens = 150_000
+    await send($, 'switch the lock to postgres advisory locks, redis is going away')
+    set.rows.push(dev('switch the lock to postgres advisory locks, redis is going away'))
     await stepped($, set, 0)
+
+    expect(set.asked, 'Claude has written nothing of the turn yet').toHaveLength(1)
+
+    set.rows.push(claude('NEAR-REPLY: rewriting acquire.', edit(FILE)))
+    await stepped($, set, 1)
 
     expect(set.asked, 'a look before the compaction').toHaveLength(2)
     expect(told(set)).toMatch('NEAR-REPLY')
 
+    set.window.tokens = 152_000
+    set.rows.push(claude('A little more.', edit(FILE)))
+    await stepped($, set, 2)
+
+    expect(set.asked, 'not again for a little growth').toHaveLength(2)
+
+    set.window.tokens = 158_000
+    set.rows.push(claude('LATER-REPLY: and the release path.', edit(FILE)))
+    await stepped($, set, 3)
+
+    expect(set.asked, 'again once the window has grown').toHaveLength(3)
+    expect(told(set)).toMatch('LATER-REPLY')
+
+    await finish($, set, claude('Done.'))
+
+    const before = set.asked.length
+
+    await send($, 'and on')
+    set.rows.push(dev('and on'), claude('Going on.', edit(FILE)))
+    set.window.tokens = 159_000
     await stepped($, set, 1)
 
-    expect(set.asked, 'one such look a turn').toHaveLength(2)
+    expect(set.asked, 'nor at every turn while the window stays near').toHaveLength(before)
   })
 
   test('a compaction between turns is seen by the prompt after it, and is counted once', async ($, on) => {

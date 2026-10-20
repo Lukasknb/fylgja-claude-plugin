@@ -564,16 +564,17 @@ async function vouch($: EngineInterface, held: Held, noted?: () => void, ms = SH
 
 /**
  * Reads the context window, as a prompt is sent, a step of a turn begins or
- * a turn ends, for a compaction since it was last read (`Scribe.windowRead`). A step also
- * learns whether a compaction is near (`Scribe.isNearCompaction`), and as a
- * turn begins the count it comes at is read again. True when the step should
- * have Scribe look now: the conversation was just compacted, or is about to
- * be. Never fails, and asks nothing of Fylgja.
+ * a turn ends, for a compaction since it was last read
+ * (`Scribe.windowRead`). A step also learns whether a compaction is near
+ * (`Scribe.isNearCompaction`), and as a turn begins the count it comes at
+ * is read again. True when the step should have Scribe look now: the
+ * conversation was just compacted, or is about to be. Never fails, and asks
+ * nothing of Fylgja.
  *
- * @param step the step's place in its turn; undefined for a prompt or a turn's end
- * @param isBetween whether it is read between turns: as a prompt is sent, or at a turn's end
+ * @param when as a prompt is sent, a step begins or a turn ends
+ * @param step the step's place in its turn, for a step
  */
-async function watchWindow($: EngineInterface, held: Held, report: Report, step?: number, isBetween = false): Promise<boolean> {
+async function watchWindow($: EngineInterface, held: Held, report: Report, when: 'prompt' | 'step' | 'end', step = 0): Promise<boolean> {
   const { session, scribe } = held
 
   if (!Scribe.watchesWindow(scribe)) {
@@ -582,9 +583,9 @@ async function watchWindow($: EngineInterface, held: Held, report: Report, step?
 
   try {
     const { context } = await $.session.usage()
-    const isCompacted = await Scribe.windowRead(scribeHostOf($, session, report), scribe, context.tokens !== undefined, isBetween)
+    const isCompacted = await Scribe.windowRead(scribeHostOf($, session, report), scribe, context.tokens !== undefined, when)
 
-    if (step === undefined) {
+    if (when !== 'step') {
       return isCompacted
     }
 
@@ -594,7 +595,7 @@ async function watchWindow($: EngineInterface, held: Held, report: Report, step?
       Scribe.compactsAt(scribe, breakdown === undefined || !breakdown.isAutoCompactEnabled ? null : (breakdown.autoCompactThreshold ?? null))
     }
 
-    return isCompacted || Scribe.isNearCompaction(scribe, context.tokens)
+    return isCompacted || Scribe.isNearCompaction(scribe, context.tokens, step)
   } catch (error) {
     report('error', { component: 'context', kind: 'threw', cause: Telemetry.causeOf(error) })
 
@@ -618,7 +619,7 @@ async function carriedWith(
     return undefined
   }
 
-  await watchWindow($, held, report, undefined, true)
+  await watchWindow($, held, report, 'prompt')
 
   const text = Scribe.handed(held.scribe, held.session.isHere)
 
@@ -975,7 +976,7 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     const entered = (done: PromptSubmitResult, context: readonly string[] | undefined): PromptSubmitResult => {
       if (context !== undefined && done.drop === undefined) {
-        Scribe.takenIn(scribe)
+        Scribe.takenIn(scribeHostOf($, session, report), scribe)
       }
 
       return done
@@ -1114,7 +1115,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         return done
       }
 
-      Scribe.takenIn(scribe)
+      Scribe.takenIn(scribeHostOf($, session, report), scribe)
 
       return { ...done, context: [...(done.context ?? []), text] }
     } catch {
@@ -1150,7 +1151,7 @@ export function register(on: On, options: PluginOptions = {}): void {
         // Claude is working from here until the turn ends, whoever began the turn.
         Scribe.began(scribe)
         // A compaction just made, or about to be, has Scribe look now, whatever the developer's setting.
-        void Promise.all([looked.catch(() => undefined), watchWindow($, held, report, e.index)])
+        void Promise.all([looked.catch(() => undefined), watchWindow($, held, report, 'step', e.index)])
           .then(([, isDue]) => Scribe.stepping(scribeHostOf($, session, report, live, calls), scribe, e.index, isDue))
           .catch(() => undefined)
           .finally(() => refresh($, session, noteSignIn))
@@ -1219,7 +1220,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       if (e.agentId === undefined) {
         await Scribe.completed(scribeHostOf($, session, report, live), scribe)
         // Claude answered: the window's reading now is what a later one is told from.
-        await watchWindow($, held, report, undefined, true)
+        await watchWindow($, held, report, 'end')
       } else {
         Scribe.reported(scribe, e.agentId, e.answer, e.isAborted ? 'aborted' : e.reason)
       }

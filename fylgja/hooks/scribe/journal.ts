@@ -149,6 +149,8 @@ export type Cursor = {
   hasActed: boolean
   compactions: number
   hasCompacted: boolean
+  /** Whether the records are still to go to Claude after the latest compaction: none took them in yet. */
+  isOwed: boolean
   /** A hash of each prompt the developer sent, oldest first: what tells their rows from every other once they are read again. */
   prompts: string[]
 }
@@ -697,6 +699,7 @@ const GROUPS: { [K in keyof Groups]: (value: unknown) => Groups[K] | undefined }
           hasActed: value.hasActed === true,
           compactions: count(value.compactions),
           hasCompacted: value.hasCompacted === true,
+          isOwed: value.isOwed === true,
           prompts: (Array.isArray(value.prompts) ? value.prompts : []).filter((one): one is string => typeof one === 'string' && HASH.test(one)).slice(-MAX_PROMPT_HASHES),
         }
       : undefined,
