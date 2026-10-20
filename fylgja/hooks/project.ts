@@ -87,7 +87,7 @@ function names(text: string, host: string): boolean {
  * separators), or by naming a host of Fylgja's anywhere in it, whatever the
  * scheme, port or path, and whether as a `url` or inside a command.
  */
-export function standsIn(name: string, entry: unknown, hosts: readonly string[]): boolean {
+function standsIn(name: string, entry: unknown, hosts: readonly string[]): boolean {
   const plain = name.toLowerCase().replace(/[^a-z0-9]+/g, '_')
   const own = OWN_SERVER.replace(/[^a-z0-9]+/g, '_')
   const text = (JSON.stringify(entry) ?? '').toLowerCase()

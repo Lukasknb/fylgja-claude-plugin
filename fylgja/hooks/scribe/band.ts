@@ -197,7 +197,7 @@ export function create(): Band {
  * How many coming offers are let go after `typedPast` in a row were ignored:
  * the first two cost nothing, then 1, 2, 4, 8 and at most 16.
  */
-export function skipsAfter(typedPast: number): number {
+function skipsAfter(typedPast: number): number {
   return typedPast <= 2 ? 0 : Math.min(MAX_SKIP, 2 ** (typedPast - 3))
 }
 

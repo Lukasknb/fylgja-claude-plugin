@@ -79,7 +79,7 @@ export const MAX_KEPT = 25
 export const MAX_AGE_MS = 30 * 24 * 3_600_000
 
 /** No more characters are logged in all than this; the conversations written longest ago go first. */
-export const MAX_TOTAL_CHARS = 1_000_000
+const MAX_TOTAL_CHARS = 1_000_000
 
 /** A load's entry holds no more lines than this before it is written again as one. */
 export const MAX_LINES = 24
@@ -270,7 +270,7 @@ export function writerId(): string {
 }
 
 /** A short hash of `text` (53 bits, in base 36): what tells texts apart, and holds none of their words. */
-export function hashOf(text: string, seed = 0): string {
+function hashOf(text: string, seed = 0): string {
   let one = 0xdeadbeef ^ seed
   let two = 0x41c6ce57 ^ seed
 

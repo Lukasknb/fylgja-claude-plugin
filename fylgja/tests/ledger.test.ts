@@ -3,12 +3,11 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { ACCENT } from '../hooks/card'
-import { keyed, LEGENDS } from '../hooks/listing'
+import { LEGENDS } from '../hooks/listing'
 import { ARM_MS } from '../hooks/scribe/band'
 import * as Ledger from '../hooks/scribe/ledger'
-import type { Written } from '../hooks/scribe/types'
 import { ARMED_NOTE } from '../hooks/scribe/view'
-import { ARMED_KEY, PANE, RINGLESS } from '../hooks/window'
+import { ARMED_KEY, PANE } from '../hooks/window'
 import { answer, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
 import { all, frame, pane, ringOn, scrolled } from './window-fixtures'
 import type { Node } from './window-fixtures'
@@ -73,148 +72,6 @@ async function opened($: Engine, on: On, options: Parameters<typeof stage>[1] = 
 
   return session
 }
-
-const record = (id: string, content: string, more: Partial<Written> = {}): Written => ({
-  id,
-  kind: 'decision',
-  content,
-  reasonStatus: 'stated',
-  outcome: 'created',
-  replaced: null,
-  detail: 'Because.',
-  anchors: [{ path: FILE }],
-  ...more,
-})
-
-const words = (parts: readonly ({ text: string } | { link: string; label: string })[] | undefined): string =>
-  (parts ?? []).map(part => ('text' in part ? part.text : '')).join('')
-
-describe('the window of what was kept, as it is described', () => {
-  test('the rows are the records that stand, newest first, and the removed ones under them', () => {
-    const ledger = Ledger.create()
-    const written = [record('a', 'First.'), record('b', 'Second.')]
-
-    Ledger.shelve(ledger, record('x', 'Dropped.', { outcome: 'withdrawn' }))
-    Ledger.shelve(ledger, record('y', 'Dropped later.', { outcome: 'withdrawn' }))
-
-    const view = Ledger.viewOf(written, ledger, 100, true)
-
-    expect(view.lines.map(line => [line.id, line.isDim, line.tail])).toEqual([
-      ['b', false, ''],
-      ['a', false, ''],
-      ['y', true, 'removed'],
-      ['x', true, 'removed'],
-    ])
-    expect(view.count).toBe('2 kept')
-    expect(view.lines.map(line => line.isSelected), 'with nothing picked the newest is selected').toEqual([true, false, false, false])
-    expect(view.lines[0]?.detail.map(words)).toEqual(['Why: Because.', `In: ${FILE}`])
-    expect(view.lines[1]?.detail, 'only the selected record is opened').toEqual([])
-    expect(view.lines.flatMap(line => line.actions), 'and no key is up until one is asked for').toEqual([])
-  })
-
-  test('a record that stands again is listed once, as standing', () => {
-    const ledger = Ledger.create()
-
-    Ledger.shelve(ledger, record('a', 'First.', { outcome: 'withdrawn' }))
-
-    expect(
-      Ledger.viewOf([record('a', 'First.', { outcome: 'restored' })], ledger, 100, true).lines.map(line => [line.id, line.tail]),
-    ).toEqual([['a', 'put back']])
-  })
-
-  test('the selection moves a row at a time, stops at either end, and lets go of whatever was half done', () => {
-    const ledger = Ledger.create()
-    const entries = Ledger.entriesOf([record('a', 'First.'), record('b', 'Second.'), record('c', 'Third.')], ledger)
-
-    expect(Ledger.step(entries, ledger, -1), 'the newest is the top').toBeUndefined()
-    expect(Ledger.step(entries, ledger, 1)).toBe('b')
-
-    ledger.acting = 'b'
-    ledger.armed = { key: 'remove:b', until: 10 }
-    ledger.editing = 'b'
-
-    expect(Ledger.step(entries, ledger, 5), 'a page past the end lands on the last').toBe('a')
-    expect([ledger.acting, ledger.armed, ledger.editing]).toEqual([undefined, null, undefined])
-    expect(Ledger.step(entries, ledger, 1)).toBeUndefined()
-    expect(Ledger.step(entries, ledger, -Number.MAX_SAFE_INTEGER)).toBe('c')
-  })
-
-  test('a sentence longer than its row is cut so the row is one line, what became of it included, and shown whole where it is opened', () => {
-    const long = `Use ${'a very long name '.repeat(8)}for the queue.`
-
-    for (const columns of [48, 57, 80]) {
-      const [line] = Ledger.viewOf([record('a', long, { outcome: 'updated' })], Ledger.create(), columns, true).lines
-
-      expect(line?.sentence.endsWith('…')).toBe(true)
-      expect(`▸ ${line?.kind} · ${line?.sentence} · ${line?.tail}`.length, `at ${columns} columns`).toBeLessThan(columns)
-      expect(words(line?.detail[0])).toBe(long)
-    }
-  })
-
-  test('nothing a record holds is drawn as it came: a row is one line, with no mark of the plugin’s in it', () => {
-    const [line] = Ledger.viewOf([record('a', 'Use ◆ the\nqueue ✓ · always‮.')], Ledger.create(), 100, true).lines
-
-    expect(line?.sentence).toBe('Use the queue - always.')
-  })
-
-  test('the line of keys names keys only while the window has them, and no key is ever a letter or a digit', () => {
-    const ledger = Ledger.create()
-    const written = [record('a', 'First.')]
-    const legend = (isFocused: boolean): string => Ledger.viewOf(written, ledger, 100, isFocused).legend
-
-    expect(legend(true)).toBe(LEGENDS.list)
-    expect(legend(false), 'without the keys it says how the window is given them').toBe(LEGENDS.away)
-
-    ledger.acting = 'a'
-
-    expect(legend(true)).toBe(LEGENDS.keys)
-    expect(legend(false)).toBe(LEGENDS.away)
-
-    ledger.editing = 'a'
-
-    expect(legend(true)).toBe(LEGENDS.field)
-    expect(Ledger.viewOf([], Ledger.create(), 100, false).legend).toBe(LEGENDS.awayQuiet)
-
-    for (const line of [LEGENDS.list, LEGENDS.keys, LEGENDS.field, LEGENDS.quiet]) {
-      expect(line, 'only the arrows, Enter and Escape').not.toMatch(/(?:^| )[a-z0-9] /)
-    }
-  })
-
-  test('in a window one row too short the rule goes; with the keys up the last of what the record holds goes too; a long list is left whole', () => {
-    const ledger = Ledger.create()
-    const written = [record('a', 'First.'), record('b', 'Second.', { alternatives: ['a third way'] })]
-    // The title bar, the rule, two rows, three lines of the selected record, and the line of keys.
-    const tall = Ledger.viewOf(written, ledger, 100, true, undefined, 8)
-    const short = Ledger.viewOf(written, ledger, 100, true, undefined, 7)
-
-    expect([tall.hasRule, tall.lines[0]?.detail.length]).toEqual([true, 3])
-    expect([short.hasRule, short.lines[0]?.detail.length]).toEqual([false, 3])
-
-    ledger.acting = 'b'
-
-    const worked = Ledger.viewOf(written, ledger, 100, true, undefined, 7)
-
-    expect([worked.hasRule, worked.lines[0]?.detail.map(words)], 'the keys take the place of the last line').toEqual([
-      false,
-      ['Why: Because.', 'Rejected: a third way'],
-    ])
-
-    const tight = Ledger.viewOf(written, Ledger.create(), 100, true, undefined, 4)
-
-    expect([tight.hasRule, tight.lines[0]?.detail.length], 'what cannot fit is scrolled, not cut').toEqual([true, 3])
-  })
-
-  test('what the window held for a record Scribe has since taken back is let go', () => {
-    const ledger = Ledger.create()
-
-    ledger.acting = 'a'
-    ledger.editing = 'a'
-    ledger.armed = { key: 'remove:a', until: 10 }
-    Ledger.tidy([record('b', 'Second.')], ledger)
-
-    expect([ledger.acting, ledger.editing, ledger.armed]).toEqual([undefined, undefined, null])
-  })
-})
 
 describe('the mark opens the window', () => {
   test('a press on the mark opens it and hands it the keys, and it never opens by itself', async ($, on) => {
@@ -542,10 +399,6 @@ describe('the window lists what Scribe kept', () => {
 
     expect(await ui.rows()).toEqual(['▸ ◆ Decision · Use a Redis lock for the retry queue.'])
     expect(await ui.lines()).toContain('1 not kept — wording leaned on this conversation')
-    expect(Ledger.notKept(new Map([['leans_on_conversation', 2], ['too_long', 1]]))).toBe(
-      '2 not kept — wording leaned on this conversation · 1 not kept — Fylgja turned it down (too_long)',
-    )
-    expect(Ledger.notKept(new Map())).toBeUndefined()
 
     await ui.unmount()
   })
@@ -1082,51 +935,6 @@ describe('the window after a change, after Escape in its field, and when it is g
 
     expect(await ui.actions(), 'put back: its keys are put away too').toEqual([])
     expect(set.of('amend_memory')).toHaveLength(2)
-
-    await ui.unmount()
-  })
-
-  test('where the ring belongs: on the selected row, on a record’s first key while its keys are up, on the key that waits, and nowhere while the field is open', () => {
-    const ledger = Ledger.create()
-    const entries = Ledger.entriesOf([record('a', 'First.'), record('b', 'Second.')], ledger)
-
-    expect(Ledger.ringKey(entries, ledger)).toBe('row:b')
-
-    ledger.acting = 'b'
-
-    expect(Ledger.ringKey(entries, ledger)).toBe('reword:b')
-
-    ledger.armed = { key: 'remove:b', until: 10 }
-
-    expect(Ledger.ringKey(entries, ledger)).toBe('remove:b')
-
-    Ledger.settled(ledger)
-
-    expect(Ledger.ringKey(entries, ledger), 'after a change').toBe('row:b')
-
-    Ledger.edit(ledger, 'b')
-
-    expect(Ledger.ringKey(entries, ledger)).toBeUndefined()
-    expect(Ledger.ringKey([], Ledger.create())).toBeUndefined()
-  })
-
-  test('given the keys, the window seats its ring: once as they come, not while it keeps them, and again when they come back', async ($, on) => {
-    const { set } = await opened($, on)
-    const ui = await pane($, false)
-    // The stand-in for Claude Code has no ring to move, which the plugin notes once: that it tried is what is read here.
-    const tried = (): number => set.logged.filter(line => line === RINGLESS).length
-
-    await set.clock.advance(1)
-
-    expect(tried(), 'without the keys there is no ring to seat').toBe(0)
-    expect(keyed({ ...Ledger.create(), hadKeys: false }, true)).toBe(true)
-    expect(keyed({ ...Ledger.create(), hadKeys: true }, true), 'kept, not given').toBe(false)
-    expect(keyed({ ...Ledger.create(), hadKeys: true }, false)).toBe(false)
-
-    await ui.keyed(true)
-    await set.clock.advance(1)
-
-    expect(tried(), 'ctrl+x tab: Enter is on the selected record from the first press').toBe(1)
 
     await ui.unmount()
   })

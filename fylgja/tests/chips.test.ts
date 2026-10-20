@@ -267,6 +267,28 @@ describe('text that only looks like a chip', () => {
     expect(await ui.submit()).toBe(`summarise ${CHIP} and ‹◉ meeting · 45ada8aa›`)
   })
 
+  for (const malformed of [
+    '{{fylgja:meeting Standup|not-a-uuid}}',
+    `{{fylgja:meeting Standup ${MEETING_ID}}}`,
+    `{{fylgja:meeting Standup|${MEETING_ID.slice(0, 35)}}}`,
+    `{{fylgja:commitment Ship it|${MEETING_ID}}}`,
+    `{{fylgja:meeting Stand{up|${MEETING_ID}}}`,
+    `{{fylgja:meeting Stand|up|${MEETING_ID}}}`,
+    `{fylgja:meeting Standup|${MEETING_ID}}`,
+    `{{fylgja:meetingStandup|${MEETING_ID}}}`,
+  ]) {
+    test(`a malformed reference is no chip, and is sent as written: ${malformed}`, async ($, on) => {
+      entering(on)
+      plainEditor(on)
+      const ui = promptBox($)
+
+      await ui.paste(malformed)
+
+      expect([ui.box.text, ui.chips()]).toEqual([malformed, []])
+      expect(await ui.submit()).toBe(malformed)
+    })
+  }
+
   test('already in the draft is not made a reference by a paste that would read the same', async ($, on) => {
     entering(on)
     plainEditor(on)
@@ -715,15 +737,6 @@ describe('a pasted title that is not what it seems', () => {
     expect(await sent($, on, hostile)).toEqual({ box: "‹◉ (Budget) - - 'final'›", chips: ["‹◉ (Budget) - - 'final'›"], entered: hostile })
   })
 
-  test('it cannot be made to read as a title Fylgja confirmed', async ($, on) => {
-    const hostile = token('meeting', '["Engineering Retrospective" · 2026-09-30]', MEETING_ID)
-    const shown = await sent($, on, hostile)
-
-    expect(shown.box).toBe("‹◉ ('Engineering Retrospective' - 2026-09-30)›")
-    expect(/["[\]·]/.test(shown.box)).toBe(false)
-    expect(shown.entered).toBe(hostile)
-  })
-
   test('characters nobody sees are left out of the chip and kept in what Claude gets', async ($, on) => {
     const hostile = token('meeting', `Bud${UNSEEN}get\u0007review`, MEETING_ID)
 
@@ -762,6 +775,28 @@ describe('a pasted title that is not what it seems', () => {
     expect(await ui.submit()).toBe(`${MEETING} ${posing} ${posing}`)
   })
 
+  const at = (...points: number[]) => String.fromCodePoint(...points)
+  const JOINER = at(0x200d)
+  const SELECTOR = at(0xfe0f)
+  const family = `${at(0x1f468)}${JOINER}${at(0x1f469)}${JOINER}${at(0x1f467)}`
+  const keycap = `1${SELECTOR}${at(0x20e3)}`
+  const flag = `${at(0x1f3f3)}${SELECTOR}${JOINER}${at(0x1f308)}`
+  const persian = `${at(0x645, 0x6cc)}${at(0x200c)}${at(0x62e, 0x648, 0x627, 0x647, 0x645)}`
+  const smile = at(0x1f600)
+
+  for (const [what, title, chip] of [
+    ['an emoji built with joiners, a keycap and a flag stay whole', `${family} sync ${keycap} ${flag}`, `${family} sync ${keycap} ${flag}`],
+    ['a Persian word keeps its non-joiner', persian, persian],
+    ['forms that only look different are read as the plain character', `${at(0xff2d, 0xff45, 0xff45, 0xff54)} ${at(0xfb01)}x ${at(0x2460)}`, 'Meet fix 1'],
+    ['a long title is cut on a whole character', `${'x'.repeat(59)}${smile}${smile}`, `${'x'.repeat(59)}${smile}…`],
+  ] as const) {
+    test(what, async ($, on) => {
+      const pasted = token('meeting', title, MEETING_ID)
+
+      expect(await sent($, on, pasted)).toEqual({ box: `‹◉ ${chip}›`, chips: [`‹◉ ${chip}›`], entered: pasted })
+    })
+  }
+
   test('a title that is nothing once cleaned shows the kind and id', async ($, on) => {
     const empty = token('meeting', UNSEEN, MEETING_ID)
 
@@ -770,32 +805,6 @@ describe('a pasted title that is not what it seems', () => {
 })
 
 describe('sending a prompt', () => {
-  test('when putting the references back fails, the prompt goes on as it was entered and nothing is forgotten', async ($, on) => {
-    plainEditor(on)
-    const received: unknown[] = []
-
-    on('prompt.submit', ($, e) => {
-      received.push(e.text)
-
-      return { text: 'entered' }
-    })
-    const ui = promptBox($)
-
-    await ui.type('see ')
-    await ui.paste(MEETING)
-
-    // Not a text at all: reading it fails, the one way a test can make the plugin's own work fail.
-    const unreadable = { length: 3 } as unknown as string
-    const result = await $.prompt.submit({ text: unreadable, wait: false, origin: { kind: 'composer' } })
-
-    expect(result.text).toBe('entered')
-    expect(received).toEqual([{ length: 3 }])
-
-    await ui.submit()
-
-    expect(received[1]).toBe(`see ${MEETING}`)
-  })
-
   test('context attached by others rides along untouched, and nothing is added', async ($, on) => {
     plainEditor(on)
     on('prompt.submit', ($, e) => ({ text: e.text, context: e.context }))

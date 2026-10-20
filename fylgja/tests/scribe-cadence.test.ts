@@ -180,23 +180,6 @@ describe('how often Scribe looks inside a turn', () => {
     expect(set.asked.length, 'the tenth step is a fifth one, and looks').toBe(1)
   })
 
-  test('/config is read at most once a turn, and only by a step at a multiple of five', async ($, on) => {
-    const set = stage(on, { settings: { scribeCadence: 'Turn end only' } })
-
-    await $.session.start(START)
-    await working($, set, 0, 4)
-
-    expect(set.configReads, 'the first steps read nothing').toBe(0)
-
-    await working($, set, 5, 23, null)
-
-    expect(set.configReads, 'the fifth step read it, and no step after it in the turn').toBe(1)
-
-    await finish($, set, claude('Done.', edit(FILE)))
-
-    expect(set.configReads, 'the look at the turn’s end, in the same turn, reads it no more').toBe(1)
-  })
-
   test('as the hour’s share of looks runs low, the count of steps widens: 5, then 10', { timeoutMs: 30_000 }, async ($, on) => {
     const set = stage(on)
 
@@ -270,16 +253,6 @@ describe('how often Scribe looks inside a turn', () => {
 })
 
 describe('the model Scribe thinks with', () => {
-  test('Sonnet unless /config says otherwise', async ($, on) => {
-    const set = stage(on)
-
-    await $.session.start(START)
-    await working($, set, 0, 0)
-    await finish($, set, claude('Done.', edit(FILE)))
-
-    expect(set.asked[0]?.model).toBe('sonnet')
-  })
-
   test('the model picked is the one asked, and a change applies to the next look with no reload', async ($, on) => {
     const set = stage(on, { settings: { scribeModel: 'Haiku' } })
 

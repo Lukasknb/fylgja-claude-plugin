@@ -1,10 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { choicesOf, observe } from '../hooks/scribe/delta'
-import { lookParts, MAX_LOOK_CHARS, RESTATED_SHARE, restates } from '../hooks/scribe/loop'
 import { MAX_SPOKEN_CHARS } from '../hooks/scribe/scribe'
 import { answer, endedBy } from './fixtures'
-import { claude, decision, dev, edit, finish, NOTHING, ROOT, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { claude, decision, dev, edit, finish, NOTHING, ROOT, sessionOf, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 
 const FILE = 'src/audit/list.ts'
 const BARE = decision({
@@ -24,25 +22,25 @@ const NOW = [
 const reason = (words: string) => () => JSON.stringify({ reason: words })
 
 describe('a found reason is a why, and a question is for a decision worth one', () => {
-  test('a passage that only says the decision again is no reason', () => {
-    const decision = 'Session Replay is disabled in the PostHog setup, while Error Tracking is enabled.'
+  for (const [what, content, said] of [
+    ['that stands inside the decision', BARE.content, 'page the audit log with offset and limit'],
+    [
+      'that holds half the decision’s words, whatever it adds',
+      'Stale uploads are removed by the cleanup script, which runs the same deletion path as the Forget button and defaults to a dry run.',
+      'The right cleanup: find every stale upload and run each through the same deletion path as the Forget button, with a dry run first.',
+    ],
+  ] as const) {
+    test(`the look answering with a restatement ${what} counts as absent, and the question is asked`, async ($, on) => {
+      const set = stage(on, { replies: [NOTHING, verdict({ records: [{ ...BARE, content }], question: WHY })], verify: reason(said) })
 
-    expect(restates('Session replay is not enabled in the PostHog setup', decision)).toBe(true)
-    expect(restates('Error Tracking is enabled', decision)).toBe(true)
-    expect(restates('replay would capture transcripts that are on screen', decision)).toBe(false)
-    expect(RESTATED_SHARE).toBe(0.7)
-  })
+      await $.session.start(START)
+      await turn($, set, ...EARLIER)
+      await turn($, set, dev(said), claude('Done.', edit(FILE)))
 
-  test('the look answering with a restatement counts as absent, and the question is asked', async ($, on) => {
-    const set = stage(on, { replies: [NOTHING, ASKING], verify: reason('page the audit log with offset and limit') })
-
-    await $.session.start(START)
-    await turn($, set, ...EARLIER)
-    await turn($, set, ...NOW)
-
-    expect(set.of('remember')[0]).toMatchObject({ reason_status: 'not_stated' })
-    expect(await shown($)).toMatch('? Why')
-  })
+      expect(set.of('remember')[0]).toMatchObject({ reason_status: 'not_stated' })
+      expect(await shown($)).toMatch('? Why')
+    })
+  }
 
   test('a decision that concerns no code in hand and ruled nothing out is recorded, and nobody is asked about it', async ($, on) => {
     const slight = { ...BARE, alternatives: [], anchors: [] }
@@ -91,63 +89,39 @@ describe('a found reason is a why, and a question is for a decision worth one', 
 })
 
 describe('the look for a reason is held to a size', () => {
-  const about = 'The audit log is paged with offset and limit, not a cursor.'
-  const plan = (n: number, text: string) => ({
-    n,
-    key: `/p${n}.md`,
-    path: null,
-    title: `Plan ${n}`,
-    text,
-    clipped: 0,
-    headings: [],
-  })
+  test(`only what bears on the decision is shown beside the developer’s words: the plan section that mentions it, cut where it is long, and what the assistant said about it`, async ($, on) => {
+    const paging = `## Paging\n\nThe audit log is paged with offset because support jumps to a page. ${'x'.repeat(5000)}`
+    const beside = `## Deploy\n\n${'Nothing here is about it. '.repeat(100)}`
+    const set = stage(on, { replies: [NOTHING, ASKING] })
 
-  test(`everything the developer wrote comes first and whole; the rest fits in ${MAX_LOOK_CHARS} characters`, () => {
-    const spoken = Array.from({ length: 10 }, (_, n) => `PROMPT-${n} ${'word '.repeat(500)}`)
-    const paging = `# Paging\n\nThe audit log is paged with offset because support jumps to a page. ${'x'.repeat(5000)}`
-    const beside = `# Deploy\n\n${'Nothing here is about it. '.repeat(400)}`
-    const parts = lookParts({
-      decision: about,
-      spoken,
-      plans: [plan(1, `${beside}\n${paging}`), plan(2, beside)],
-      proposals: [
-        { text: 'I suggest offset paging for the audit log: support can jump to a page.', isFollowed: true },
-        { text: 'Unrelated chatter about lunch.', isFollowed: true },
-      ],
-    })
-    const size = [...parts.spoken, ...parts.proposals.map(one => one.text), ...parts.plans.map(one => one.text)].reduce(
-      (sum, one) => sum + one.length,
-      0,
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev('write the plans'),
+      claude(
+        'Written.',
+        use('Write', { file_path: `${ROOT}/docs/plan-audit.md`, content: `# Plan: audit log\n\n${beside}\n\n${paging}\n` }),
+        use('Write', { file_path: `${ROOT}/docs/plan-deploy.md`, content: `# Plan: deploy\n\n${beside}\n` }),
+      ),
+    )
+    await turn(
+      $,
+      set,
+      dev('page the audit log with offset and limit'),
+      claude('I suggest offset paging for the audit log: support can jump to a page.'),
+      claude('Unrelated chatter about lunch.'),
+      claude('Done.', edit(FILE)),
     )
 
-    expect(parts.spoken, 'the developer’s words are never what is cut').toEqual(spoken)
-    expect(
-      parts.proposals.map(one => one.text),
-      'only what the assistant said about this decision',
-    ).toEqual(['I suggest offset paging for the audit log: support can jump to a page.'])
-    expect(
-      parts.plans.map(one => one.n),
-      'only the plan that mentions it',
-    ).toEqual([1])
-    expect(parts.plans[0]?.text).toMatch(/^# Paging/)
-    expect(parts.plans[0]?.text, 'a long section is cut and says so').toMatch('[this section is cut here]')
-    expect(parts.plans[0]?.text).not.toMatch('# Deploy')
-    expect(size).toBeLessThanOrEqual(MAX_LOOK_CHARS)
-  })
+    const look = set.verified[0]?.prompt ?? ''
 
-  test('with the developer’s words near the limit, plans and proposals are left out before any of those words are', () => {
-    const spoken = [`${'word '.repeat(5990)}`]
-    const parts = lookParts({
-      decision: about,
-      spoken,
-      plans: [plan(1, `# Paging\n\n${'offset paging of the audit log '.repeat(600)}`)],
-      proposals: [],
-    })
-
-    expect(parts.spoken).toEqual(spoken)
-    expect([...parts.spoken, ...parts.plans.map(one => one.text)].reduce((sum, one) => sum + one.length, 0)).toBeLessThanOrEqual(
-      MAX_LOOK_CHARS,
-    )
+    expect(look).toMatch('<<< plan document 1: Plan: audit log')
+    expect(look).toMatch('The audit log is paged with offset because support jumps to a page.')
+    expect(look, 'a long section is cut, and says so').toMatch('[this section is cut here]')
+    expect(look, 'only the plan that mentions it, only at that section').not.toMatch('Nothing here is about it')
+    expect(look).toMatch('I suggest offset paging for the audit log')
+    expect(look, 'only what the assistant said about this decision').not.toMatch('lunch')
   })
 })
 
@@ -176,32 +150,7 @@ describe('what the developer decides without typing a prompt', () => {
     toolUses: [],
   }
 
-  test('an answer to a question Claude put to them reaches the wake as their own choice, with what was offered', () => {
-    const seen = observe([claude('Two ways to lock.', use('AskUserQuestion', asking, answered))], ROOT, new Set())
-
-    expect(seen.lines).toEqual([
-      '[claude] Two ways to lock.',
-      `[developer chose] Question: ${QUESTION} | Offered: Postgres advisory lock (Recommended) (No new service: the worker already holds a Postgres connection.); Redis lock (Fast, but Redis dropped connections under load last month.) | Chosen: Postgres advisory lock (Recommended)`,
-    ])
-    expect(
-      seen.acts.map(act => act.words),
-      'their own part of it is the label they picked',
-    ).toEqual(['Postgres advisory lock (Recommended)'])
-    expect(seen.developer, 'they typed nothing').toBe('')
-    expect(seen.offers, 'what the option was said to mean is kept apart, as the assistant’s').toEqual([
-      {
-        question: QUESTION,
-        picked: [
-          {
-            label: 'Postgres advisory lock (Recommended)',
-            description: 'No new service: the worker already holds a Postgres connection.',
-          },
-        ],
-      },
-    ])
-  })
-
-  test('several questions in one call, a typed answer with quotes in it, and a question left unanswered', () => {
+  test('an answer, several in one call, a typed answer with quotes, a plan turned down with a word or approved, reach the wake as the developer’s; a call turned down without a word and a question nobody answered are nobody’s', async ($, on) => {
     const two = {
       questions: [
         { question: 'Which one?', options: [{ label: 'A', description: 'the first' }] },
@@ -209,11 +158,35 @@ describe('what the developer decides without typing a prompt', () => {
         { question: 'Anything else?', options: [] },
       ],
     }
-    const text = 'The user answered: "Which one?"="A", "And why "now"?"="because the "old" path is going away"'
+    const rejected =
+      "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file)."
+    const set = stage(on, { replies: [NOTHING] })
 
-    expect(choicesOf(two, text).map(choice => [choice.question, choice.chosen])).toEqual([
-      ['Which one?', 'A'],
-      ['And why "now"?', 'because the "old" path is going away'],
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev(`decide the paging ${'with care '.repeat(30)}`),
+      claude('Two ways to lock.', use('AskUserQuestion', asking, answered)),
+      claude('More.', use('AskUserQuestion', two, 'The user answered: "Which one?"="A", "And why "now"?"="because the "old" path is going away"')),
+      claude('Here is the plan.', use('ExitPlanMode', { plan: '# Plan\n\nPage everything with offset.' }, `${rejected} To tell you how to proceed, the user said:\nno, keep the cursor for the export endpoint`, true)),
+      claude('Revised.', use('ExitPlanMode', { plan: '# Plan\n\nPage with offset, keep the cursor for export.' }, 'User has approved your plan. You can now start coding.')),
+      claude('Asking.', use('AskUserQuestion', asking, rejected, true)),
+      claude('Done.', edit(FILE)),
+    )
+
+    expect(sessionOf(set.asked[0]?.prompt).slice(1, -2)).toEqual([
+      '[claude] Two ways to lock.',
+      `[developer chose] Question: ${QUESTION} | Offered: Postgres advisory lock (Recommended) (No new service: the worker already holds a Postgres connection.); Redis lock (Fast, but Redis dropped connections under load last month.) | Chosen: Postgres advisory lock (Recommended)`,
+      '[claude] More.',
+      '[developer chose] Question: Which one? | Offered: A (the first) | Chosen: A',
+      '[developer chose] Question: And why "now"? | Offered:  | Typed by the developer, who picked none of them: because the "old" path is going away',
+      '[claude] Here is the plan.',
+      '[developer rejected ExitPlanMode] no, keep the cursor for the export endpoint',
+      '[claude] Revised.',
+      '[developer approved the plan]',
+      '[claude] Asking.',
+      '[tool rejected] AskUserQuestion',
     ])
   })
 
@@ -273,40 +246,6 @@ describe('what the developer decides without typing a prompt', () => {
       reason_status: 'stated',
       detail: 'the worker already holds a Postgres connection. (offered by the assistant, chosen by the developer)',
     })
-  })
-
-  test('a plan turned down with a word is the developer’s correction, and a plan approved is said to be', () => {
-    const rejected =
-      "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nno, keep the cursor for the export endpoint"
-    const seen = observe(
-      [
-        claude('Here is the plan.', use('ExitPlanMode', { plan: '# Plan\n\nPage everything with offset.' }, rejected, true)),
-        claude(
-          'Revised.',
-          use(
-            'ExitPlanMode',
-            { plan: '# Plan\n\nPage with offset, keep the cursor for export.' },
-            'User has approved your plan. You can now start coding.',
-          ),
-        ),
-      ],
-      ROOT,
-      new Set(),
-    )
-
-    expect(seen.lines).toContain('[developer rejected ExitPlanMode] no, keep the cursor for the export endpoint')
-    expect(seen.lines).toContain('[developer approved the plan]')
-    expect(seen.acts.map(act => act.words)).toEqual(['no, keep the cursor for the export endpoint', ''])
-    expect(seen.developer).toBe('no, keep the cursor for the export endpoint')
-  })
-
-  test('a call turned down without a word, and a question nobody answered, are nobody’s decision', () => {
-    const rejected =
-      "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file)."
-    const seen = observe([claude('Asking.', use('AskUserQuestion', asking, rejected, true))], ROOT, new Set())
-
-    expect(seen.acts).toEqual([])
-    expect(seen.lines).toEqual(['[claude] Asking.', '[tool rejected] AskUserQuestion'])
   })
 })
 

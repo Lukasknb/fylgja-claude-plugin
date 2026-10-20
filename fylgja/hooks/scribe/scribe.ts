@@ -2040,7 +2040,7 @@ const LINES: Readonly<Record<string, string>> = {
  * never the server's text. A refusal with no code, or one not known here, is
  * said as no more than that it was turned down.
  */
-export function refusalLine(refusal: string): string {
+function refusalLine(refusal: string): string {
   const code = codeOf(refusal)
 
   if (code === undefined) {
@@ -4715,7 +4715,7 @@ type Tally = {
  * what the verdict held with every call to Fylgja getting through.
  */
 async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Sight): Promise<boolean> {
-  const { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut, tally, trigger } = sight
+  const { epoch, rows, from, unseen, compactions, seen, isAnswered, found, cut, tally } = sight
   const isInside = cut !== undefined
   // Whether the turn has ended since: read anew each time, as it changes while this waits.
   const isStopped = (): boolean => cut?.aborted === true

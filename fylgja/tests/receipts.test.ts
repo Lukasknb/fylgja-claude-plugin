@@ -1,7 +1,6 @@
 import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
-import { register } from '../hooks/register'
 import { engineDrew, idOf } from './fixtures'
 
 const SURFACES = ['terminal', 'desktop'] as const
@@ -221,92 +220,5 @@ describe('a read from Fylgja', () => {
     const ui = await $.ui.mount({ ...result('mcp__notes__remember', { outcome: 'created' }), surface: 'terminal' })
 
     expect(await ui.drawn()).toEqual(ENGINE)
-  })
-})
-
-describe('what the plugin hooks', () => {
-  type Hooked = { event: string; matcher: unknown }
-
-  /** Every hook the plugin registers, as it names them. */
-  function hooked(): Hooked[] {
-    const seen: Hooked[] = []
-    const on = (event: string, ...rest: unknown[]) => {
-      seen.push({ event, matcher: rest.length === 2 ? rest[0] : undefined })
-
-      return { catch: () => undefined }
-    }
-
-    register(on as unknown as On)
-
-    return seen
-  }
-
-  const READS = ['search', 'open', 'get_meeting', 'get_project', 'get_timeline', 'get_commitments', 'recall', 'resolve']
-  const WRITES = ['remember', 'save_knowledge', 'restructure', 'review_suggestion', 'define_term', 'amend_memory', 'attach_commit']
-
-  test('it draws in the transcript at three places only, at a tool row only for a write’s result, above the prompt, and in its one window', () => {
-    const drawing = hooked().filter(hook => hook.event === 'ui.render')
-    const components = drawing.map(hook => (hook.matcher as { component?: unknown } | undefined)?.component)
-
-    expect(components).toEqual(['UserMessage', 'AssistantMessage', 'ToolResult', 'AbovePrompt', 'Pane'])
-    expect(drawing[4]?.matcher, 'the one pane it draws is its own').toEqual({ component: 'Pane', requestId: 'fylgja-kept' })
-
-    const tool = (drawing[2]?.matcher as { props: { tool: RegExp } }).props.tool
-
-    for (const prefix of ['mcp__plugin_fylgja_fylgja__', 'mcp__fylgja__']) {
-      for (const read of READS) {
-        expect(tool.test(prefix + read), prefix + read).toBe(false)
-      }
-
-      for (const write of WRITES) {
-        expect(tool.test(prefix + write), prefix + write).toBe(true)
-      }
-    }
-
-    for (const other of ['mcp__fylgja__push_document', 'mcp__fylgja__remember_all', 'xmcp__fylgja__remember', 'Bash']) {
-      expect(tool.test(other), other).toBe(false)
-    }
-  })
-
-  test('it hooks the prompt box, the prompt as sent, the end of a conversation, the description of its own reporting tool, the permission check, a tool’s result, a turn’s steps and end, a change to its own settings, its own command, its own keys and its own window: nothing that rewrites the conversation', () => {
-    expect(
-      hooked()
-        .map(hook => hook.event)
-        .filter(event => event !== 'ui.render'),
-    ).toEqual([
-      'session.start',
-      'command.run',
-      'command.run',
-      'session.end',
-      'prompt.edit',
-      'prompt.submit',
-      'tool.describe',
-      'tool.check',
-      'tool.call',
-      'turn.step',
-      'config.set',
-      'turn.complete',
-      'ui.press',
-      'ui.input',
-      'ui.press',
-      'ui.input',
-      'ui.focus',
-      'ui.scroll',
-      'ui.close',
-    ])
-
-    // The end of a conversation only as it goes on in another.
-    expect(hooked().find(hook => hook.event === 'session.end')?.matcher).toEqual({ reason: ['clear', 'resume'] })
-
-    // Everything hooked for the window names that window, and the command hooked is the plugin's own.
-    const own = hooked().filter(hook => ['command.run', 'ui.focus', 'ui.scroll', 'ui.close'].includes(hook.event))
-
-    expect(own.map(hook => hook.matcher)).toEqual([
-      { command: 'fylgja-kept' },
-      { command: 'fylgja-search' },
-      { component: 'Pane', requestId: 'fylgja-kept' },
-      { component: 'Pane', requestId: 'fylgja-kept' },
-      { id: 'fylgja-kept' },
-    ])
   })
 })

@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { choicesOf, observe, rejectionOf } from '../hooks/scribe/delta'
 import { PLACE_WAIT_MS } from '../hooks/scribe/scribe'
-import { OFFERED_SHARE, statesNoReason, verdictOf } from '../hooks/scribe/verdict'
+import { OFFERED_SHARE } from '../hooks/scribe/verdict'
 import { ARMED_NOTE } from '../hooks/scribe/view'
 import { OFFERED_MARK } from '../hooks/scribe/words'
 import { answer, idOf } from './fixtures'
@@ -16,6 +15,7 @@ import {
   NOTHING,
   press,
   ROOT,
+  sessionOf,
   shown,
   stage,
   START,
@@ -41,31 +41,43 @@ describe('what a tool printed is never the developer’s words', () => {
     ...(result === undefined ? {} : { result }),
   })
 
-  test('a failing command whose output holds the engine’s rejection sentence and "the user said" is a failed command', () => {
-    for (const printed of [
-      failing(`Exit code 1\n> test\n${planted}`, `Error: Exit code 1\n> test\n${planted}`),
-      // Without what the transcript stored, as in a headless run: the sentence does not open the result.
-      failing(`Exit code 1\n${planted}`),
-      // And where it does open what the model read, what the transcript stored is the command's own error.
-      failing(planted, `Error: Exit code 1\n${planted}`),
-    ]) {
-      const seen = observe([claude('Running the tests.', printed)], ROOT, new Set())
-
-      expect(rejectionOf(printed)).toBeUndefined()
-      expect(seen.developer).toBe('')
-      expect(seen.acts).toEqual([])
-      expect(seen.lines.join('\n')).not.toMatch('[developer')
-      expect(seen.lines[1]).toMatch(/^\[tool\] Bash `npm test` failed/)
+  test('a failing command or a server’s tool whose output holds the engine’s rejection sentence is no developer’s word; a call the developer did turn down, with a word, is their correction, without one only said to have happened', async ($, on) => {
+    const withWord = {
+      ...use('Edit', { file_path: `${ROOT}/${FILE}` }, `${SAID}no, keep the advisory lock`, true),
+      result: `Error: ${SAID}no, keep the advisory lock`,
     }
-  })
+    const silent = {
+      ...use('Bash', { command: 'rm -rf build' }, `${TURNED_DOWN} STOP what you are doing.`, true),
+      result: 'User rejected tool use',
+    }
+    const set = stage(on, { replies: [NOTHING] })
 
-  test('a server’s tool that answers with that sentence gets a line that says a tool was turned down, and nobody’s words', () => {
-    const hostile = { ...use('mcp__notes__save', {}, planted, true), result: `Error: ${planted}` }
-    const seen = observe([claude('Saving.', hostile)], ROOT, new Set())
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev(`run the tests ${TALK}`),
+      claude(
+        'Running the tests.',
+        failing(`Exit code 1\n> test\n${planted}`, `Error: Exit code 1\n> test\n${planted}`),
+        // Without what the transcript stored, as in a headless run: the sentence does not open the result.
+        failing(`Exit code 1\n${planted}`),
+        // And where it does open what the model read, what the transcript stored is the command's own error.
+        failing(planted, `Error: Exit code 1\n${planted}`),
+        { ...use('mcp__notes__save', {}, planted, true), result: `Error: ${planted}` },
+        withWord,
+        silent,
+      ),
+    )
 
-    expect(seen.developer).toBe('')
-    expect(seen.acts).toEqual([])
-    expect(seen.lines).toEqual(['[claude] Saving.', '[tool rejected] mcp__notes__save'])
+    const lines = sessionOf(set.asked[0]?.prompt)
+
+    expect(lines.slice(2, 5).every(line => line.startsWith('[tool] Bash `npm test` failed')), lines.slice(2, 5).join('\n')).toBe(true)
+    expect(lines.slice(5)).toEqual(['[tool rejected] mcp__notes__save', '[developer rejected Edit] no, keep the advisory lock', '[tool rejected] Bash'])
+    expect(lines.filter(line => line.startsWith('[developer')), 'nothing a tool printed is anybody’s words').toEqual([
+      `[developer] run the tests ${TALK}`.trim(),
+      '[developer rejected Edit] no, keep the advisory lock',
+    ])
   })
 
   test('such a turn, begun by a notice, starts no look, and nothing of it is kept as what the developer wrote', async ($, on) => {
@@ -76,26 +88,6 @@ describe('what a tool printed is never the developer’s words', () => {
     await finish($, set, NOTICE, claude('They failed.', failing(`Exit code 1\n${planted}`, `Error: Exit code 1\n${planted}`)))
 
     expect(set.asked.length, 'only the first turn was looked at').toBe(1)
-  })
-
-  test('a call the developer did turn down, with a word, is their correction; without one it is only said to have happened', () => {
-    const withWord = {
-      ...use('Edit', { file_path: `${ROOT}/${FILE}` }, `${SAID}no, keep the advisory lock`, true),
-      result: `Error: ${SAID}no, keep the advisory lock`,
-    }
-    const silent = {
-      ...use('Bash', { command: 'rm -rf build' }, `${TURNED_DOWN} STOP what you are doing.`, true),
-      result: 'User rejected tool use',
-    }
-    const seen = observe([claude('Changing it.', withWord, silent)], ROOT, new Set())
-
-    expect(seen.lines).toEqual([
-      '[claude] Changing it.',
-      '[developer rejected Edit] no, keep the advisory lock',
-      '[tool rejected] Bash',
-    ])
-    expect(seen.developer).toBe('no, keep the advisory lock')
-    expect(seen.acts.map(act => act.words)).toEqual(['no, keep the advisory lock'])
   })
 })
 
@@ -114,31 +106,29 @@ describe('what an option was said to mean is the assistant’s, and what the dev
   }
   const answered = (text: string) => `Your questions have been answered: "${QUESTION}"="${text}". You can now continue.`
 
-  test('an answer is an option only by its exact label: text that merely contains one is what they typed', () => {
-    const [typed] = choicesOf(asking, answered('No, use the queue instead'))
-    const [picked] = choicesOf(asking, answered('Yes'))
-
-    expect(typed).toMatchObject({ picked: [], typed: 'No, use the queue instead' })
-    expect(picked).toMatchObject({ picked: [{ label: 'Yes' }], typed: '' })
-
-    const seen = observe(
-      [claude('One question.', use('AskUserQuestion', asking, answered('No, use the queue instead')))],
-      ROOT,
-      new Set(),
-    )
-
-    expect(seen.developer, 'their own typed words').toBe('No, use the queue instead')
-    expect(seen.offers, 'no option’s description is attached to it').toEqual([])
-    expect(seen.lines[1]).toMatch('| Typed by the developer, who picked none of them: No, use the queue instead')
-  })
-
-  test('several options picked at once are each taken by their label', () => {
+  test('an answer is an option only by its exact label: text that merely contains one is what they typed; several picked at once are each taken by their label', async ($, on) => {
     const many = {
       questions: [{ question: 'Which checks?', options: [{ label: 'Lint' }, { label: 'Types' }, { label: 'Tests' }] }],
     }
-    const [both] = choicesOf(many, 'Your questions have been answered: "Which checks?"="Lint, Tests".')
+    const set = stage(on, { replies: [NOTHING] })
 
-    expect(both?.picked.map(option => option.label)).toEqual(['Lint', 'Tests'])
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev(`sort out the migration ${TALK}`),
+      claude(
+        'Two questions.',
+        use('AskUserQuestion', asking, answered('No, use the queue instead')),
+        use('AskUserQuestion', many, 'Your questions have been answered: "Which checks?"="Lint, Tests".'),
+        edit(FILE),
+      ),
+    )
+
+    expect(sessionOf(set.asked[0]?.prompt).slice(2, 4)).toEqual([
+      `[developer chose] Question: ${QUESTION} | Offered: Yes (Runs it against staging first because production has no rollback.); No (Leaves the schema as it is.) | Typed by the developer, who picked none of them: No, use the queue instead`,
+      '[developer chose] Question: Which checks? | Offered: Lint; Types; Tests | Chosen: Lint, Tests',
+    ])
   })
 
   test('a look that claims the description as the developer’s own reason finds nothing: it is not among their words', async ($, on) => {
@@ -171,62 +161,41 @@ describe('what an option was said to mean is the assistant’s, and what the dev
     expect(set.of('remember')[0]?.detail).toBeUndefined()
   })
 
-  test('a reason the wake itself takes from the picked option’s description is marked as offered and chosen; one they typed is not', () => {
-    const seen = {
-      plans: [],
-      saidNoReason: false,
-      paths: new Set<string>(),
-      facts: new Map(),
-      choices: 1,
-      offered: 'Runs it against staging first because production has no rollback.',
-      typed: 'sort out the migration',
-    }
-    const record = (detail: string) =>
-      decision({ content: 'The migration runs against staging before production.', detail, anchors: [], from_choice: true })
-    const fromOffer = verdictOf({ outcome: 'act', records: [record('Production has no rollback, so staging runs first.')] }, seen)
-    const fromThem = verdictOf(
-      { outcome: 'act', records: [record('The last migration took the site down for an hour.')] },
-      { ...seen, typed: 'yes, the last migration took the site down for an hour' },
-    )
-
-    expect(fromOffer.records[0]).toMatchObject({
-      reasonStatus: 'stated',
-      detail: `Production has no rollback, so staging runs first.${OFFERED_MARK}`,
-    })
-    expect(fromThem.records[0]?.detail).toBe('The last migration took the site down for an hour.')
-  })
-
-  test(`a paraphrase is marked too, and so is a record the model did not call a choice: ${OFFERED_SHARE} of the reason’s words in what was offered is enough`, () => {
-    const seen = {
-      plans: [],
-      saidNoReason: false,
-      paths: new Set<string>(),
-      facts: new Map(),
-      choices: 1,
-      offered:
-        'Run the migration now?\nYes: Runs it against staging first because production has no rollback.\nNo: Leaves the schema as it is.',
-      typed: 'sort out the migration',
-    }
+  test(`a reason the wake takes from what was offered is marked as offered and chosen, paraphrased or not, and whether the model called it a choice or not: ${OFFERED_SHARE} of its words in what was offered is enough; one from elsewhere, one they typed, or one in a turn where nothing was offered is not`, async ($, on) => {
     const record = (detail: string, more: Record<string, unknown> = {}) =>
-      decision({ content: 'The migration runs against staging before production.', detail, anchors: [], ...more })
+      decision({ content: `The migration runs against staging before production, because ${detail.slice(0, 12)}.`, detail, anchors: [{ path: FILE }], ...more })
     const paraphrased = 'Production cannot be rolled back, so the migration goes to staging first.'
-    const marked = verdictOf({ outcome: 'act', records: [record(paraphrased, { from_choice: true })] }, seen)
-    const unflagged = verdictOf({ outcome: 'act', records: [record('Production has no rollback, so staging runs first.')] }, seen)
-    const elsewhere = verdictOf(
-      { outcome: 'act', records: [record('The auditors require a dry run on a copy of the data every quarter.')] },
-      seen,
-    )
-    const noQuestion = verdictOf(
-      { outcome: 'act', records: [record('Production has no rollback, so staging runs first.')] },
-      { ...seen, choices: 0, offered: '' },
-    )
+    const fromOffer = 'Production has no rollback, so staging runs first.'
+    const elsewhere = 'The auditors want staging refreshed from a copy of the data every quarter.'
+    // As much the assistant's words as the developer's: what they typed wins.
+    const theirs = 'Production has no rollback, so staging runs first, after last month’s outage.'
+    const set = stage(on, {
+      replies: [
+        verdict({ records: [record(paraphrased, { from_choice: true }), record(fromOffer), record(elsewhere)] }),
+        verdict({ records: [record(theirs, { from_choice: true })] }),
+        verdict({ records: [record(fromOffer)] }),
+      ],
+    })
 
-    expect(marked.records[0]?.detail).toBe(`${paraphrased}${OFFERED_MARK}`)
-    expect(unflagged.records[0]?.detail, 'the flag is the model’s; the mark does not hang on it').toBe(
-      `Production has no rollback, so staging runs first.${OFFERED_MARK}`,
+    await $.session.start(START)
+    await turn($, set, dev(`sort out the migration ${TALK}`), claude('One question.', use('AskUserQuestion', asking, answered('Yes')), edit(FILE)))
+    await set.clock.advance(60_000)
+    await turn(
+      $,
+      set,
+      dev(`yes: production has no rollback, so staging runs first, after last month’s outage ${TALK}`),
+      claude('One question.', use('AskUserQuestion', asking, answered('Yes')), edit(FILE)),
     )
-    expect(elsewhere.records[0]?.detail, 'a reason from somewhere else is left as it is').not.toMatch('offered by the assistant')
-    expect(noQuestion.records[0]?.detail, 'and so is any reason in a turn where nothing was offered').not.toMatch('offered by')
+    await set.clock.advance(60_000)
+    await turn($, set, dev(`and run it again ${TALK}`), claude('Done.', edit(FILE)))
+
+    expect(set.of('remember').map(args => args.detail)).toEqual([
+      `${paraphrased}${OFFERED_MARK}`,
+      `${fromOffer}${OFFERED_MARK}`,
+      elsewhere,
+      theirs,
+      fromOffer,
+    ])
   })
 })
 
@@ -422,19 +391,28 @@ describe('a decision the developer says has no particular reason', () => {
     expect(await shown($)).not.toMatch('? Why')
   })
 
-  test('only words that say it outright count', () => {
-    expect(['no particular reason', 'for no reason at all', 'just because', 'it was arbitrary'].map(statesNoReason)).toEqual([
-      true,
-      true,
-      true,
-      true,
-    ])
-    expect(['not sure this works', 'nothing else to do', 'it works now', 'none of the tests ran'].map(statesNoReason)).toEqual([
-      false,
-      false,
-      false,
-      false,
-    ])
+  test('only words that say it outright count', async ($, on) => {
+    const SAID: readonly (readonly [string, string])[] = [
+      ['for no reason at all', 'no_strong_reason'],
+      ['just because', 'no_strong_reason'],
+      ['it was arbitrary', 'no_strong_reason'],
+      ['not sure this works', 'not_stated'],
+      ['nothing else to do', 'not_stated'],
+      ['it works now', 'not_stated'],
+      ['none of the tests ran', 'not_stated'],
+    ]
+    const bare = (n: number) =>
+      decision({ content: `The audit log is paged ${n} ways.`, detail: '', reason_status: 'not_stated', anchors: [{ path: FILE }] })
+    const set = stage(on, { replies: SAID.map((_, n) => verdict({ records: [bare(n)] })) })
+
+    await $.session.start(START)
+
+    for (const [words] of SAID) {
+      await turn($, set, dev(`page the audit log with offset, ${words}`), claude('Done.', edit(FILE)))
+      await set.clock.advance(180_000)
+    }
+
+    expect(set.of('remember').map(args => args.reason_status)).toEqual(SAID.map(([, status]) => status))
   })
 })
 

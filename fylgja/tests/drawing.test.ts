@@ -1,6 +1,5 @@
 import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
 
 import { engineDrew, idOf, MEETING_ID, NOTE_ID } from './fixtures'
 

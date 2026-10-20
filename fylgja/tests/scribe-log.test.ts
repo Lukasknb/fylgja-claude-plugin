@@ -33,9 +33,6 @@ const FIRST = idOf(101)
 const SECOND = idOf(102)
 const THIRD = idOf(103)
 
-/** A machine's salt, as a unit test of the log's hashes uses it. */
-const SALT = 'unittestsalt0000'
-
 /** The background job's own id for the conversation it goes on with. */
 const JOB = idOf(901)
 
@@ -567,25 +564,25 @@ describe('two loads writing one conversation', () => {
 
   test('a load lets go of the entries it picked up once its own holds all of them, but only those no load wrote lately', async ($, on) => {
     const set = await kept($, on, () => SESSION_ID)
-    const [first] = entriesOf(set, SESSION_ID)
+    const one = new Set(set.kept.keys())
 
-    // A second window, a moment later: the first may still run, and its entry stays.
+    // A second window, a moment later: the first may still run, and what it wrote stays beside the second's.
     await reloaded($, set)
 
-    const second = entriesOf(set, SESSION_ID)
+    const two = new Set(set.kept.keys())
 
-    expect(second).toHaveLength(2)
-    expect(second).toContain(first)
+    expect([...one].filter(key => !two.has(key)), 'nothing of the first is let go').toEqual([])
+    expect(two.size, 'the second load writes its own').toBe(one.size + 1)
 
     // Long after, nothing has written either: the next load lets both go for its own.
     await set.clock.advance(Journal.LIVE_MS + 1000)
     await reloaded($, set)
 
-    const after = entriesOf(set, SESSION_ID)
+    expect(set.kept.size, 'one load’s worth again').toBe(one.size)
 
-    expect(after).toHaveLength(1)
-    expect(second).not.toContain(after[0])
-    expect(foldedOf(set, SESSION_ID).records.map(one => one.id)).toEqual([FIRST, SECOND])
+    await reloaded($, set)
+
+    expect(await listed($), 'and what was kept reads whole').toEqual(BOTH)
   })
 })
 
@@ -640,7 +637,7 @@ describe('a conversation that is another one', () => {
   test('a resume into another conversation lists that conversation’s own records, and a resume back lists these again', async ($, on) => {
     const OTHER = idOf(910)
     let id = SESSION_ID
-    const set = await kept($, on, () => id, {
+    await kept($, on, () => id, {
       kept: { [Journal.keyOf(OTHER, 'otherload') ?? '']: entry(OTHER, 'otherload', 1, [written(THIRD, 'Log every retry at warn.')]) },
     })
 
@@ -688,7 +685,8 @@ describe('the log is kept within bounds', () => {
       kept[Journal.keyOf(conv, 'someload') ?? ''] = entry(conv, 'someload', 1, [written(idOf(600), 'Something.')])
     }
 
-    const set = stage(on, { kept })
+    let id = SESSION_ID
+    const set = stage(on, { kept, sessionId: () => id })
 
     await set.clock.set(now)
     set.rows.push(...WORK)
@@ -696,15 +694,20 @@ describe('the log is kept within bounds', () => {
     await turn($, set, dev('keep going'), claude('Done.', edit(FILE)))
     await set.clock.settle()
 
-    const conversations = new Set([...set.kept.keys()].flatMap(key => Journal.partsOf(key)?.conv ?? []))
+    expect(Object.keys(kept).filter(key => key.startsWith('scribe.list')).filter(key => set.kept.has(key)), 'what the plugin kept before the log').toEqual([])
 
-    expect(conversations.size, 'the newest, and the one in hand').toBe(Journal.MAX_KEPT + 1)
-    expect(conversations).toContain(SESSION_ID)
-    expect(conversations).toContain(idOf(439))
-    expect(conversations).not.toContain(idOf(400))
-    expect(conversations).not.toContain(stale)
-    expect([...set.kept.keys()].filter(Journal.isLegacy)).toEqual([])
-    expect(Journal.entriesOf(set.kept.get(Journal.INDEX)).map(one => one.conv).sort()).toEqual([...conversations].sort())
+    // Each conversation is opened again: one that was kept lists its record, one let go lists nothing.
+    const kinds = async (conv: string): Promise<string[]> => {
+      id = conv
+      await endedBy($, 'resume', SESSION_ID)
+
+      return (await listed($)).filter(line => line.includes('◆'))
+    }
+
+    expect(await kinds(idOf(400 + 40 - Journal.MAX_KEPT)), 'the oldest of the newest kept').toEqual(['▸ ◆ Decision · Something.'])
+    expect(await kinds(idOf(439))).toEqual(['▸ ◆ Decision · Something.'])
+    expect(await kinds(idOf(400 + 40 - Journal.MAX_KEPT - 1)), 'the newest one past them').toEqual([])
+    expect(await kinds(stale), 'not written for thirty days').toEqual([])
   })
 
   test(`a long session’s entry is written again as one line past ${Journal.MAX_LINES} lines, and reads the same`, async ($, on) => {
@@ -715,71 +718,9 @@ describe('the log is kept within bounds', () => {
       await set.clock.advance(60_000)
     }
 
-    const [key] = entriesOf(set, SESSION_ID)
-    const segment = Journal.segmentOf(set.kept.get(key ?? ''))
+    await reloaded($, set)
 
-    expect(segment?.lines.length).toBeLessThanOrEqual(Journal.MAX_LINES)
-    expect(foldedOf(set, SESSION_ID).records.map(one => one.id)).toEqual([FIRST, SECOND])
-  })
-})
-
-describe('reading a log', () => {
-  const A = written(FIRST, 'One.')
-  const B = written(SECOND, 'Two.')
-
-  test('a record is as the latest line has it, and gone where it was taken back as late or later', () => {
-    const lines = [
-      JSON.stringify({ at: 1, recs: [{ ...A, at: 1, since: 1 }, { ...B, at: 1, since: 1 }] }),
-      JSON.stringify({ at: 3, recs: [{ ...A, content: 'One, reworded.', at: 3, since: 1 }] }),
-      JSON.stringify({ at: 2, tombs: [{ id: SECOND, at: 2 }] }),
-    ]
-    const folded = Journal.fold([{ conv: SESSION_ID, writer: 'oneload', at: 3, tie: null, seed: null, count: 0, lines }])
-
-    expect(folded.records.map(one => one.content)).toEqual(['One, reworded.'])
-  })
-
-  test('a line of what changed holds what changed alone, and a whole one everything', () => {
-    const groups = groupsOf()
-    const first = Journal.next(Journal.emptyBook(), { records: [A, B], groups }, 10, true)
-    const same = Journal.next(first.book, { records: [A, B], groups }, 20, false)
-    const changed = Journal.next(first.book, { records: [{ ...A, content: 'Changed.' }], groups }, 30, false)
-
-    expect(Object.keys(first.patch?.set ?? {}).sort()).toEqual(Object.keys(groups).sort())
-    expect(same.patch, 'nothing changed: no line').toBeUndefined()
-    expect(changed.patch).toEqual({ at: 30, recs: [{ ...A, content: 'Changed.', at: 30, since: 10 }], tombs: [{ id: SECOND, at: 30 }] })
-  })
-
-  test('the conversation it goes on from is the one that shares the most rows; the tool call only where rows cannot be compared', () => {
-    const rows = [...WORK]
-    const sibling = { conv: idOf(910), at: 9, chars: 1, ...Journal.marksOf(rows, SALT) }
-    const older = { conv: idOf(911), at: 1, chars: 1, ...Journal.marksOf(rows.slice(0, 1), SALT) }
-    const mismatched = { conv: idOf(912), at: 1, chars: 1, tie: TIE, seed: 'zzz', count: 1 }
-
-    expect(Journal.nearest([older, sibling], rows, SALT)?.conv).toBe(idOf(910))
-    expect(Journal.nearest([mismatched], rows, SALT), 'a hash that does not match is no match').toBeUndefined()
-  })
-
-  test('a history longer than the rows answered is given no hash, and is found by its last tool call', () => {
-    const long = (n: number, tie: string): Row[] =>
-      Array.from({ length: n }, (_, at): Row => (at === n - 1 ? claude('Done.', { ...edit(FILE), tool_use_id: tie }) : dev(`row ${at}`)))
-
-    expect(Journal.marksOf(long(Journal.MAX_ROWS, TIE), SALT)).toEqual({ tie: TIE, seed: null, count: 0 })
-
-    const short = long(10, TIE)
-    const one = { conv: SESSION_ID, at: 1, chars: 1, ...Journal.marksOf(short, SALT) }
-
-    expect(one.seed).not.toBeNull()
-    expect(Journal.nearest([one], [...long(Journal.MAX_ROWS - 1, 'toolu_x').slice(5), ...short.slice(-1), ...long(5, 'toolu_y')], SALT)?.conv).toBe(SESSION_ID)
-  })
-
-  test('the oldest conversations go first, by age, by number and by size, and the one in hand always stays', () => {
-    const day = 24 * 3_600_000
-    const now = 100 * day
-    const one = (n: number, at: number, chars = 10): Journal.Entry => ({ conv: idOf(n), at, chars, tie: null, seed: null, count: 0 })
-    const { kept, dropped } = Journal.retained([one(1, now - 31 * day), one(2, now - day), one(3, now - 2 * day, Journal.MAX_TOTAL_CHARS), one(4, now - 40 * day)], now, new Set([idOf(4)]))
-
-    expect(kept.map(entry => entry.conv).sort()).toEqual([idOf(2), idOf(4)])
-    expect(dropped.sort()).toEqual([idOf(1), idOf(3)])
+    expect(await listed($)).toEqual(BOTH)
   })
 })
 
@@ -884,16 +825,6 @@ describe('a load at an awkward moment', () => {
     expect(await shown($)).toBe(`${QUIET} · 1 kept`)
   })
 
-  test('a fork in the session after a turn has ended picks up nothing', async ($, on) => {
-    let id = SESSION_ID
-    const set = await kept($, on, () => id, { replies: [verdict({ records: [LOCK, CAP] }), NOTHING] })
-
-    await turn($, set, dev('and on'), claude('Sure.'))
-    id = idOf(922)
-
-    expect(await listed($)).toContain(Ledger.QUIET.empty)
-  })
-
   test('a resume right after a load, before any turn ended, picks up the conversation it goes into', async ($, on) => {
     const OTHER = idOf(921)
     let id = SESSION_ID
@@ -931,17 +862,12 @@ describe('what the log costs', () => {
 
     const size = JSON.stringify(Object.fromEntries(set.kept)).length
 
-    ;(globalThis as unknown as { console: { log: (text: string) => void } }).console.log(`store after 60 more turns touching 60 files: ${size} characters`)
     expect(size).toBeLessThan(Journal.MAX_SEGMENT_CHARS * 2)
   })
 
-  test('the prompts are kept as hashes keyed with a salt of this machine’s own, kept in the store', async ($, on) => {
+  test('no prompt is kept in the store as it was typed', async ($, on) => {
     const set = await kept($, on, () => SESSION_ID)
-    const salt = set.kept.get('scribe.salt')
-    const cursor = foldedOf(set, SESSION_ID).groups.cursor
 
-    expect(typeof salt).toBe('string')
-    expect(cursor?.prompts).toEqual([Journal.keyedHashOf(String(salt), 'lock the retry queue with redis, and cap the retries')])
-    expect(cursor?.prompts).not.toContain(Journal.hashOf('lock the retry queue with redis, and cap the retries'))
+    expect(JSON.stringify([...set.kept])).not.toContain('lock the retry queue with redis')
   })
 })

@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { standsIn } from '../hooks/project'
 import { TWIN_STATUS } from '../hooks/session'
 import { answer, endedBy, idOf, MEETING_ID, meetingRecord, token } from './fixtures'
 import { claude, decision, dev, edit, ROOT, send, stage, START, step, turn, verdict } from './scribe-fixtures'
@@ -66,12 +65,18 @@ describe('a project that could stand in for the plugin’s server', () => {
       'the name spelled with underscores',
       { [`${ROOT}/.mcp.json`]: entry('plugin_fylgja_fylgja', theirs('https://kb.example/mcp')) },
     ],
+    [
+      'the plugin’s name in capitals',
+      { [`${ROOT}/.mcp.json`]: entry('PLUGIN:FYLGJA:FYLGJA', theirs('https://kb.example/mcp')) },
+    ],
     ['any name that starts with “plugin”', { [`${ROOT}/.mcp.json`]: entry('Plugin:notes:kb', theirs('https://kb.example/mcp')) }],
     ['Fylgja’s address under an innocent name', { [`${ROOT}/.mcp.json`]: entry('kb', theirs('https://fylgja.lknblab.dev/mcp')) }],
     [
       'Fylgja’s host with another scheme, port and path',
       { [`${ROOT}/.mcp.json`]: entry('kb', theirs('http://FYLGJA.lknblab.dev:8443/other/path?x=1')) },
     ],
+    ['Fylgja’s host written with a closing dot', { [`${ROOT}/.mcp.json`]: entry('kb', theirs('fylgja.lknblab.dev.')) }],
+    ['Fylgja’s host behind a user name', { [`${ROOT}/.mcp.json`]: entry('kb', theirs('wss://user@fylgja.lknblab.dev:444/x')) }],
     [
       'Fylgja’s host inside a command',
       {
@@ -121,6 +126,9 @@ describe('a project that leaves Fylgja to the plugin', () => {
             'my-fylgja-notes': { command: 'node', args: ['notes.js'] },
             lookalike: { type: 'http', url: 'https://fylgja.lknblab.dev.example.org/mcp' },
             longer: { type: 'http', url: 'https://notfylgja.lknblab.dev/mcp' },
+            prefixed: { type: 'http', url: 'https://xfylgja.lknblab.dev/mcp' },
+            'my-plugins': { command: 'node', args: ['plugins.js'] },
+            'fylgja:fylgja': { command: 'node', args: ['kb.js'] },
           },
         }),
         '/work/.mcp.json': '{ "mcpServers": {} }',
@@ -223,46 +231,5 @@ describe('a project that leaves Fylgja to the plugin', () => {
 
     expect(set.calls.length, 'the reference is not asked about there').toBe(calls)
     expect(set.statuses.at(-1)).toBe(TWIN_STATUS)
-  })
-})
-
-describe('which entries could stand in', () => {
-  const HOSTS = ['fylgja.lknblab.dev']
-
-  test('by name', () => {
-    for (const name of [
-      'plugin:fylgja:fylgja',
-      'PLUGIN:FYLGJA:FYLGJA',
-      'plugin_fylgja_fylgja',
-      'x-plugin:fylgja:fylgja-2',
-      'plugin',
-      'plugin:other:thing',
-    ]) {
-      expect(standsIn(name, {}, HOSTS), name).toBe(true)
-    }
-
-    for (const name of ['fylgja', 'kb', 'my-plugins', 'fylgja:fylgja']) {
-      expect(standsIn(name, { command: 'node' }, HOSTS), name).toBe(false)
-    }
-  })
-
-  test('by host, wherever in the entry it stands, and not by a longer host that only holds it', () => {
-    for (const url of [
-      'https://fylgja.lknblab.dev/mcp',
-      'http://fylgja.lknblab.dev',
-      'wss://user@fylgja.lknblab.dev:444/x',
-      'fylgja.lknblab.dev.',
-    ]) {
-      expect(standsIn('kb', { url }, HOSTS), url).toBe(true)
-    }
-
-    for (const url of [
-      'https://fylgja.lknblab.dev.evil.example/mcp',
-      'https://xfylgja.lknblab.dev/mcp',
-      'https://fylgja-lknblab.dev/mcp',
-      'https://example.org/?q=fylgja',
-    ]) {
-      expect(standsIn('kb', { url }, HOSTS), url).toBe(false)
-    }
   })
 })

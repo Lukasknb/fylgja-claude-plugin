@@ -205,3 +205,66 @@ describe('the commit a decision was written at', () => {
     ])
   })
 })
+
+describe('which commit is attached', () => {
+  // Each from the tree's root: where an earlier command left the shell is not what is tested here.
+  const commits = (command: string, printed: string | undefined) =>
+    claude(
+      'Committed.',
+      use('Bash', { command: `cd ${ROOT}` }, ''),
+      printed === undefined ? ({ tool: 'Bash', input: { command } } as never) : use('Bash', { command }, printed),
+    )
+
+  test('the sha is read from the line git prints for a commit it made in this repository', async ($, on) => {
+    const HERE: readonly (readonly [string, string, string])[] = [
+      ['git commit -m x', '[main 1a2b3c1] x', '1a2b3c1'],
+      ['git add . && git commit -m x', 'hint\n[feat/a (root-commit) 1a2b3c2] x', '1a2b3c2'],
+      [`git -C ${ROOT} commit -m x`, '[main 1a2b3c3] x', '1a2b3c3'],
+      [`cd ${ROOT} && git commit --amend`, '[detached HEAD 1a2b3c4] x', '1a2b3c4'],
+      [`cd "${ROOT}/" && git commit -m x`, '[main 1a2b3c5] x', '1a2b3c5'],
+      ['git commit -m x', '[main 0123456789abcdef0123456789abcdef01234567] x', '0123456789abcdef0123456789abcdef01234567'],
+    ]
+    const set = stage(on)
+
+    await $.session.start(START)
+
+    for (const [command, printed] of HERE) {
+      await turn($, set, dev('commit it'), commits(command, printed))
+      await set.clock.advance(60_000)
+    }
+
+    expect(set.of('attach_commit').map(args => args.sha)).toEqual(HERE.map(([, , sha]) => sha))
+  })
+
+  test('a commit made somewhere else, or one git did not make, is attached to nothing', async ($, on) => {
+    const NOT_HERE: readonly (readonly [string, string | undefined])[] = [
+      ['git status', '[main 1a2b3c4] x'],
+      ['git commit -m x', 'error: pathspec did not match'],
+      ['git commit -m x', undefined],
+      ['git commit -m x', '[main 1A2B3C4] upper case is no sha git prints'],
+      // A folder inside the tree may be a repository of its own.
+      ['git -C sub commit -m x', '[main 1a2b3c4] x'],
+      [`cd ${ROOT}/packages/api && git commit -m x`, '[main 1a2b3c4] x'],
+      ['git -C ../other commit -m x', '[main 1a2b3c4] x'],
+      [`git -C ${ROOT}-other commit -m x`, '[main 1a2b3c4] x'],
+      ['cd .. && git commit -m x', '[main 1a2b3c4] x'],
+      ['cd ~/other && git commit -m x', '[main 1a2b3c4] x'],
+      ['GIT_DIR=/work/other/.git git commit -m x', '[main 1a2b3c4] x'],
+      ['pushd /work/other; git commit -m x', '[main 1a2b3c4] x'],
+      // Words in a message that read like a change of place: it cannot be told, so it is left.
+      ['git commit -m "cd /elsewhere is just words here"', '[main 1a2b3c4] x'],
+    ]
+    const set = stage(on)
+
+    await $.session.start(START)
+
+    for (const [command, printed] of NOT_HERE) {
+      await turn($, set, dev('commit it'), commits(command, printed))
+      await set.clock.advance(60_000)
+    }
+
+    await turn($, set, dev('commit it'), commits('git commit -m x', '[main 9e9e9e9] x'))
+
+    expect(set.of('attach_commit').map(args => args.sha), 'only the one commit made here, last').toEqual(['9e9e9e9'])
+  })
+})

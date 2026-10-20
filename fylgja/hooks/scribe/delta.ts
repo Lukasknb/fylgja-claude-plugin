@@ -122,7 +122,7 @@ export type Seen = {
 }
 
 /** No more of the conversation than this is handed to one wake. */
-export const MAX_DELTA_CHARS = 14_000
+const MAX_DELTA_CHARS = 14_000
 
 const MAX_PROMPT = 2500
 const MAX_REPLY = 2500
@@ -198,7 +198,7 @@ function isHere(command: string, root: string): boolean {
  *
  * @param root the working tree's root
  */
-export function commitOf(command: string, printed: string | undefined, root: string): string | undefined {
+function commitOf(command: string, printed: string | undefined, root: string): string | undefined {
   if (printed === undefined || !/\bgit\b[^\n]*\bcommit\b/.test(command) || !isHere(command, root.replace(/\/+$/, ''))) {
     return undefined
   }
@@ -388,7 +388,7 @@ const STORED_REJECTION = 'User rejected tool use'
  * error text from the first character on, so nothing it returned is taken
  * for the developer's words.
  */
-export function rejectionOf(use: Row['toolUses'][number]): { feedback: string } | undefined {
+function rejectionOf(use: Row['toolUses'][number]): { feedback: string } | undefined {
   const { text, result } = use
 
   if (use.isError !== true || text === undefined || !text.startsWith(REJECTION)) {

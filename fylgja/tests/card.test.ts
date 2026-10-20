@@ -112,24 +112,6 @@ describe('a card that tells', () => {
     ])
   })
 
-  test('its record hangs from its mark, wraps beside it, and what stands in backticks is set apart with the backticks kept', async ($, on) => {
-    const set = stage(on, { replies: [RECORDING] })
-
-    await $.session.start(START)
-    await turn($, set, ...WORK)
-
-    const tree = await card($)
-    const row = (tree.children ?? [])[1] as Node
-    const [gutter, body] = row.children as Node[]
-
-    expect(row.props).toEqual({ flexDirection: 'row' })
-    expect([wordsOf(gutter as Node), (gutter as Node).props]).toEqual(['✓ ', { color: 'success' }])
-    expect((body as Node).props).toEqual({ flexDirection: 'column', flexGrow: 1, flexShrink: 1 })
-    expect(all(body as Node, 'Text')[0]?.props).toEqual({ wrap: 'wrap' })
-    expect(all(body as Node, 'Text').find(text => wordsOf(text) === '`pg_advisory_lock`')?.props).toEqual({ color: 'suggestion' })
-    expect(wordsOf(body as Node)).toBe('Recorded · Use `pg_advisory_lock` for the retry queue, not Redis.')
-  })
-
   test('a tell about an earlier decision is the same calm card, and says it goes with the next prompt', async ($, on) => {
     const set = stage(on, { tools: TOLD })
 

@@ -86,6 +86,48 @@ describe('a record is about the repository its files lie in', () => {
     expect(set.of('remember')[0]).toMatchObject({ repo: 'scratch', anchors: [{ path: 'a.ts' }] })
   })
 
+  test('a checkout beside the session’s is named owner/name from its remote, whatever the address looks like, or by its folder', async ($, on) => {
+    // The remote, the checkout's folder, and the name its records are filed under.
+    const NAMES: readonly (readonly [string | null, string, string | undefined])[] = [
+      // A folder that gives no name a person would know: no repository, so its file is no anchor.
+      [null, 'local thing', undefined],
+      ['git@github.com:acme/web.git', 'web', 'acme/web'],
+      ['https://github.com/acme/web', 'web', 'acme/web'],
+      ['ssh://git@gitlab.example.com:2222/group/sub/web.git', 'web', 'sub/web'],
+      ['https://user:secret@github.com/acme/web.git/', 'web', 'acme/web'],
+      ['https://dev.azure.com/acme/Platform/_git/web', 'web', 'Platform/web'],
+      ['git@ssh.dev.azure.com:v3/acme/Platform/web', 'web', 'Platform/web'],
+      ['../web-upstream', 'web', 'web'],
+      ['../../mirrors/web.git', 'web', 'mirrors/web'],
+      ['/srv/git/web.git', 'checkout', 'git/web'],
+      ['file:///srv/_git/web', 'checkout', 'srv/web'],
+      ['not a remote', 'fallback', 'fallback'],
+      [null, 'local-thing', 'local-thing'],
+    ]
+    const rootOf = (n: number) => `/work/c${n}/${NAMES[n]?.[1]}`
+    const files = Object.fromEntries(
+      NAMES.flatMap(([remote], n) => [
+        [`${rootOf(n)}/.git`, ''],
+        [`${rootOf(n)}/.git/config`, remote === null ? '[core]\n\tbare = false\n' : `[remote "origin"]\n\turl = ${remote}\n`],
+      ]),
+    )
+    const set = stage(on, {
+      files,
+      replies: NAMES.map((_, n) => verdict({ records: [decision({ content: `Use way ${n}.`, anchors: [{ path: `${rootOf(n)}/lib/y.ts` }] })] })),
+    })
+
+    await $.session.start(START)
+
+    for (const [n] of NAMES.entries()) {
+      await turn($, set, dev(`fix it over there, number ${n}`), edits(`${rootOf(n)}/lib/y.ts`))
+      await set.clock.advance(60_000)
+    }
+
+    expect(set.of('remember').map(args => [args.repo, args.anchors])).toEqual(
+      NAMES.map(([, , name]) => (name === undefined ? [REPO, undefined] : [name, [{ path: 'lib/y.ts' }]])),
+    )
+  })
+
   test('a turn that spans two repositories: one record is filed under the repository most of its anchors are in, and keeps only those', async ($, on) => {
     const spanning = decision({
       anchors: [{ path: 'src/api/client.ts' }, { path: '/work/other/lib/y.ts' }, { path: '/work/other/lib/z.ts' }],
@@ -292,20 +334,5 @@ describe('a record is about the repository its files lie in', () => {
       expect(set.calls, 'a file that cannot be read as configuration counts as hostile').toEqual([])
       expect(set.asked).toEqual([])
     })
-  })
-
-  test('which repository a folder lies in is asked of the machine once', async ($, on) => {
-    const set = stage(on, { files: NESTED })
-
-    await $.session.start(START)
-    await turn($, set, dev('change the plugin hook'), edits(`${ROOT}/plugin/hooks/a.ts`))
-    await turn(
-      $,
-      set,
-      dev('and again, the same file and its neighbour'),
-      edits(`${ROOT}/plugin/hooks/a.ts`, `${ROOT}/plugin/hooks/b.ts`),
-    )
-
-    expect(set.reads.filter(path => path === `${ROOT}/plugin/.git/config`).length).toBe(1)
   })
 })

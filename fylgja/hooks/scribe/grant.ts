@@ -57,7 +57,7 @@ const OWN_TOOL = 'mcp__plugin_fylgja_fylgja__'
  * @param raisedBy the plugin whose hook raised the call, as the engine names it
  * @param server the name the engine last answered for the plugin's own server; undefined when it is not connected
  */
-export function isOwnCall(e: Checked, raisedBy: string | undefined, server: string | undefined): boolean {
+function isOwnCall(e: Checked, raisedBy: string | undefined, server: string | undefined): boolean {
   const isOurs = raisedBy === 'fylgja' || raisedBy?.startsWith('fylgja@') === true
 
   return (

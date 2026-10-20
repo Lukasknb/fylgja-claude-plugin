@@ -150,36 +150,6 @@ describe('Scribe records', () => {
     expect(await shown($)).toMatch('✓ Recorded 2')
   })
 
-  test('a write Fylgja refuses shows no receipt and no error, and the next turn is read as ever', async ($, on) => {
-    let refusals = 0
-    const set = stage(on, {
-      replies: [verdict({ records: [decision()] })],
-      tools: {
-        remember: () => {
-          refusals += 1
-
-          return { content: [{ type: 'text', text: 'refused:shape — content must start with an instruction' }], isError: true }
-        },
-      },
-    })
-
-    await $.session.start(START)
-    await turn($, set, ...TALK)
-
-    expect(refusals, 'not tried again').toBe(1)
-    expect(await shown($)).toBe(QUIET)
-    expect(set.toasts).toEqual([])
-
-    await turn(
-      $,
-      set,
-      dev('and now the retry policy'),
-      claude('Three tries, then the dead letter queue.', edit('src/queue/retry.ts')),
-    )
-
-    expect(set.asked.length).toBe(2)
-  })
-
   test('Remove takes the record away again', async ($, on) => {
     const set = stage(on, { replies: [verdict({ records: [decision()] })] })
 

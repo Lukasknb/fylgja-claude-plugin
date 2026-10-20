@@ -103,13 +103,18 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     expect(await shown($)).toMatch('◆ Decision · Never log a recipient address.')
   })
 
-  test('a tell naming a record no lookup returned is dropped', async ($, on) => {
+  test('a tell naming a record no lookup returned is dropped: nothing is shown, and the next look is told nothing was told', async ($, on) => {
     const set = stage(on, { replies: [verdict({ tells: [idOf(66), 'not an id', { id: idOf(67) }] })] })
 
     await $.session.start(START)
     await turn($, set, ...WORK)
 
     expect(await shown($)).toBe(QUIET)
+
+    await set.clock.advance(60_000)
+    await turn($, set, ...WORK)
+
+    expect(set.asked[1]?.prompt).toMatch('{"outcome":"nothing","recorded":[],"asked":false,"told":0}')
   })
 
   test('one turn shows at most one tell', async ($, on) => {

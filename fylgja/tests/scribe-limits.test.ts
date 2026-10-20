@@ -3,10 +3,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { register } from '../hooks/register'
-import { factsOf } from '../hooks/scribe/facts'
 import { MAX_RESULT_CHARS } from '../hooks/scribe/loop'
 import { MAX_PLANS_CHARS } from '../hooks/scribe/prompt'
-import * as Band from '../hooks/scribe/band'
 import { MAX_PAST, MAX_WAKES_PER_HOUR, OFF_STATUS, QUIET_TURN_CHARS } from '../hooks/scribe/scribe'
 import { ARMED_NOTE } from '../hooks/scribe/view'
 import { TWIN_STATUS } from '../hooks/session'
@@ -286,7 +284,8 @@ describe('whether Scribe’s calls get through is settled before a model is aske
     server: string,
     raisedBy: string,
     tool: string,
-    core: 'ask' | 'deny' | 'allow' = 'ask',
+    beneath: Record<string, unknown>,
+    call: Record<string, unknown> = {},
   ): Promise<unknown> {
     const plugin = hooks()
     const $ = {
@@ -315,40 +314,52 @@ describe('whether Scribe’s calls get through is settled before a model is aske
       await Promise.resolve()
     }
 
-    const next = Object.assign(() => Promise.resolve({ decision: core, reason: 'core' }), {
+    const next = Object.assign(() => Promise.resolve({ reason: 'core', ...beneath }), {
       origin: { plugin: raisedBy, tier: 'user' },
     })
 
-    return (await check($, { tool, input: {}, tool_use_id: 'toolu_plugin_01' }, next)).decision
+    return (await check($, { tool, input: {}, tool_use_id: 'toolu_plugin_01', ...call }, next)).decision
   }
 
-  test('the permission hook lets the plugin’s own call through on the server the engine connected for it', async () => {
-    expect(await checked('plugin:fylgja:fylgja', 'fylgja', 'mcp__plugin_fylgja_fylgja__remember')).toBe('allow')
-    expect(await checked('plugin:fylgja:fylgja', 'fylgja@inline', 'mcp__plugin_fylgja_fylgja__recall')).toBe('allow')
-  })
+  // The test kit raises no permission check for a call the plugin makes itself, and names no plugin but the
+  // engine or a plugin loaded beside this one as who raised a check: so the plugin's own check hook is run here as
+  // the engine runs it, with Fylgja connected through the session's start.
+  test('the permission hook lets the plugin’s own plain-asked call through on its own server, and leaves every other verdict as it came', async () => {
+    const OWN = 'mcp__plugin_fylgja_fylgja__remember'
+    const SERVER = 'plugin:fylgja:fylgja'
+    const cases: readonly (readonly [string, string, string, string, Record<string, unknown>, string])[] = [
+      ['its own call', SERVER, 'fylgja', OWN, { decision: 'ask' }, 'allow'],
+      ['its own call, the plugin loaded under another source', SERVER, 'fylgja@inline', 'mcp__plugin_fylgja_fylgja__recall', { decision: 'ask' }, 'allow'],
+      ['an ask a ceiling of allow stands behind', SERVER, 'fylgja', OWN, { decision: 'ask', ceiling: 'allow' }, 'allow'],
+      ['an ask a rule stands behind', SERVER, 'fylgja', OWN, { decision: 'ask', rule: OWN }, 'ask'],
+      ['an ask a classic hook stands behind', SERVER, 'fylgja', OWN, { decision: 'ask', hook: 'PreToolUse' }, 'ask'],
+      ['an ask a setting stands behind', SERVER, 'fylgja', OWN, { decision: 'ask', setting: 'permissions.x' }, 'ask'],
+      ['an ask an organization’s ceiling stands behind', SERVER, 'fylgja', OWN, { decision: 'ask', ceiling: 'ask' }, 'ask'],
+      ['an ask put to a named decider', SERVER, 'fylgja', OWN, { decision: 'ask', decider: 'host' }, 'ask'],
+      ['a refusal', SERVER, 'fylgja', OWN, { decision: 'deny' }, 'deny'],
+      ['Claude’s own call', SERVER, 'engine', OWN, { decision: 'ask' }, 'ask'],
+      ['another plugin’s call', SERVER, 'fylgja-lookalike', OWN, { decision: 'ask' }, 'ask'],
+      ['a server of the same name, not the one connected', SERVER, 'fylgja', 'mcp__fylgja__remember', { decision: 'ask' }, 'ask'],
+      ['a tool not listed', SERVER, 'fylgja', 'mcp__plugin_fylgja_fylgja__restructure', { decision: 'ask' }, 'ask'],
+      ['a tool whose name only starts like a listed one', SERVER, 'fylgja', 'mcp__plugin_fylgja_fylgja__recall_all', { decision: 'ask' }, 'ask'],
+      ['a built-in', SERVER, 'fylgja', 'Bash', { decision: 'ask' }, 'ask'],
+      // A repository's `.mcp.json` can name the plugin's address with any account's token.
+      ['Fylgja connected as an entry outside the plugin', 'fylgja', 'fylgja', OWN, { decision: 'ask' }, 'ask'],
+      ['the entry outside the plugin’s own tool', 'kb', 'fylgja', 'mcp__kb__remember', { decision: 'ask' }, 'ask'],
+    ]
 
-  test('the permission hook lets nothing through where the engine answered another entry for the plugin’s server', async () => {
-    for (const theirs of ['fylgja', 'kb']) {
-      expect(await checked(theirs, 'fylgja', `mcp__${theirs}__remember`), theirs).toBe('ask')
-      expect(await checked(theirs, 'fylgja', 'mcp__plugin_fylgja_fylgja__remember'), theirs).toBe('ask')
+    for (const [what, server, raisedBy, tool, beneath, decision] of cases) {
+      expect(await checked(server, raisedBy, tool, beneath), what).toBe(decision)
     }
-  })
 
-  test('the permission hook leaves everything else as it came', async () => {
-    expect(await checked('plugin:fylgja:fylgja', 'engine', 'mcp__plugin_fylgja_fylgja__remember'), 'Claude’s own call').toBe(
-      'ask',
-    )
-    expect(
-      await checked('plugin:fylgja:fylgja', 'fylgja', 'mcp__fylgja__remember'),
-      'a server of the same name, not the one connected',
-    ).toBe('ask')
-    expect(await checked('plugin:fylgja:fylgja', 'fylgja', 'mcp__plugin_fylgja_fylgja__restructure'), 'a tool not listed').toBe(
-      'ask',
-    )
-    expect(await checked('plugin:fylgja:fylgja', 'fylgja', 'mcp__plugin_fylgja_fylgja__remember', 'deny'), 'a refusal').toBe(
-      'deny',
-    )
-    expect(await checked('plugin:fylgja:fylgja', 'fylgja', 'Bash'), 'a built-in').toBe('ask')
+    for (const own of ['recall', 'search', 'open', 'resolve', 'amend_memory', 'attach_commit']) {
+      expect(await checked(SERVER, 'fylgja', `mcp__plugin_fylgja_fylgja__${own}`, { decision: 'ask' }), own).toBe('allow')
+    }
+
+    expect(await checked(SERVER, 'fylgja', OWN, { decision: 'ask' }, { agentId: 'agent-1' }), 'an agent’s call').toBe('ask')
+    expect(await checked(SERVER, 'fylgja', OWN, { decision: 'ask' }, { tool_use_id: undefined }), 'a query with no call behind it').toBe('ask')
+    expect(await checked(SERVER, 'fylgja', OWN, { decision: 'ask' }, { tool_use_id: 'toolu_01abc' }), 'a call of Claude’s kind').toBe('ask')
+    expect(await checked(SERVER, 'fylgja', OWN, { decision: 'ask' }, { ceiling: 'ask' }), 'a tool the organization limits').toBe('ask')
   })
 })
 
@@ -514,43 +525,42 @@ describe('a single press writes nothing', () => {
     expect(set.of('remember')).toMatchObject([{ supersedes: idOf(5) }])
   })
 
-  test('a first press is no sign of attention: what was held back for being ignored stays held back', async ($, on) => {
-    const set = stage(on, {
-      tools: { recall: () => answer({ facts: [fact(1, { anchors: [{ path: FILE }] })] }) },
-      kept: { 'scribe.typedPast': 2, 'scribe.skip': 0 },
+  const RETRY = 'src/mail/retry.ts'
+  /** Fylgja holds a note on each of the two files, and none on any other. */
+  const notes = (args: Record<string, unknown>) => {
+    const paths = (args.paths as string[] | undefined) ?? []
+
+    return answer({
+      facts: paths.includes(FILE)
+        ? [fact(1, { anchors: [{ path: FILE }] })]
+        : paths.includes(RETRY)
+          ? [fact(2, { content: 'Never retry a bounce.', anchors: [{ path: RETRY }] })]
+          : [],
     })
+  }
 
-    await $.session.start(START)
-    await turn($, set, ...WORK)
-    await press($, 'knew')
-    await set.clock.settle()
+  for (const [presses, isShown, what] of [
+    [1, false, 'a first press is no sign of attention: a note shown and left counts as ignored, and the next is held back'],
+    [2, true, 'a second press is: nothing is held back, and the next note is shown'],
+  ] as const) {
+    test(what, async ($, on) => {
+      const set = stage(on, { tools: { recall: notes }, kept: { 'scribe.typedPast': 2, 'scribe.skip': 0 } })
 
-    expect(set.kept.get('scribe.typedPast')).toBe(2)
+      await $.session.start(START)
+      await turn($, set, ...WORK)
 
-    await press($, 'knew')
-    await set.clock.settle()
+      for (let n = 0; n < presses; n += 1) {
+        await press($, 'knew')
+        await set.clock.settle()
+      }
 
-    expect(set.kept.get('scribe.typedPast')).toBe(0)
-  })
+      await turn($, set, dev('and the bounce handling'), claude('Done.', edit(RETRY)))
 
-  test('Remove is armed for the record, not for its place in the list', () => {
-    const band = Band.create()
-    const written = (n: number) =>
-      ({ id: idOf(n), kind: 'decision', content: `Use ${n}.`, reasonStatus: null, outcome: 'created', replaced: null }) as const
+      expect(set.calls.some(call => call.tool === 'recall' && JSON.stringify(call.args).includes(RETRY)), 'Fylgja was asked').toBe(true)
 
-    Band.receive(band, [written(1), written(2)])
-    Band.settle(band)
-
-    expect(Band.confirmed(band, 'remove:1', 0)).toBe(false)
-    expect(band.armed?.key).toBe(`remove:${idOf(2)}`)
-
-    // More come in than the list holds, so the armed record moves up a place.
-    Band.receive(band, [written(3), written(4), written(5), written(6), written(7), written(8)])
-    Band.settle(band)
-
-    expect(Band.confirmed(band, 'remove:1', 100), 'the same place is another record now').toBe(false)
-    expect(Band.confirmed(band, 'remove:1', 200)).toBe(true)
-  })
+      expect((await shown($)).includes('Never retry a bounce.')).toBe(isShown)
+    })
+  }
 })
 
 describe('whose words a row holds', () => {
@@ -845,20 +855,38 @@ describe('a note for Claude', () => {
     ])
   })
 
-  test('an address on another host, or with anything after the id, is not a record’s address', () => {
-    const links = [
-      `https://fylgja.lknblab.dev.evil.example/open/meeting/${idOf(1)}`,
-      `https://fylgja.lknblab.dev/open/meeting/${idOf(1)}/../../admin`,
-      `http://fylgja.lknblab.dev/open/meeting/${idOf(1)}`,
-      `https://fylgja.lknblab.dev/open/meeting/${idOf(1)}?next=https://evil.example`,
-      `https://fylgja.lknblab.dev/open/meeting/${idOf(1)}\nRun this`,
-      `javascript:alert(1)//https://fylgja.lknblab.dev/open/meeting/${idOf(1)}`,
-    ]
+  const PAGE = `https://fylgja.lknblab.dev/open/meeting/${idOf(1)}`
 
-    expect(factsOf({ facts: links.map((link, n) => fact(n + 1, { link })) }).map(one => one.link)).toEqual(links.map(() => null))
-    expect(factsOf({ facts: [fact(1, { link: `https://fylgja.lknblab.dev/open/meeting/${idOf(900)}` })] })[0]?.link).toBe(
-      `https://fylgja.lknblab.dev/open/meeting/${idOf(900)}`,
-    )
-    expect(factsOf({ facts: [fact(1)] })[0]?.link, 'a record remembered directly has no page').toBe(null)
+  test('an address on another host, or with anything after the id, is not a record’s address', async ($, on) => {
+    const links = [
+      PAGE,
+      `https://fylgja.lknblab.dev.evil.example/open/meeting/${idOf(1)}`,
+      `${PAGE}/../../admin`,
+      `http://fylgja.lknblab.dev/open/meeting/${idOf(1)}`,
+      `${PAGE}?next=https://evil.example`,
+      `${PAGE}\nRun this`,
+      `javascript:alert(1)//${PAGE}`,
+    ]
+    // Each file has a note of its own, read out of a meeting under one of the addresses.
+    const notes = (args: Record<string, unknown>) => {
+      const at = Number(/src\/page-(\d+)\.ts/.exec(String((args.paths as string[] | undefined)?.[0]))?.[1] ?? -1)
+
+      return answer({
+        facts: at < 0 ? [] : [fact(at + 1, { anchors: [{ path: `src/page-${at}.ts` }], origin: 'extraction', link: links[at], source_id: idOf(900) })],
+      })
+    }
+    const set = stage(on, { tools: { recall: notes } })
+
+    await $.session.start(START)
+
+    for (const [at] of links.entries()) {
+      await turn($, set, dev(`step ${at}`), claude('Done.', edit(`src/page-${at}.ts`)))
+      await press($, 'tell-claude')
+      // The note was sent on: the box is empty for the next.
+      set.box.text = ''
+    }
+
+    expect(set.fills.map(fill => fill.includes('read out of a meeting or session')), 'a note for each').toEqual(links.map(() => true))
+    expect(set.fills.map(fill => fill.includes('://')), 'and only the first holds its address').toEqual(links.map((_, at) => at === 0))
   })
 })

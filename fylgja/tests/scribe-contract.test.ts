@@ -1,9 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { codeOf, isRepoPath, stateFields, teaches } from '../hooks/scribe/gate'
-import { anchorsOf } from '../hooks/scribe/repo'
-import { MAX_WAKES_PER_HOUR, refusalLine } from '../hooks/scribe/scribe'
-import { correctedOf, draftOf } from '../hooks/scribe/verdict'
+import { MAX_WAKES_PER_HOUR } from '../hooks/scribe/scribe'
 import { NOTES } from '../hooks/scribe/view'
 import { answer, idOf } from './fixtures'
 import {
@@ -236,38 +233,6 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(set.asked.length, 'and no model is asked to put it right').toBe(MAX_WAKES_PER_HOUR)
   })
 
-  test('a mended reason never brings a reason the refused record did not have', () => {
-    const seen = { plans: [], saidNoReason: false, paths: new Set<string>(), facts: new Map() }
-    const bare = draftOf({ ...PAGED }, seen)
-    const reasoned = draftOf({ ...PAGED, detail: 'Clients jump straight to a page.', reason_status: 'stated' }, seen)
-    const invented = { ...PAGED, detail: 'because it was the simplest', reason_status: 'stated' }
-
-    expect(bare === undefined || reasoned === undefined).toBe(false)
-
-    if (bare === undefined || reasoned === undefined) {
-      return
-    }
-
-    expect(
-      correctedOf(bare, invented, 'reason', seen),
-      'a reason from nowhere changes nothing, so nothing is sent',
-    ).toBeUndefined()
-    expect(
-      correctedOf(bare, { ...PAGED, reason_status: 'no_strong_reason' }, 'reason', { ...seen, saidNoReason: true }),
-    ).toMatchObject({
-      detail: '',
-      reasonStatus: 'no_strong_reason',
-    })
-    expect(
-      correctedOf(reasoned, { ...invented, detail: `${'A much longer story. '.repeat(4)}` }, 'reason', seen)?.detail ??
-        reasoned.detail,
-      'a reason that was there comes back no longer than it was',
-    ).toBe(reasoned.detail)
-    expect(correctedOf(reasoned, { ...invented, detail: 'Clients jump to a page.' }, 'reason', seen)?.detail).toBe(
-      'Clients jump to a page.',
-    )
-  })
-
   const LEANS = 'refused:leans_on_conversation — "the P2 flag" only means something inside the conversation it came from. Rule: a record is read by someone who never saw this conversation. Name the thing by what it is.'
   const BEHIND = decision({
     content: 'Reopening a closed thread on an ERP update goes behind the P2 flag.',
@@ -283,8 +248,10 @@ describe('a refusal that says what is wrong is used once', () => {
   }
 
   test('a record refused for a label only the session knew is put right by a model that is handed the session, and names the thing', async ($, on) => {
+    // Its wording may grow in every part, and it gains no alternative or place it did not have.
+    const grown = { ...NAMED, alternatives: [...NAMED.alternatives, 'one nobody weighed'], anchors: [{ path: 'src/invented.ts' }] }
     const set = stage(on, {
-      replies: [verdict({ records: [BEHIND] }), JSON.stringify({ record: NAMED })],
+      replies: [verdict({ records: [BEHIND] }), JSON.stringify({ record: grown })],
       tools: refusing('Reopening a closed thread on an ERP update goes behind the P2', LEANS),
     })
 
@@ -308,9 +275,9 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(naming?.prompt, 'the session the record was taken from is handed over').toMatch('SESSION-TEXT: P2 is the partial-sync flag')
     expect(naming?.prompt.match(/^<<< /gm)?.length, 'all three are fenced as data').toBe(3)
     expect(
-      set.of('remember').map(args => [args.content, args.detail, args.alternatives]),
+      set.of('remember').map(args => [args.content, args.detail, args.alternatives, args.anchors]),
       'only the record put right is sent: it names the thing in the sentence, the reason and the alternative',
-    ).toEqual([[NAMED.content, NAMED.detail, NAMED.alternatives]])
+    ).toEqual([[NAMED.content, NAMED.detail, NAMED.alternatives, [{ path: 'src/queue/lock.ts', symbol: 'acquire' }]]])
     expect(await shown($)).toMatch('✓ Recorded · Reopening a closed thread on an ERP update goes behind the partial-sync flag.')
   })
 
@@ -355,32 +322,6 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(set.asked.length, 'no model is asked to guess what the label stood for').toBe(1)
     expect(set.of('remember').map(args => args.content)).toEqual([PAGED.content])
     expect(await shown($)).not.toMatch('✓ Recorded')
-  })
-
-  test('a record put right in its wording may grow in every part, and gains no reason, status or alternative it did not have', () => {
-    const seen = { plans: [], saidNoReason: false, paths: new Set<string>(), facts: new Map() }
-    const leaning = draftOf({ ...BEHIND }, seen)
-    const bare = draftOf({ kind: 'decision', content: 'We go with option B', reason_status: 'not_stated' }, seen)
-    const mended = { ...NAMED, alternatives: [...NAMED.alternatives, 'one nobody weighed'], anchors: [{ path: 'src/invented.ts' }] }
-
-    expect(leaning === undefined || bare === undefined).toBe(false)
-
-    if (leaning === undefined || bare === undefined) {
-      return
-    }
-
-    expect(teaches('leans_on_conversation')).toBe('wording')
-    expect(String(NAMED.detail).length > String(BEHIND.detail).length && String(NAMED.content).length > String(BEHIND.content).length).toBe(true)
-    expect(correctedOf(leaning, mended, 'wording', seen)).toEqual({
-      ...leaning,
-      content: NAMED.content,
-      detail: NAMED.detail,
-      alternatives: NAMED.alternatives,
-    })
-    expect(
-      correctedOf(bare, { ...mended, content: 'Retry failed uploads with exponential backoff' }, 'wording', seen),
-      'a record with no reason and no alternatives gets its sentence put right and neither of the two',
-    ).toEqual({ ...bare, content: 'Retry failed uploads with exponential backoff' })
   })
 
   const RULE =
@@ -485,68 +426,59 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(await shown($)).toBe(QUIET)
   })
 
-  test('a refusal for state changes only the fields it names: the reason, the alternatives, or both', () => {
-    const seen = { plans: [], saidNoReason: false, paths: new Set<string>(), facts: new Map() }
-    const reasoned = draftOf({ ...REOPEN }, seen)
-    const bare = draftOf({ ...REOPEN, detail: '', reason_status: 'not_stated' }, seen)
-    const shrugged = draftOf({ ...REOPEN, detail: 'Nothing decided it yet.', reason_status: 'no_strong_reason' }, { ...seen, saidNoReason: true })
-    const options = ['never acting on a reopened thread', 'waiting for the migration']
-    const mended = { ...REOPEN, content: 'Something else entirely.', detail: CAUSED, alternatives: [...options, 'one nobody weighed'] }
+  const OPTIONS = ['never acting on a reopened thread', 'waiting for the migration']
 
-    expect(reasoned === undefined || bare === undefined || shrugged === undefined).toBe(false)
-
-    if (reasoned === undefined || bare === undefined || shrugged === undefined) {
-      return
-    }
-
-    expect(teaches('status_not_memory', STATE_IN_REASON)).toBe('cause')
-    expect(teaches('status_not_memory', STATE_IN_OPTION)).toBe('cause')
-    expect(teaches('status_not_memory', 'refused:status_not_memory — "is merged" says what something is right now')).toBe('content')
-    expect(teaches('too_long', STATE_IN_REASON), 'only that one code is read past its name').toBe('content')
-    expect(stateFields(STATE_IN_BOTH)).toEqual({ reason: true, alternatives: true })
-    expect(
-      stateFields('refused:status_not_memory — in the reason: "not yet" says. Rule: a rejected alternative: none'),
+  for (const [what, refusal, mended] of [
+    ['about an alternative: the reason is not touched, and no alternative is added', STATE_IN_OPTION, { detail: REOPEN.detail, alternatives: OPTIONS }],
+    ['about both: both', STATE_IN_BOTH, { detail: CAUSED, alternatives: OPTIONS }],
+    [
       'a field is named ahead of the rule, never by it',
-    ).toEqual({ reason: true, alternatives: false })
+      'refused:status_not_memory — in the reason: "not yet" says. Rule: a rejected alternative: none',
+      { detail: CAUSED, alternatives: REOPEN.alternatives },
+    ],
+  ] as const) {
+    test(`a refusal for state changes only the fields it names, ${what}`, async ($, on) => {
+      const answered = { ...REOPEN, content: 'Something else entirely.', detail: CAUSED, alternatives: [...OPTIONS, 'one nobody weighed'] }
+      let n = 0
+      const set = stage(on, {
+        replies: [verdict({ records: [REOPEN] }), JSON.stringify({ record: answered })],
+        tools: { remember: () => (n++ === 0 ? refused(refusal) : created(101)) },
+      })
 
-    expect(
-      correctedOf(reasoned, mended, 'cause', seen, STATE_IN_OPTION),
-      'about an alternative: the reason is not touched, and no alternative is added',
-    ).toEqual({ ...reasoned, alternatives: options })
-    expect(
-      correctedOf(reasoned, { ...mended, alternatives: [] }, 'cause', seen, STATE_IN_REASON),
-      'about the reason: it may grow, and no alternative is changed or dropped',
-    ).toEqual({ ...reasoned, detail: CAUSED })
-    expect(correctedOf(reasoned, mended, 'cause', seen, STATE_IN_BOTH), 'about both: both').toEqual({
-      ...reasoned,
-      detail: CAUSED,
-      alternatives: options,
+      await $.session.start(START)
+      await turn($, set, ...TALK)
+
+      expect(set.of('remember')[1]).toMatchObject({ content: REOPEN.content, reason_status: 'stated', ...mended })
     })
-    expect(
-      correctedOf(reasoned, { ...mended, detail: '', reason_status: 'not_stated' }, 'cause', seen, STATE_IN_REASON),
-      'no cause to be found: the decision is kept without a reason',
-    ).toEqual({ ...reasoned, detail: '', reasonStatus: 'not_stated' })
-    expect(
-      correctedOf(bare, mended, 'cause', seen, STATE_IN_BOTH),
-      'a record with no reason gets none, and its alternative is said as the option it was',
-    ).toEqual({ ...bare, alternatives: options })
-    expect(
-      correctedOf(shrugged, { ...REOPEN, detail: '', reason_status: 'not_stated' }, 'cause', seen, STATE_IN_REASON),
-      'what the developer said about having no reason goes, and that they had none stays on record',
-    ).toEqual({ ...shrugged, detail: '', reasonStatus: 'no_strong_reason' })
-  })
+  }
 
-  for (const [code, part] of [
-    ['too_long', 'content'],
-    ['not_one_sentence', 'content'],
-    ['status_not_memory', 'content'],
-    ['anchor_invalid', 'anchors'],
-    ['anchors_too_many', 'anchors'],
-    ['reason_missing', 'reason'],
+  // An answer that changes every part of the record: only the part the refusal teaches is taken from it.
+  const EVERY = {
+    ...MENDED,
+    detail: 'Clients jump to a page.',
+    reason_status: 'stated',
+    alternatives: ['a cursor', 'keyset'],
+    anchors: [{ path: 'src/queue/lock.ts', symbol: 'release' }],
+  }
+  const AS_WRITTEN = {
+    content: PAGED.content,
+    anchors: [{ path: 'src/queue/lock.ts', symbol: 'acquire' }],
+    alternatives: ['a cursor'],
+    reason_status: 'not_stated',
+  }
+
+  for (const [code, part, mended] of [
+    ['too_long', 'content', { content: MENDED.content }],
+    ['not_one_sentence', 'content', { content: MENDED.content }],
+    ['status_not_memory', 'content', { content: MENDED.content }],
+    ['anchor_invalid', 'anchors', { anchors: EVERY.anchors }],
+    ['anchors_too_many', 'anchors', { anchors: EVERY.anchors }],
+    // A record that had no reason gets none from the answer, and is not said to state one.
+    ['reason_missing', 'reason', { alternatives: EVERY.alternatives }],
   ] as const) {
     test(`${code} is taught back once, and mends the ${part}`, async ($, on) => {
       const set = stage(on, {
-        replies: [verdict({ records: [PAGED] }), JSON.stringify({ record: MENDED })],
+        replies: [verdict({ records: [PAGED] }), JSON.stringify({ record: EVERY })],
         tools: refusing('We paginate', `refused:${code} — what to do about it`),
       })
 
@@ -554,6 +486,26 @@ describe('a refusal that says what is wrong is used once', () => {
       await turn($, set, ...TALK)
 
       expect(set.asked.length).toBe(2)
+      expect(set.of('remember')[1]).toMatchObject({ ...AS_WRITTEN, ...mended })
+      expect(set.of('remember')[1]?.detail).toBeUndefined()
+    })
+  }
+
+  for (const [what, detail, sent] of [
+    ['a shorter reason is taken', 'Clients jump to a page.', 'Clients jump to a page.'],
+    ['a longer one is not', `${'A much longer story. '.repeat(4)}`.trim(), 'Clients jump straight to a page.'],
+  ] as const) {
+    test(`a mended reason comes back no longer than it was: ${what}`, async ($, on) => {
+      const reasoned = { ...PAGED, detail: 'Clients jump straight to a page.', reason_status: 'stated' }
+      const set = stage(on, {
+        replies: [verdict({ records: [reasoned] }), JSON.stringify({ record: { ...EVERY, detail } })],
+        tools: refusing('We paginate', 'refused:detail_too_long — what to do about it'),
+      })
+
+      await $.session.start(START)
+      await turn($, set, ...TALK)
+
+      expect(set.of('remember')[1]).toMatchObject({ content: PAGED.content, detail: sent, reason_status: 'stated' })
     })
   }
 
@@ -591,7 +543,10 @@ describe('a refusal that says what is wrong is used once', () => {
     'refused:not_found — record not found',
     'refused:burst — batch settled findings',
     'refused:some_new_rule — x',
+    'refused:constructor — x',
     'no code at all',
+    // A code is read only where a refusal opens with it.
+    'it was refused:not_imperative',
   ]) {
     test(`“${refusal.slice(0, 26)}” is a quiet failure: no model step, no retry`, async ($, on) => {
       const set = stage(on, { replies: [verdict({ records: [PAGED] }), NOTHING], tools: { remember: () => refused(refusal) } })
@@ -615,48 +570,37 @@ describe('a refusal that says what is wrong is used once', () => {
     expect(String(set.of('remember')[0]?.detail).length <= 1200).toBe(true)
   })
 
-  test('paths are held to the server’s rules, a line number is taken off, and over twelve the most exact are kept', () => {
-    for (const path of [
-      'src/a.ts:12',
-      'src/a.ts#L3-L9',
-      'src/./a.ts',
-      'src//a.ts',
-      ' src/a.ts',
-      'src/a.ts\u007f',
-      'a\\b',
-      '/abs',
-      'dir/',
+  test('a place is sent as the server takes it: a line number is taken off, a symbol trimmed, and a file the session never opened left out', async ($, on) => {
+    const anchors = [
+      { path: 'src/queue/lock.ts:12-30', symbol: ' acquire ' },
+      { path: 'src/a.ts#L4' },
+      'src/b.ts:7:2',
+      { path: 'src/a.ts', symbol: 'x'.repeat(201) },
+      { path: 'src/never/opened.ts' },
       '../x',
-      'C:/x',
-      '',
-    ]) {
-      expect(isRepoPath(path), JSON.stringify(path)).toBe(false)
-    }
-
-    expect(
-      anchorsOf(
-        [
-          { path: 'src/a.ts:12-30', symbol: ' f ' },
-          { path: 'src/a.ts#L4' },
-          'src/b.ts:7:2',
-          { path: 'src/c.ts', symbol: 'x'.repeat(201) },
-        ],
-        12,
-      ),
-    ).toEqual([{ path: 'src/a.ts', symbol: 'f' }, { path: 'src/a.ts' }, { path: 'src/b.ts' }, { path: 'src/c.ts' }])
-
-    const many = [
-      { path: 'src' },
-      { path: 'README.md' },
-      ...Array.from({ length: 12 }, (_, n) => ({ path: `src/deep/file-${n}.ts` })),
-      { path: 'x.ts', symbol: 'f' },
+      'src//a.ts',
     ]
-    const kept = anchorsOf(many, 12)
+    const set = stage(on, { replies: [verdict({ records: [decision({ anchors })] })] })
 
-    expect(kept.length).toBe(12)
-    expect(kept.map(anchor => anchor.path)).not.toContain('src')
-    expect(kept.map(anchor => anchor.path)).not.toContain('README.md')
-    expect(kept.at(-1)).toEqual({ path: 'x.ts', symbol: 'f' })
+    await $.session.start(START)
+    await turn($, set, dev('Use Postgres for the queue lock.'), claude('Done.', edit('src/queue/lock.ts'), edit('src/a.ts'), edit('src/b.ts')))
+
+    expect(set.of('remember')[0]?.anchors).toEqual([{ path: 'src/queue/lock.ts', symbol: 'acquire' }, { path: 'src/a.ts' }, { path: 'src/b.ts' }])
+  })
+
+  test('over the places a record takes, the most exact are kept: a symbol before a file, a file deep in the tree before one near its top', async ($, on) => {
+    const deep = Array.from({ length: 12 }, (_, n) => `src/deep/file-${n}.ts`)
+    const anchors = [{ path: 'README.md' }, ...deep.map(path => ({ path })), { path: 'src/a.ts', symbol: 'f' }]
+    const set = stage(on, { replies: [verdict({ records: [decision({ anchors })] })] })
+
+    await $.session.start(START)
+    await turn($, set, dev('Use Postgres for the queue lock.'), claude('Done.', edit('README.md'), ...deep.map(edit), edit('src/a.ts')))
+
+    const sent = set.of('remember')[0]?.anchors as { path: string; symbol?: string }[]
+
+    expect(sent.map(anchor => anchor.path)).not.toContain('README.md')
+    expect(sent.at(-1)).toEqual({ path: 'src/a.ts', symbol: 'f' })
+    expect(sent.length).toBe(11)
   })
 })
 
@@ -693,18 +637,6 @@ describe('a record another member already holds', () => {
       expect(set.of('amend_memory')).toEqual([])
     })
   }
-
-  test('one’s own record that Fylgja already holds still shows nothing', async ($, on) => {
-    const set = stage(on, {
-      replies: [verdict({ records: [decision()] })],
-      tools: { remember: () => answer({ atom_id: idOf(9), outcome: 'duplicate', supersede: 'not_requested', note: null }) },
-    })
-
-    await $.session.start(START)
-    await turn($, set, ...TALK)
-
-    expect(await shown($)).toBe(QUIET)
-  })
 })
 
 describe('a change Fylgja turns down', () => {
@@ -737,47 +669,29 @@ describe('a change Fylgja turns down', () => {
   ]
 
   for (const [text, line] of LINES) {
-    test(`“${text.slice(0, 40)}” is said as “${line.slice(0, 60)}”`, () => {
-      expect(refusalLine(text)).toBe(line)
+    test(`a Fix turned down with “${text.slice(0, 40)}” is said as “${line.slice(0, 60)}”`, async ($, on) => {
+      const set = stage(on, {
+        replies: [verdict({ records: [decision()] }), NOTHING, NOTHING],
+        tools: { amend_memory: () => refused(text) },
+      })
+
+      await $.session.start(START)
+      await turn($, set, ...TALK)
+
+      const ui = await band($)
+
+      await ui.press('fix:0')
+      await ui.redraw()
+      await ui.enter('fix-text', 'Use Postgres advisory locks.')
+      await ui.unmount()
+
+      expect(set.toasts).toEqual([line])
+
+      await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
+
+      expect(set.of('amend_memory').length, 'tried again only for trouble of the server’s own').toBe(line.includes('tried once more') ? 2 : 1)
     })
   }
-
-  test('a refusal is read by its code alone', () => {
-    expect(codeOf('refused:not_imperative — x')).toBe('not_imperative')
-    expect(codeOf('Refused: say what to do')).toBeUndefined()
-    expect(codeOf('it was refused:not_imperative')).toBeUndefined()
-    expect(codeOf(undefined)).toBeUndefined()
-    expect([
-      teaches('not_imperative'),
-      teaches('anchor_invalid'),
-      teaches('not_found'),
-      teaches('burst'),
-      teaches('hasOwnProperty'),
-    ]).toEqual(['content', 'anchors', undefined, undefined, undefined])
-  })
-
-  test('a Fix that is turned down is said in one line, in fixed words, and never tried again', async ($, on) => {
-    const set = stage(on, {
-      replies: [verdict({ records: [decision()] }), NOTHING],
-      tools: { amend_memory: () => refused(`refused:atom_content_taken — atom ${idOf(7)} on this topic already says this`) },
-    })
-
-    await $.session.start(START)
-    await turn($, set, ...TALK)
-
-    const ui = await band($)
-
-    await ui.press('fix:0')
-    await ui.redraw()
-    await ui.enter('fix-text', 'Use Postgres advisory locks.')
-    await ui.unmount()
-
-    expect(set.toasts).toEqual(['Not saved: another record already says this.'])
-
-    await turn($, set, dev('and now the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
-
-    expect(set.of('amend_memory').length, 'not tried again at the next turn').toBe(1)
-  })
 
   test('a Fix the server could not make for trouble of its own is tried once more at the next turn’s end, and then left', async ($, on) => {
     const set = stage(on, {

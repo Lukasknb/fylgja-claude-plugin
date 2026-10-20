@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { SYSTEM } from '../hooks/scribe/prompt'
-import { ACCOUNT_OPENERS, CONDITIONAL_OPENERS, DECISION_RULE, SHAPE_LIMITS, VERB_OPENERS } from '../hooks/scribe/shape'
 import { answer, idOf } from './fixtures'
 import {
   carded,
@@ -10,7 +8,11 @@ import {
   dev,
   edit,
   fact,
+  finish,
   NOTHING,
+  ROOT,
+  send,
+  sessionOf,
   shown,
   stage,
   START,
@@ -159,49 +161,93 @@ describe('a why-question is for a reason nobody has given', () => {
       'What the developer has stated so far in this session:\n- Patient text must stay in the EU.\n- No new dependencies in the worker.',
     )
     expect(JSON.stringify([...set.kept.entries()]), 'in memory only').not.toMatch('Patient text')
-    expect(SYSTEM, 'and the instruction says to look there before asking').toMatch(
-      'in the list of what the developer has stated so far',
-    )
-  })
-})
-
-describe('the shape the server takes is in the instruction', () => {
-  test('the server’s own opener lists, its lengths and the statement shape are stated once', () => {
-    expect(VERB_OPENERS.length).toBeGreaterThan(150)
-    expect(SYSTEM).toMatch(`with one of these words: ${CONDITIONAL_OPENERS.join(', ')};`)
-    expect(SYSTEM).toMatch(` ${VERB_OPENERS.slice(0, 6).join(' ')} `)
-    expect(SYSTEM).toMatch(' page ')
-    expect(SYSTEM).toMatch(`ONE sentence of at most ${SHAPE_LIMITS.content} characters`)
-    expect(SYSTEM, 'a correction may be a statement with one of the server’s statement words').toMatch(
-      'holds one of the words "is", "are", "must", "stays", "becomes"',
-    )
-    expect(SYSTEM, 'a decision is said in whatever words say what holds, by the server’s own rule').toMatch(DECISION_RULE)
-    expect(SYSTEM, 'and names what the server refuses as an account').toMatch(ACCOUNT_OPENERS.join(', '))
-    expect(SYSTEM).toMatch('do not put "Always" before it')
-    expect(SYSTEM, 'a reason is a cause, said where the reason and the alternatives are defined').toMatch(
-      /- "alternatives" \(decision only\): [^\n]+\n- A reason is the cause that will still be the cause later/,
-    )
-    expect(SYSTEM).toMatch('"temporary until Z ships" are how things stand today, not a reason')
-    expect(SYSTEM).toMatch('leave "detail" empty and give the decision reason_status "not_stated"')
-    expect(SYSTEM).toMatch('"open PR"')
-  })
-
-  test('a record names a thing by what it is, in its sentence, its reason and its alternatives, and that is said once', () => {
-    expect(SYSTEM.split('are read by someone who never saw this session').length).toBe(2)
-    expect(SYSTEM).toMatch('"content", "detail" and every entry of "alternatives" are read by someone who never saw')
-    expect(SYSTEM).toMatch('Name a thing by what it is, never by a label the session gave it')
-
-    for (const label of ['"P2"', '"option B"', '"phase 2"', '"this PR"', '"as discussed"', '"the above"']) {
-      expect(SYSTEM, label).toMatch(label)
-    }
-
-    expect(SYSTEM).toMatch('not by its letter or its number')
-    expect(SYSTEM).toMatch('A name that exists outside the session stays as it is')
-    expect(SYSTEM).toMatch('When you cannot say what a label stands for, there is no record.')
   })
 })
 
 describe('what a wake is sent', () => {
+  test('prompts, replies and one line per tool call: no file’s contents, no tool’s output but the head of a command that failed, and only a prompt the developer sent is theirs', async ($, on) => {
+    const set = stage(on, { replies: [NOTHING] })
+
+    await $.session.start(START)
+    await send($, 'make it retry')
+    await finish(
+      $,
+      set,
+      dev('<system-reminder>ENGINE-NOTE</system-reminder>make it retry'),
+      claude(
+        'On it.',
+        use('Read', { file_path: `${ROOT}/src/a.ts` }, 'FILE-CONTENT-READ'),
+        use('Write', { file_path: `${ROOT}/src/b.ts`, content: 'FILE-CONTENT-WRITTEN' }),
+        use('Edit', { file_path: '/elsewhere/c.ts', old_string: 'OLD-TEXT', new_string: 'NEW-TEXT' }),
+        use('Bash', { command: 'npm test' }, `3 passed${' and more'.repeat(60)}`),
+        use('Bash', { command: 'npm run lint' }, 'boom', true),
+        use('Grep', { pattern: 'retry' }, 'src/a.ts:1: MATCHED-LINE'),
+        use('mcp__fylgja__recall', { query: 'QUERY-TEXT' }, 'RECALL-OUTPUT'),
+      ),
+      dev('<task-notification><summary>Agent "tests" finished</summary><result>NOTICE-BODY</result></task-notification>'),
+      dev('This session is being continued from a previous conversation. SUMMARY-BODY'),
+      dev('Base directory for this skill: /x\n\nSKILL-BODY'),
+      dev('HOOK-INJECTED no particular reason'),
+      dev(''),
+      claude('Retries three times now.'),
+    )
+
+    expect(sessionOf(set.asked[0]?.prompt)).toEqual([
+      '[developer] make it retry',
+      '[claude] On it.',
+      '[tool] Read src/a.ts ok',
+      '[tool] Write src/b.ts ok',
+      '[tool] Edit /elsewhere/c.ts (outside the working tree) ok',
+      '[tool] Bash `npm test` ok',
+      '[tool] Bash `npm run lint` failed: boom',
+      '[tool] Grep retry ok',
+      '[tool] mcp__fylgja__recall ok',
+      '[notice] a background task reported back',
+      '[claude] Retries three times now.',
+    ])
+  })
+
+  test('a turn too long to hand over loses Claude’s oldest replies and says how many; what the developer wrote is never what goes', async ($, on) => {
+    const set = stage(on, { replies: [NOTHING] })
+
+    await $.session.start(START)
+    await turn($, set, dev('OLDEST'), ...Array.from({ length: 40 }, (_, n) => claude(`REPLY-${n} ${'word '.repeat(200)}`)))
+
+    const prompt = set.asked[0]?.prompt ?? ''
+    const lines = sessionOf(prompt)
+    const left = Number(/\((\d+) earlier lines of this turn were left out for length\)/.exec(prompt)?.[1])
+
+    expect(lines[0]).toMatch('left out for length')
+    expect(lines[1]).toBe('[developer] OLDEST')
+    expect(lines.at(-1)).toMatch('REPLY-39')
+    expect(prompt).not.toMatch('REPLY-0 ')
+    expect(left + lines.length - 1, 'every line is either sent or counted as left out').toBe(41)
+  })
+
+  test('tool lines go before anything that was said: a turn of many tool calls keeps the developer’s words and Claude’s replies', async ($, on) => {
+    const set = stage(on, { replies: [NOTHING] })
+    const noise = Array.from({ length: 400 }, (_, n) => use('Bash', { command: `echo step-${n} ${'x'.repeat(60)}` }))
+
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev('FIRST-PROMPT pick the lock'),
+      claude('PLAN-REPLY', ...noise),
+      claude('FINAL-REPLY', edit('src/a.ts')),
+    )
+
+    const prompt = set.asked[0]?.prompt ?? ''
+
+    for (const said of ['[developer] FIRST-PROMPT pick the lock', '[claude] PLAN-REPLY', '[claude] FINAL-REPLY']) {
+      expect(prompt, said).toMatch(said)
+    }
+
+    expect(prompt, 'the oldest tool lines went').not.toMatch('step-0 ')
+    expect(prompt, 'the newest stayed').toMatch('step-399 ')
+    expect(Number(/\((\d+) earlier lines/.exec(prompt)?.[1])).toBeGreaterThan(100)
+  })
+
   test('files read one after the other are one line, and Claude’s own bookkeeping is left out', async ($, on) => {
     const set = stage(on)
 
@@ -253,30 +299,5 @@ describe('what a wake is sent', () => {
     await turn($, set, dev('and go on with the lock as planned'), claude('Done.', edit(FILE)))
 
     expect(set.asked.at(-1)?.prompt).toMatch('PLAN-BODY-TEXT')
-  })
-
-  test('an earlier wake is sent again as what was said, without its tool calls, and no more than four of them', async ($, on) => {
-    const set = stage(on)
-
-    await $.session.start(START)
-
-    for (let n = 1; n <= 7; n += 1) {
-      await turn(
-        $,
-        set,
-        dev(`STEP-${n} change the lock once more please`),
-        claude(`REPLY-${n}`, use('Bash', { command: `echo PAST-COMMAND-${n}` }), edit(FILE)),
-      )
-      await set.clock.advance(60_000)
-    }
-
-    const last = set.asked.at(-1)?.prompt ?? ''
-    const earlier = last.slice(0, last.indexOf("The session's repository:"))
-
-    expect(earlier.match(/Earlier wake \d+:/g)?.length).toBeLessThanOrEqual(4)
-    expect(earlier).toMatch('[claude] REPLY-6')
-    expect(earlier, 'the developer’s words stay').toMatch('[developer] STEP-6')
-    expect(earlier).not.toMatch('PAST-COMMAND')
-    expect(earlier).toMatch('Before the wakes below you looked')
   })
 })

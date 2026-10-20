@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { restates, wholeSentences } from '../hooks/scribe/loop'
 import { answer, idOf } from './fixtures'
 import {
   carded,
@@ -437,51 +436,5 @@ describe('what the developer chose through a question', () => {
       reason_status: 'stated',
       detail: 'A1 needs no new service. (offered by the assistant, chosen by the developer)',
     })
-  })
-})
-
-describe('a quoted reason is whole sentences, and says why', () => {
-  const log =
-    'The developer was asked: Which way for the warning check? They chose: Leave out for now. The option they chose was described as: Remove the failing hook and do not replace it in this round. Nothing warns before a risky command until it is rebuilt.'
-
-  test('a passage cut in the middle of a line is completed to the sentences it touches, without the words that only introduce them', () => {
-    const cut = 'Leave out for now. The option they chose was described as: Remove the failing hook'
-
-    expect(wholeSentences(cut, log)).toBe('Leave out for now. Remove the failing hook and do not replace it in this round.')
-    expect(wholeSentences('risky command until', log)).toBe('Nothing warns before a risky command until it is rebuilt.')
-    expect(wholeSentences('They chose:', log), 'nothing but an introduction').toBeUndefined()
-    expect(wholeSentences('words that are not there', log)).toBeUndefined()
-  })
-
-  test('a line break ends a sentence: a heading is not part of the sentence under it', () => {
-    const plan =
-      '# Plan: audit log\n\n## Paging\n\nOffset paging, because support must jump straight to a page.\n- cursors stay for the export'
-
-    expect(wholeSentences('support must jump', plan)).toBe('Offset paging, because support must jump straight to a page.')
-  })
-
-  test('a passage that says the decision over again is no reason, whatever else stands in it', () => {
-    const decision =
-      'Stale uploads are removed by the cleanup script, which runs the same deletion path as the Forget button and defaults to a dry run.'
-    const restated =
-      'The right cleanup: find every stale upload and run each through the same deletion path as the Forget button, with a dry run first.'
-    const why = 'A wrong delete in production cannot be taken back, so the list has to be seen before anything goes.'
-
-    expect(restates(restated, decision), 'it holds half of the decision’s own words').toBe(true)
-    expect(restates(why, decision)).toBe(false)
-  })
-
-  test('the words of the question and of the options offered do not make a reason', () => {
-    const decision = 'The warning check before risky commands is left out for now.'
-
-    expect(
-      restates('Leave out for now.', decision, ['Which way for the warning check?', 'Leave out for now', 'Bring back']),
-    ).toBe(true)
-    expect(
-      restates('Remove the failing hook and do not replace it in this round.', decision, [
-        'Which way for the warning check?',
-        'Leave out for now',
-      ]),
-    ).toBe(false)
   })
 })

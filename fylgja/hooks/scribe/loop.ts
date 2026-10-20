@@ -435,7 +435,7 @@ const MIN_REASON_CHARS = 12
 const MAX_REASON_CHARS = 400
 
 /** A quoted passage restates the decision, and is no reason, when this share of its own words are the decision's words. */
-export const RESTATED_SHARE = 0.7
+const RESTATED_SHARE = 0.7
 
 /** Or when it holds this share of the decision's words: it then says the decision over again, whatever else it adds. */
 export const RESTATED_COVER = 0.5
@@ -449,7 +449,7 @@ export const RESTATED_COVER = 0.5
  * holds `RESTATED_COVER` of the decision's words (for a decision of six such
  * words or more).
  */
-export function restates(quote: string, decision: string, asked: readonly string[] = []): boolean {
+function restates(quote: string, decision: string, asked: readonly string[] = []): boolean {
   const given = new Set(asked.flatMap(wordsOf))
   const words = wordsOf(quote).filter(word => !given.has(word))
   const own = new Set(wordsOf(decision))
@@ -474,7 +474,7 @@ export function restates(quote: string, decision: string, asked: readonly string
  * ("They chose:") is left out. Undefined when `quote` is not in `source`,
  * word for word, or touches nothing but such introductions.
  */
-export function wholeSentences(quote: string, source: string): string | undefined {
+function wholeSentences(quote: string, source: string): string | undefined {
   // A line break ends a sentence as a full stop does: a heading or a list item is its own.
   const text = source
     .split(/\n+/)
@@ -521,7 +521,7 @@ function even(text: string): string {
 }
 
 /** The whole look for a reason is held to about this many characters of session, proposals and plans together. */
-export const MAX_LOOK_CHARS = 40_000
+const MAX_LOOK_CHARS = 40_000
 
 /** No more of the assistant's replies are shown to it than this, and no more of each, and of one plan section. */
 const MAX_LOOK_PROPOSALS = 3
@@ -551,7 +551,7 @@ export type Found = { reason: string } | { suggestion: string }
  * whose heading or text mentions the decision's words, the most telling
  * first, each cut to a length and the plan marked as shown in part.
  */
-export function lookParts(input: {
+function lookParts(input: {
   decision: string
   spoken: readonly string[]
   plans: readonly PlanDoc[]
@@ -774,7 +774,8 @@ Answer with one JSON object and nothing else: {"relation":"contradicts","id":"<t
 /**
  * How a new decision stands to records Fylgja already holds on its subject:
  * the record it contradicts or refines, or nothing. One model call; a reply
- * that cannot be read, or names a record that was not shown, is "unrelated".
+ * that cannot be read is "unrelated". The id is the model's: whoever acts on
+ * it finds the record among those shown, or acts on nothing.
  */
 export async function relationOf(
   host: LoopHost,
@@ -795,9 +796,7 @@ export async function relationOf(
     } | null
     const id = typeof value?.id === 'string' ? value.id.trim().toLowerCase() : ''
 
-    return (value?.relation === 'contradicts' || value?.relation === 'refines') && input.facts.some(fact => fact.id === id)
-      ? { relation: value.relation, id }
-      : undefined
+    return value?.relation === 'contradicts' || value?.relation === 'refines' ? { relation: value.relation, id } : undefined
   } catch {
     return undefined
   }

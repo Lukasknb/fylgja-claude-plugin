@@ -2,7 +2,7 @@ import type { On, PromptEditResult } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { hitsOf, MAX_HITS } from '../hooks/hits'
+import { MAX_HITS } from '../hooks/hits'
 import { LEGENDS } from '../hooks/listing'
 import * as Ledger from '../hooks/scribe/ledger'
 import * as Search from '../hooks/search'
@@ -104,130 +104,83 @@ const fieldOf = async (ui: Awaited<ReturnType<typeof pane>>): Promise<Node | und
 const LOCK_ROW = `▸ ◆ Atom · ${LOCK_SENTENCE} · 2026-09-30`
 const CAP_ROW = `  ◆ Atom · ${CAP_SENTENCE} · 2026-08-02`
 
-describe('the search, as it is described', () => {
-  test('a hit is read as a pointer: its id, what it says, when, where it lives and what holds now', () => {
-    const hits = hitsOf({
-      results: [
-        hit(LOCK, LOCK_SENTENCE, { entities: ['Acme'], aspect_path: ['Retry queue', 'Locking'], newer_value: { atom_id: CAP, value: 'Use a lease.' } }),
-        hit(LOCK, 'the same record again'),
-        { id: 'not-an-id', content_preview: 'x' },
-        hit(CAP, '', { title: '' }),
-      ],
-    })
+describe('what was found', () => {
+  /** Fylgja's answers, by the words searched for. */
+  const ANSWERS: Record<string, unknown> = {
+    retry: found(
+      hit(LOCK, LOCK_SENTENCE, { entities: ['Acme'], aspect_path: ['Retry queue', 'Locking'], newer_value: { atom_id: CAP, value: 'Use a lease.' } }),
+      hit(LOCK, 'the same record again'),
+      { id: 'not-an-id', content_preview: 'x' },
+      hit(CAP, '', { title: '' }),
+      hit(idOf(3), 'Never retry a 4xx.', { date: null }),
+    ),
+    other: answer({ results: [hit(LOCK, LOCK_SENTENCE)], query: 'other', total: 1, filter_matched: false }),
+    many: found(...Array.from({ length: MAX_HITS + 5 }, (_, n) => hit(idOf(n + 1), `Decision ${n + 1}.`))),
+    unlisted: answer({ records: [] }),
+  }
 
-    expect(hits).toEqual([
-      {
-        id: LOCK,
-        kind: 'atom',
-        sentence: LOCK_SENTENCE,
-        topic: 'Retry queue',
-        date: '2026-09-30',
-        path: ['Platform', 'Queue'],
-        about: ['Acme'],
-        aspect: ['Retry queue', 'Locking'],
-        newer: 'Use a lease.',
-        link: null,
-      },
-    ])
-    expect(hitsOf({ records: [] }), 'an answer that is not a list of hits is no answer').toBeUndefined()
-    expect(hitsOf({ results: [hit(LOCK, LOCK_SENTENCE)], filter_matched: false }), 'records of another kind are not what was asked for').toEqual([])
-  })
+  test('each record is one row of its kind, sentence and day, the selected one opened on what holds now, its topic, the question it answers and where it is filed; no key is up until one is asked for', async ($, on) => {
+    await session($, on, { tools: { ...TOOLS, search: args => ANSWERS[String(args.query)] } })
+    await $.command.run(command(''))
 
-  test('a row says the kind, the sentence and the day; the selected one is opened', () => {
-    const search = Search.create()
+    const ui = await pane($)
 
-    search.phase = 'found'
-    search.hits = hitsOf({
-      results: [
-        hit(LOCK, LOCK_SENTENCE, { aspect_path: ['Retry queue', 'Locking'], newer_value: { atom_id: CAP, value: 'Use a lease.' } }),
-        hit(CAP, CAP_SENTENCE, { date: null }),
-        hit(idOf(3), 'Never retry a 4xx.'),
-      ],
-    }) as never
+    await ui.enter('retry')
 
-    const view = Search.viewOf(search, 100, true, true)
-    const words = (parts: readonly ({ text: string } | { link: string })[]): string => parts.map(part => ('text' in part ? part.text : '')).join('')
-
-    expect(view.lines.map(line => [line.kind, line.sentence, line.tail, line.isSelected])).toEqual([
-      ['◆ Atom', LOCK_SENTENCE, '2026-09-30', true],
-      ['◆ Atom', CAP_SENTENCE, '', false],
-      ['◆ Atom', 'Never retry a 4xx.', '2026-09-30', false],
-    ])
-    expect(view.lines[0]?.detail.map(words)).toEqual([
+    expect(await ui.lines(), 'a record found twice is one row, and one with no id or no sentence is none').toEqual([
+      ' ᚠ fylgja  | search | 2 found',
+      'Search',
+      LOCK_ROW,
       'Holds now: Use a lease.',
       'Topic: Retry queue',
       'Answers: Retry queue > Locking',
-      'Filed under: Platform > Queue',
+      'Filed under: Platform > Queue · about Acme',
+      '  ◆ Atom · Never retry a 4xx.',
+      Search.SEARCH_LEGENDS.list,
     ])
-    expect(view.lines[1]?.detail, 'only the selected record is opened').toEqual([])
-    expect(view.lines.flatMap(line => line.actions), 'and no key is up until one is asked for').toEqual([])
-    expect(view.count).toBe('3 found')
+    expect(await ui.actions()).toEqual([])
+
+    await ui.keyed(false)
+
+    expect((await ui.lines()).at(-1), 'without the keys the line says how to give them').toBe(LEGENDS.away)
+
+    await ui.keyed(true)
+    await ui.enter('other')
+
+    expect(await ui.lines(), 'records of another kind are not what was asked for').toContain(Search.QUIET.none)
+
+    await ui.enter('unlisted')
+
+    expect(await ui.lines(), 'an answer that is no list of hits is no answer').toContain(Search.QUIET.failed)
+
+    await ui.enter('many')
+
+    expect(await ui.rows(), 'as many as were asked for').toHaveLength(MAX_HITS)
+    expect((await ui.lines())[0], 'means there may be more').toBe(` ᚠ fylgja  | search | first ${MAX_HITS}, more may match`)
+
+    await ui.unmount()
   })
 
-  test('as many hits as were asked for means there may be more, and the title bar says so', () => {
-    const search = Search.create()
+  test('a cited record is named as the app would copy it: a label of at most forty characters cut at a whole word, and nothing in its sentence can end the reference early', async ($, on) => {
+    const LONG = 'Never retry a request the caller got wrong, whatever the queue says.'
+    const { set } = await session($, on, {
+      tools: { ...TOOLS, search: () => found(hit(CAP, 'Use {{a}} | b }} for the\nqueue.'), hit(idOf(3), LONG)), open: () => answer({ kind: 'atom' }) },
+    })
 
-    search.phase = 'found'
-    search.hits = hitsOf({ results: Array.from({ length: MAX_HITS + 5 }, (_, n) => hit(idOf(n + 1), `Decision ${n + 1}.`)) }) as never
+    await $.command.run(command('retry'))
 
-    expect(search.hits).toHaveLength(MAX_HITS)
-    expect(Search.viewOf(search, 100, true, true).count).toBe(`first ${MAX_HITS}, more may match`)
-  })
+    const ui = await pane($)
 
-  test('the line of keys names keys only while the window has them, and no key is ever a letter or a digit', () => {
-    const search = Search.create()
-    const legend = (isFocused: boolean): string => Search.viewOf(search, 100, isFocused, true).legend
-
-    Search.begun(search, false)
-
-    expect(legend(true)).toBe(Search.SEARCH_LEGENDS.field)
-    expect(legend(false)).toBe(LEGENDS.awayQuiet)
-
-    search.isTyping = false
-
-    expect(legend(true)).toBe(Search.SEARCH_LEGENDS.none)
-
-    search.phase = 'found'
-    search.hits = hitsOf({ results: [hit(LOCK, LOCK_SENTENCE)] }) as never
-
-    expect(legend(true)).toBe(Search.SEARCH_LEGENDS.list)
-    expect(legend(false)).toBe(LEGENDS.away)
-
-    search.acting = LOCK
-
-    expect(legend(true)).toBe(LEGENDS.keys)
-
-    for (const line of [...Object.values(Search.SEARCH_LEGENDS), LEGENDS.keys]) {
-      expect(line, 'only the arrows, Enter and Escape').not.toMatch(/(?:^| )[a-z0-9] /)
+    for (const id of [CAP, idOf(3)]) {
+      await ui.press(`row:${id}`)
+      await ui.press(`cite:${id}`)
     }
-  })
 
-  test('the ring belongs on a record’s key while its keys are up, and on its row while Fylgja did not answer for it, so Enter asks again', () => {
-    const search = Search.create()
+    await send($, set.box.text)
 
-    search.phase = 'found'
-    search.hits = hitsOf({ results: [hit(LOCK, LOCK_SENTENCE)] }) as never
+    expect(set.sent).toEqual([`${token('atom', 'Use a b for the queue.', CAP)} ${token('atom', 'Never retry a request the caller got…', idOf(3))} `])
 
-    expect(Search.ringKey(search, true)).toBe(`row:${LOCK}`)
-
-    search.acting = LOCK
-
-    expect(Search.ringKey(search, true)).toBe(`cite:${LOCK}`)
-
-    search.unopened.add(LOCK)
-
-    expect(Search.ringKey(search, true)).toBe(`row:${LOCK}`)
-  })
-
-  test('a cited record is named as the app would copy it: a label of at most forty characters cut at a whole word, and nothing in its sentence can end the reference early', () => {
-    const long = 'Never retry a request the caller got wrong, whatever the queue says.'
-    const [plain, odd, wordy] = hitsOf({ results: [hit(LOCK, LOCK_SENTENCE), hit(CAP, 'Use {{a}} | b }} for the\nqueue.'), hit(idOf(3), long)] }) ?? []
-
-    expect(Search.referenceOf(plain as never)).toBe(token('atom', LOCK_SENTENCE, LOCK))
-    expect(Search.referenceOf(odd as never)).toBe(token('atom', 'Use a b for the queue.', CAP))
-    expect(Search.referenceOf(wordy as never)).toBe(token('atom', 'Never retry a request the caller got…', idOf(3)))
-    expect(Search.MAX_LABEL, 'the length the app keeps of a title').toBe(40)
-    expect(Search.referenceOf({ ...(plain as never as Record<string, unknown>), kind: 'person' } as never), 'a kind no reference names').toBeUndefined()
+    await ui.unmount()
   })
 })
 
@@ -308,9 +261,9 @@ describe('the command opens the search', () => {
 })
 
 describe('Fylgja is searched on Enter and at no other time', () => {
-  test('one Enter is one search with the words in the field; no words, the words already answered and an Enter while one is on its way ask nothing', async ($, on) => {
+  test('one Enter is one search with the words in the field; no words and the words already answered ask nothing, and an Enter while one is on its way waits for it', async ($, on) => {
     const { set } = await session($, on, {
-      tools: { ...TOOLS, search: (args, clock) => (args.query === 'slow' ? slowly(500, found(hit(CAP, CAP_SENTENCE)))(args, clock) : TWO) },
+      tools: { ...TOOLS, search: (args, clock) => (String(args.query).startsWith('slow') ? slowly(500, found(hit(CAP, CAP_SENTENCE)))(args, clock) : TWO) },
     })
 
     await $.command.run(command(''))
@@ -348,6 +301,32 @@ describe('Fylgja is searched on Enter and at no other time', () => {
 
     expect(set.of('search').map(args => args.query)).toEqual(['retry queue', 'slow'])
     expect(await ui.rows()).toEqual([`▸ ◆ Atom · ${CAP_SENTENCE} · 2026-09-30`])
+
+    const slower = ui.enter('slow again').catch(() => undefined)
+
+    await set.clock.advance(100)
+
+    expect(await ui.lines()).toContain(Search.QUIET.searching)
+
+    const another = ui.enterIn(String((await fieldOf(ui))?.props?.key), 'another').catch(() => undefined)
+
+    await set.clock.advance(100)
+
+    expect(set.of('search').map(args => args.query), 'an Enter while a search is on its way asks nothing while it is').toEqual([
+      'retry queue',
+      'slow',
+      'slow again',
+    ])
+
+    await set.clock.advance(500)
+    await Promise.all([slower, another])
+
+    expect(set.of('search').map(args => args.query), 'it is the next search once that one is answered: one at a time').toEqual([
+      'retry queue',
+      'slow',
+      'slow again',
+      'another',
+    ])
     expect(
       set.logged.filter(line => line !== RINGLESS),
       'and nothing of it is written to a log: at most the fixed line about a ring that could not be moved',
@@ -355,22 +334,6 @@ describe('Fylgja is searched on Enter and at no other time', () => {
     expect(set.sent, 'or sent to Claude').toEqual([])
 
     await ui.unmount()
-  })
-
-  test('while a search is on its way another Enter asks nothing: one search at a time', async () => {
-    const search = Search.create()
-    // Nothing of the engine is handed in: a search that started would fail on it.
-    const nothing = undefined as never
-
-    Search.begun(search, false)
-    search.phase = 'searching'
-    search.query = 'slow'
-
-    const asked = search.asked
-
-    await Search.look(nothing, nothing, search, 'another')
-
-    expect([search.asked, search.query, search.phase]).toEqual([asked, 'slow', 'searching'])
   })
 
   test('no more than a bounded stretch of what was typed is searched for', async ($, on) => {
@@ -425,7 +388,7 @@ describe('Fylgja is searched on Enter and at no other time', () => {
     await ui.unmount()
   })
 
-  test('signed out it says so in one line, has no field, asks nothing, and one Escape closes it, with or without words', async ($, on) => {
+  test('signed out it says so in one line, has no field and asks nothing, with or without words', async ($, on) => {
     const seen = frame(on)
     const set = stage(on, { tools: TOOLS, connect: () => NEEDS_SIGN_IN })
 
@@ -444,15 +407,6 @@ describe('Fylgja is searched on Enter and at no other time', () => {
 
     expect(seen.opens).toHaveLength(2)
     expect(set.of('search')).toEqual([])
-
-    const search = Search.create()
-
-    for (const hasWords of [true, false]) {
-      Search.begun(search, hasWords)
-
-      expect(Search.leftField(search, false), 'there is no field to leave: the first Escape is the window’s').toBe(false)
-      expect(Search.ringKey(search, false), 'and the ring is on its one key').toBe(Search.AGAIN)
-    }
   })
 
   test('a connection that was away for a moment is found again with the window’s one key, and the words that waited are searched for', async ($, on) => {
@@ -759,8 +713,17 @@ describe('what is typed never acts on a found record', () => {
     await ui.unmount()
   })
 
-  test('Escape in the field leaves the field and no more, and the next one closes the window', () => {
+  // The test kit raises no close of the window by the person, and shows no test where the plugin puts the focus
+  // ring: so Escape and the ring are asked of the search's own state, as the plugin's hooks ask it.
+  test('Escape in the field leaves the field and no more, and the next one closes the window; signed out the first closes it', () => {
     const search = Search.create()
+
+    for (const hasWords of [true, false]) {
+      Search.begun(search, hasWords)
+
+      expect(Search.leftField(search, false), 'signed out there is no field to leave').toBe(false)
+      expect(Search.ringKey(search, false), 'and the ring is on its one key').toBe(Search.AGAIN)
+    }
 
     Search.begun(search, false)
 

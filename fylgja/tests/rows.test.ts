@@ -196,6 +196,16 @@ describe('how often Fylgja is asked', () => {
     expect(started.calls.map(call => call.args)).toEqual([{ refs: [MEETING_ID] }])
   })
 
+  test('a record named twice in one message, the second time under another label and in capitals, is asked for once', async ($, on) => {
+    const started = scene(on, { resolve: FOUND })
+    const again = token('meeting', 'Another label', MEETING_ID.toUpperCase())
+
+    await $.ui.mount({ ...userMessage(`${MEETING} and ${again} and ${NOTE}`), surface: 'terminal' })
+    await asked($, started)
+
+    expect(started.calls.map(call => call.args)).toEqual([{ refs: [MEETING_ID, NOTE_ID] }])
+  })
+
   test('rows drawn while an answer is on its way do not ask again', async ($, on) => {
     const started = scene(on, { resolve: after(300, FOUND) })
     const first = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
@@ -486,7 +496,7 @@ describe('what is known, and for how long', () => {
     expect(started.calls.length).toBe(2)
   })
 
-  test('a resume back to the conversation before, seen by its id alone, starts over again', async ($, on) => {
+  test('a resume back to the conversation before, seen by its id alone or by its end, starts over again', async ($, on) => {
     let id = idOf(1)
     const started = scene(on, { resolve: FOUND, sessionId: () => id })
     await $.session.start(SESSION)
@@ -503,33 +513,17 @@ describe('what is known, and for how long', () => {
 
       expect(started.calls.length).toBe(calls)
     }
-  })
 
-  test('the end of one conversation, then a return to it seen by its id alone, starts over each time', async ($, on) => {
-    let id = idOf(1)
-    const started = scene(on, { resolve: FOUND, sessionId: () => id })
-    await $.session.start(SESSION)
-    const ui = await $.ui.mount({ ...userMessage(MEETING), surface: 'terminal' })
-    await asked($, started)
-
-    id = idOf(2)
+    // An end whose next conversation the session already reads starts over once, and not again at the next prompt.
+    id = idOf(3)
     await endedBy($, 'resume', idOf(1))
 
-    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` })).toBeDefined()
+    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'started over at the end').toBeDefined()
 
     await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } })
     await asked($, started)
 
-    expect(started.calls.length).toBe(2)
-
-    id = idOf(1)
-    await $.prompt.submit({ text: 'back again', wait: false, origin: { kind: 'composer' } })
-
-    expect(await ui.find({ text: `engine: ${UNCONFIRMED}` }), 'started over for the one before').toBeDefined()
-
-    await asked($, started)
-
-    expect(started.calls.length).toBe(3)
+    expect(started.calls.length).toBe(4)
   })
 
   test('an id that cannot be read starts nothing over and holds no prompt back; the next one read does', async ($, on) => {

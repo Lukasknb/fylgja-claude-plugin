@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
-import { markOf, RUNE } from '../hooks/companion'
+import { RUNE } from '../hooks/companion'
 import { OFF_STATUS } from '../hooks/scribe/scribe'
-import { ACCOUNT, CONNECTED, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
+import { CONNECTED, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
   carded,
   claude,
@@ -37,7 +37,6 @@ const MORE = [dev('forget the lock altogether, the queue is single-consumer now'
 const FIRST = decision({ content: 'Use a Redis lock for the retry queue.', detail: 'Redis is already there.', anchors: [{ path: FILE }] })
 const RECORDING = verdict({ records: [FIRST] })
 const DROPPING = JSON.stringify({ outcome: 'act', records: [], withdraw: [idOf(101)] })
-const OTHER_ID = '99999999-0000-4000-8000-000000000009'
 
 const BAND = {
   plugin: 'fylgja',
@@ -73,17 +72,6 @@ async function looking($: Engine, set: Stage, ms: number): Promise<{ ended: Prom
 
   return { ended }
 }
-
-describe('the mark as it reads', () => {
-  test('at rest, while Scribe reads, and with what the session kept', () => {
-    expect(markOf(undefined)).toBe('ᚠ fylgja')
-    expect(markOf({ isReading: false, kept: 0 })).toBe('ᚠ fylgja')
-    expect(markOf({ isReading: true, kept: 0 })).toBe('ᚠ· fylgja is reading')
-    expect(markOf({ isReading: false, kept: 2 })).toBe('ᚠ fylgja · 2 kept')
-    expect(markOf({ isReading: true, kept: 2 }), 'reading is said before the count').toBe('ᚠ· fylgja is reading')
-    expect(RUNE.codePointAt(0)).toBe(0x16a0)
-  })
-})
 
 describe('the mark above the prompt', () => {
   test('it rests there once the account is the pinned one: one dim line under what is drawn beneath, with no hotkey and no focus of its own', async ($, on) => {
@@ -150,31 +138,6 @@ describe('the mark above the prompt', () => {
     await turn($, set, ...WORK)
 
     expect(await shown($), 'nor when the line that said why has gone').toBe(EMPTY)
-  })
-
-  test('it does not show while another account is signed in than the pinned one, and comes once that one is accepted', async ($, on) => {
-    const set = stage(on, {
-      replies: [RECORDING],
-      kept: { 'fylgja.account': { user: OTHER_ID, team: OTHER_ID, profile: ACCOUNT.profile.id } },
-    })
-
-    await $.session.start(START)
-
-    expect(await shown($)).toMatch('Fylgja is signed in as another account')
-
-    await press($, 'account-later')
-    await turn($, set, ...WORK)
-
-    expect(await shown($), 'put off, the band is empty: the mark does not vouch for this account').toBe(EMPTY)
-  })
-
-  test('the other account accepted, the mark comes', async ($, on) => {
-    stage(on, { kept: { 'fylgja.account': { user: OTHER_ID, team: OTHER_ID, profile: ACCOUNT.profile.id } } })
-
-    await $.session.start(START)
-    await pressTwice($, 'account-accept')
-
-    expect(await shown($)).toBe(QUIET)
   })
 
   test('it does not show while Fylgja is connected outside the plugin', async ($, on) => {

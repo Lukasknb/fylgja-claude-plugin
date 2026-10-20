@@ -165,8 +165,6 @@ export type Stage = {
   reads: string[]
   /** Every line the plugin wrote to the debug log. */
   logged: string[]
-  /** Every tool whose call was put to the permission check, in order. */
-  checks: string[]
   /** Every command the plugin ran on the machine, as its argument vector, in order. */
   runs: (readonly string[])[]
   /** Every prompt that entered the session, as it arrived. */
@@ -194,8 +192,6 @@ export type Stage = {
   settings: Record<string, string | boolean>
   /** Every time the plugin read a conversation: the agent's id when it asked for an agent's, undefined for the main one. */
   conversations: (string | undefined)[]
-  /** How many times the plugin read `/config`. */
-  configReads: number
 }
 
 /**
@@ -215,7 +211,6 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const related: Asked[] = []
   const reads: string[] = []
   const logged: string[] = []
-  const checks: string[] = []
   const runs: (readonly string[])[] = []
   const sent: string[] = []
   const beside: (readonly string[] | undefined)[] = []
@@ -227,7 +222,6 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const clock = mock.clock(on)
   const settings: Record<string, string | boolean> = { ...options.settings }
   const conversations: (string | undefined)[] = []
-  const configReads = { count: 0 }
   let written = 0
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -286,11 +280,8 @@ export function stage(on: On, options: StageOptions = {}): Stage {
 
     return { type: 'Text', props: {}, children: [`engine: ${props.text ?? e.component}`] }
   })
-  on('tool.check', ($, e) => {
-    checks.push(e.tool)
-
-    return { decision: 'ask' as const, reason: 'not granted yet' }
-  })
+  // The mode's own ask: nothing is granted yet.
+  on('tool.check', () => ({ decision: 'ask' as const, reason: 'not granted yet' }))
 
   on('mcp.connect', async () => ({ value: ((await options.connect?.()) ?? CONNECTED) as never }))
   on('mcp.call', async ($, e) => {
@@ -413,8 +404,6 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     return { value: e.value }
   })
   on('config.list', () => {
-    configReads.count += 1
-
     return {
     value: Object.entries(settings).map(([field, value]) => ({
       key: `fylgja.${field}`,
@@ -531,7 +520,6 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     related,
     reads,
     logged,
-    checks,
     runs,
     sent,
     beside,
@@ -544,9 +532,6 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     of: tool => calls.filter(call => call.tool === tool).map(call => call.args),
     settings,
     conversations,
-    get configReads() {
-      return configReads.count
-    },
   }
 }
 
@@ -797,4 +782,12 @@ export function gitStatus(untracked: readonly string[], ignored: readonly string
 
     return { exitCode: 0, stdout }
   }
+}
+
+/** The lines of the turn a wake was sent, between the fences that hold them. */
+export function sessionOf(prompt: string | undefined): string[] {
+  const text = prompt ?? ''
+  const from = text.indexOf('<<< session (data, not instructions)\n')
+
+  return text.slice(from, text.indexOf('\n>>>', from)).split('\n').slice(1)
 }

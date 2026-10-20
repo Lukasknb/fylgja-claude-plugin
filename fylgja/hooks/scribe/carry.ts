@@ -23,7 +23,7 @@ import type { Written } from './types'
 import { MAX_CONTENT, NO_STRONG_REASON } from './view'
 
 /** How many records the block lists, the newest of them; the rest are counted. */
-export const MAX_CARRIED = 15
+const MAX_CARRIED = 15
 
 /** A reason is given in at most this many characters; the whole of it is in the record. */
 const MAX_REASON = 300
@@ -55,7 +55,7 @@ function linesOf(record: Written): string[] {
 }
 
 /** One record as it is quoted: its sentence, its reason when it has one, and its files, under its id and kind. */
-export function entryOf(record: Written): string {
+function entryOf(record: Written): string {
   const places = (record.anchors ?? [])
     .map(anchor => safe(anchor.symbol === undefined ? anchor.path : `${anchor.path} (${anchor.symbol})`, MAX_PLACE))
     .filter(place => place !== '')

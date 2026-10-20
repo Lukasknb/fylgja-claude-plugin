@@ -82,7 +82,7 @@ export function isCode(path: string): boolean {
  * whole word: `billing-plans.md`, `RELEASE_NOTES.md`, `notes-api.md` and
  * `packages/notes/README.md` are not.
  */
-export function isWorkingFile(path: string): boolean {
+function isWorkingFile(path: string): boolean {
   const at = normalised(path)
 
   if (SCRATCH_DIR.test(at)) {

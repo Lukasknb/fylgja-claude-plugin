@@ -334,17 +334,6 @@ export function reader(limits: Limits = LIMITS): { push: (line: string) => void;
   }
 }
 
-/** A whole session from its lines. */
-export function recordedOf(lines: Iterable<string>, limits: Limits = LIMITS): Recorded {
-  const reading = reader(limits)
-
-  for (const line of lines) {
-    reading.push(line)
-  }
-
-  return reading.done()
-}
-
 /** A turn in a few words that quote no more than sixty characters of it. */
 export function labelOf(turn: Turn): string {
   const flat = turn.prompt.replace(/\s+/g, ' ').trim()

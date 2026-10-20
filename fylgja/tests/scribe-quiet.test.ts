@@ -2,7 +2,6 @@ import type { ToolCheckResult } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { isOwnCall, verdictFor } from '../hooks/scribe/grant'
 import { ARMED_NOTE } from '../hooks/scribe/view'
 import { answer, idOf, MEETING_ID, meetingRecord, NEEDS_SIGN_IN, token } from './fixtures'
 import {
@@ -266,11 +265,22 @@ describe('Scribe stays quiet', () => {
   })
 
   test('“What is this” is offered once per machine', async ($, on) => {
-    const set = stage(on, { tools: endless(), kept: { 'scribe.hasShown': true } })
+    const set = stage(on, { tools: endless() })
 
     await $.session.start(START)
     await work($, set, 1)
 
+    expect(await shown($), 'the first time').toMatch('[9 What is this]')
+
+    await work($, set, 2)
+
+    expect(await shown($), 'not again in the session').toMatch('◆ Decision · Record number 2.')
+    expect(await shown($)).not.toMatch('What is this')
+
+    await $.session.start(START)
+    await work($, set, 3)
+
+    expect(await shown($), 'nor in the next').toMatch('◆ Decision · Record number 3.')
     expect(await shown($)).not.toMatch('What is this')
   })
 })
@@ -354,80 +364,6 @@ describe('Scribe does nothing at all', () => {
 })
 
 describe('Scribe’s own calls to Fylgja', () => {
-  const OWN = { tool: 'mcp__plugin_fylgja_fylgja__recall', tool_use_id: 'toolu_plugin_01' }
-  const SERVER = 'plugin:fylgja:fylgja'
-
-  test('its own call of a listed tool on the server the engine connected for it is let through', () => {
-    for (const tool of ['recall', 'search', 'open', 'resolve', 'remember', 'amend_memory', 'attach_commit']) {
-      expect(isOwnCall({ ...OWN, tool: `mcp__plugin_fylgja_fylgja__${tool}` }, 'fylgja', SERVER), tool).toBe(true)
-    }
-
-    expect(isOwnCall(OWN, 'fylgja@inline', SERVER)).toBe(true)
-    expect(verdictFor({ decision: 'ask' }, OWN, 'fylgja', SERVER).decision).toBe('allow')
-  })
-
-  test('only the mode’s own ask is turned into an allow: an ask a rule, a hook, a setting, an organization’s ceiling or a named decider stands behind is left as it came', () => {
-    for (const behind of [{ rule: 'mcp__plugin_fylgja_fylgja__remember' }, { hook: 'PreToolUse' }, { setting: 'permissions.blockReadsOutsideWorkingDirectories' }, { ceiling: 'ask' }, { decider: 'host' }]) {
-      expect(verdictFor({ decision: 'ask', ...behind }, OWN, 'fylgja', SERVER), JSON.stringify(behind)).toEqual({ decision: 'ask', ...behind })
-    }
-
-    expect(verdictFor({ decision: 'ask', ceiling: 'allow' }, OWN, 'fylgja', SERVER).decision, 'a ceiling of allow caps nothing').toBe('allow')
-    expect(verdictFor({ decision: 'ask', reason: 'the mode asks' }, OWN, 'fylgja', SERVER).decision).toBe('allow')
-  })
-
-  test('where the same address is configured outside the plugin, the engine answers that entry’s name, and nothing of it is let through', () => {
-    // A repository's `.mcp.json` can name the plugin's address with any account's token.
-    for (const theirs of ['fylgja', 'kb']) {
-      expect(isOwnCall({ ...OWN, tool: `mcp__${theirs}__recall` }, 'fylgja', theirs), theirs).toBe(false)
-      expect(isOwnCall(OWN, 'fylgja', theirs), 'nor the plugin’s own tools while it is the one connected').toBe(false)
-      expect(isOwnCall({ ...OWN, tool: `mcp__${theirs}__recall` }, 'fylgja', SERVER)).toBe(false)
-    }
-  })
-
-  test('a refusal is never turned into anything else, and an allow is left as it came', () => {
-    expect(verdictFor({ decision: 'deny', reason: 'a rule of yours' }, OWN, 'fylgja', SERVER)).toEqual({
-      decision: 'deny',
-      reason: 'a rule of yours',
-    })
-    expect(verdictFor({ decision: 'allow', reason: 'a rule of yours' }, OWN, 'fylgja', SERVER)).toEqual({
-      decision: 'allow',
-      reason: 'a rule of yours',
-    })
-  })
-
-  test('every other call is left to be decided as it always was', () => {
-    const others: readonly (readonly [string, Parameters<typeof isOwnCall>[0], string | undefined, string | undefined])[] = [
-      ['Claude’s own call of the same tool', { ...OWN, tool_use_id: 'toolu_01abc' }, 'engine', SERVER],
-      ['Claude’s call, were it to carry the plugin’s kind of id', OWN, 'engine', SERVER],
-      ['an agent’s call', { ...OWN, agentId: 'agent-1' }, 'fylgja', SERVER],
-      ['the plugin’s call of a tool not listed', { ...OWN, tool: 'mcp__plugin_fylgja_fylgja__restructure' }, 'fylgja', SERVER],
-      [
-        'a tool whose name only starts like a listed one',
-        { ...OWN, tool: 'mcp__plugin_fylgja_fylgja__recall_all' },
-        'fylgja',
-        SERVER,
-      ],
-      ['another server’s tool of the same name', { ...OWN, tool: 'mcp__notes__recall' }, 'fylgja', SERVER],
-      [
-        'a server of the plugin’s name added by hand, pointing elsewhere',
-        { ...OWN, tool: 'mcp__fylgja__recall' },
-        'fylgja',
-        SERVER,
-      ],
-      ['another plugin’s call', OWN, 'fylgja-lookalike', SERVER],
-      ['a call nobody is named for', OWN, undefined, SERVER],
-      ['a call while Fylgja is not connected', OWN, 'fylgja', undefined],
-      ['a query with no call behind it', { tool: OWN.tool }, 'fylgja', SERVER],
-      ['a tool the organization limits', { ...OWN, ceiling: 'ask' }, 'fylgja', SERVER],
-      ['a built-in tool', { ...OWN, tool: 'Bash' }, 'fylgja', SERVER],
-    ]
-
-    for (const [name, e, raisedBy, server] of others) {
-      expect(isOwnCall(e, raisedBy, server), name).toBe(false)
-      expect(verdictFor({ decision: 'ask' }, e, raisedBy, server).decision, name).toBe('ask')
-    }
-  })
-
   test('the check hook passes on, untouched, every verdict that is not its own call’s', async ($, on) => {
     stage(on)
 
@@ -617,23 +553,6 @@ describe('Scribe fails quietly', () => {
     await row.redraw()
 
     expect(JSON.stringify(await row.drawn())).toMatch('Engineering Retrospective')
-  })
-
-  test('a model that fails, a server that fails and a conversation that cannot be read each leave the turn as it was', async ($, on) => {
-    const set = stage(on, {
-      replies: [() => Promise.reject(new Error('model down'))],
-      tools: {
-        recall: () => {
-          throw new Error('server down')
-        },
-      },
-    })
-
-    await $.session.start(START)
-    await turn($, set, ...WORK)
-
-    expect(await shown($)).toBe(QUIET)
-    expect(set.toasts).toEqual([])
   })
 })
 

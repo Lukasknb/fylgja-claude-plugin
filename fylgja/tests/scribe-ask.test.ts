@@ -92,13 +92,19 @@ describe('Scribe asks why', () => {
     expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'fix', reason_status: 'no_strong_reason' }])
   })
 
+  // One answer for each way an answer says there was no reason, or is one after all.
   for (const [typed, status] of [
     ['idk', 'no_strong_reason'],
     ['no idea, it just worked', 'no_strong_reason'],
     ['Honestly don’t know', 'no_strong_reason'],
+    ['None, honestly.', 'no_strong_reason'],
+    ['?', 'no_strong_reason'],
+    ['none of the others support ESM', 'stated'],
+    ['just because the API requires it', 'stated'],
+    ['no idea '.repeat(21).trim(), 'stated'],
     ['Redis kept dropping connections under load', 'stated'],
   ] as const) {
-    test(`a typed answer “${typed}” is saved in those words as ${status}`, async ($, on) => {
+    test(`a typed answer “${typed.slice(0, 40)}” is saved in those words as ${status}`, async ($, on) => {
       const set = stage(on, { replies: [ASKING] })
 
       await $.session.start(START)
@@ -116,6 +122,56 @@ describe('Scribe asks why', () => {
       expect(set.of('amend_memory')).toEqual([{ atom_id: idOf(101), op: 'fix', detail: typed, reason_status: status }])
     })
   }
+
+  test('a reason is written as one only where it was given: a guess is dropped, a reason with no status is stated, a blank one is not, and “no particular reason” needs the developer’s words', async ($, on) => {
+    const set = stage(on, {
+      replies: [
+        verdict({
+          records: [
+            decision({ content: 'Use A.', detail: 'a guess', reason_status: 'not_stated' }),
+            decision({ content: 'Use B.', detail: 'B is already there.', reason_status: undefined }),
+            decision({ content: 'Use C.', detail: ' ', reason_status: 'stated' }),
+          ],
+        }),
+        verdict({
+          records: [
+            { kind: 'status', content: 'Tests pass.' },
+            decision({ content: 'Use D.', detail: 'picked the first that worked', reason_status: 'no_strong_reason' }),
+          ],
+        }),
+      ],
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await set.clock.advance(60_000)
+    await turn($, set, dev('and the dead letters go to D'), claude('Done.', edit('src/queue/lock.ts')))
+
+    expect(set.of('remember').map(args => [args.content, args.reason_status, args.detail])).toEqual([
+      ['Use A.', 'not_stated', undefined],
+      ['Use B.', 'stated', 'B is already there.'],
+      ['Use C.', 'not_stated', undefined],
+      ['Use D.', 'not_stated', undefined],
+    ])
+  })
+
+  test('a question keeps pointing at its own record when what is no record is left out, and offers no more than three reasons, each a short text', async ($, on) => {
+    const set = stage(on, {
+      replies: [
+        verdict({
+          records: [{ kind: 'status', content: 'Tests pass.' }, UNEXPLAINED],
+          question: { form: 'reason', record: 1, options: ['a', 'b', 'c', 'd', 7, 'x'.repeat(81)] },
+        }),
+      ],
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(await shown($)).toBe(
+      carded('? Why: Use Postgres advisory locks for the job queue, not Redis. [1 a] [2 b] [3 c] [4 Write my own] [5 No particular reason] [9 What is this] [0 Skip]'),
+    )
+  })
 
   test('a question the model asks about a gotcha, a correction or a decision with its reason is never shown', async ($, on) => {
     const gotcha = { kind: 'gotcha', content: 'Run the seed before the tests.', detail: '', triggers: ['pytest'], anchors: [] }
@@ -325,6 +381,54 @@ describe('Scribe asks whether a decision replaces a recorded one', () => {
     expect(await shown($)).toBe(
       carded('✓ Recorded · Use Postgres advisory locks for the job queue, not Redis. · replaces: Use Redis with Redlock for the job queue. [1 Fix] [2 Remove] [0 OK]'),
     )
+  })
+
+  test('a reversal is asked only about a recorded decision a lookup of this wake returned', async ($, on) => {
+    const gotcha = fact(6, { type: 'gotcha', content: 'Redlock needs three Redis nodes.', anchors: [{ path: 'src/queue/lock.ts' }] })
+    const set = stage(on, {
+      replies: [
+        verdict({ records: [decision({ content: 'Use A.' })], question: { ...REVERSAL, prior: idOf(6) } }),
+        verdict({ records: [decision({ content: 'Use B.' })], question: { ...REVERSAL, prior: idOf(9) } }),
+      ],
+      tools: { recall: () => answer({ facts: [PRIOR, gotcha] }) },
+      kept: { 'scribe.known': [idOf(5), idOf(6)] },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(await shown($), 'not about a gotcha').not.toMatch('replaces')
+
+    await set.clock.advance(60_000)
+    await turn($, set, dev('and the dead letters too'), claude('Done.', edit('src/queue/lock.ts')))
+
+    expect(await shown($), 'not about a record no lookup returned').not.toMatch('replaces')
+    expect(set.of('remember').map(args => [args.content, args.supersedes])).toEqual([
+      ['Use A.', undefined],
+      ['Use B.', undefined],
+    ])
+  })
+
+  test('a record marked as a replacement with another question in the way replaces nothing, and that question is asked', async ($, on) => {
+    const set = stage(on, {
+      replies: [
+        verdict({
+          records: [{ ...UNEXPLAINED, content: 'Use A.' }, decision({ content: 'Use B.', supersedes: idOf(5) })],
+          question: { form: 'reason', record: 0, options: ['a', 'b'] },
+        }),
+      ],
+      tools: { recall: () => answer({ facts: [PRIOR] }) },
+      kept: { 'scribe.known': [idOf(5)] },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+
+    expect(await shown($)).toMatch('? Why: Use A.')
+    expect(set.of('remember').map(args => [args.content, args.supersedes])).toEqual([
+      ['Use A.', undefined],
+      ['Use B.', undefined],
+    ])
   })
 
   test('where the question cannot be asked, the decision is written beside the old one, never as its replacement', async ($, on) => {

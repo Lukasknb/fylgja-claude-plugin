@@ -1,11 +1,11 @@
 import type { Engine } from 'claude-code/testing'
 import { describe, expect, test } from 'claude-code/testing'
 
-import { isAnchorable, isCode, isWaiting, isWorkingFile, statesOf } from '../hooks/scribe/anchoring'
 import { GIT_TIMEOUT_MS } from '../hooks/scribe/git'
 import { NO_CODE } from '../hooks/scribe/ledger'
-import { idOf } from './fixtures'
-import { claude, decision, dev, edit, gitStatus, NOTHING, ROOT, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { answer, idOf } from './fixtures'
+import { claude, decision, dev, edit, fact, gitStatus, NOTHING, ROOT, stage, START, turn, use, verdict } from './scribe-fixtures'
+import type { StageOptions } from './scribe-fixtures'
 import { frame, pane } from './window-fixtures'
 
 const PLAN_FILE = 'docs/partial-confirmations/plan-l5-l6.md'
@@ -221,79 +221,147 @@ describe('what is a working file, by git first and by its name where git cannot 
     'services/plans/README.md',
   ]
 
-  test('a document git keeps is an anchor, whatever it is called', () => {
-    for (const path of [...KEPT_DOCS, PLAN_FILE, 'NOTES.md']) {
-      expect(isAnchorable(path, 'tracked'), path).toBe(true)
-    }
-  })
+  /**
+   * Each of `paths` read in the session, three to a turn, and a decision
+   * anchored to each: the paths whose decision was written with its anchor.
+   */
+  async function anchored($: Engine, on: Parameters<typeof stage>[0], git: StageOptions['git'], paths: readonly string[]) {
+    const turns = Array.from({ length: Math.ceil(paths.length / 3) }, (_, n) => paths.slice(n * 3, n * 3 + 3))
+    const set = stage(on, {
+      git,
+      replies: turns.map((chunk, n) =>
+        verdict({ records: chunk.map((path, at) => decision({ content: `Use way ${n * 3 + at} for the import.`, anchors: [{ path }] })) }),
+      ),
+    })
 
-  test('by name, only a whole word that says plan, notes, to-do, draft or scratch marks a working file', () => {
-    // `plan-format` begins with the word plan: only git can tell it from a plan of the work.
-    for (const path of KEPT_DOCS.filter(one => one !== 'docs/specs/plan-format.md')) {
-      expect(isWorkingFile(path), path).toBe(false)
-    }
+    await $.session.start(START)
 
-    for (const path of [
-      PLAN_FILE,
-      'docs/auth-plan.md',
-      'TODO.md',
-      'NOTES.md',
-      'plan.md',
-      'wip_auth.md',
-      '.claude/plans/x.md',
-      'scratch/try.py',
-    ]) {
-      expect(isWorkingFile(path), path).toBe(true)
+    for (const chunk of turns) {
+      await turn($, set, dev(`read these ${TALK}`), claude('Read.', ...chunk.map(path => use('Read', { file_path: `${ROOT}/${path}` }, 'text'))))
+      await set.clock.advance(180_000)
     }
 
-    expect(isWorkingFile('src/billing/plans/pricing.ts'), 'code in a folder named plans').toBe(false)
-    expect(isWorkingFile('docs\\partial-confirmations\\plan-l5-l6.md'), 'a Windows path').toBe(true)
-    expect(isWorkingFile('scratch\\try.py'), 'a Windows path').toBe(true)
+    expect(set.of('remember').length, 'every decision is written').toBe(paths.length)
+
+    return set.of('remember').flatMap((args, n) => (args.anchors === undefined ? [] : [paths[n]]))
+  }
+
+  test('by git: a document it keeps is an anchor whatever it is called; new code is one before it is committed; a document it was never given, and anything it ignores, is not', async ($, on) => {
+    const NOT = ['scratch/try.py', 'docs/specs/import.md', 'build/out.py']
+    const KEPT = [...KEPT_DOCS, PLAN_FILE, 'NOTES.md', OUTBOX]
+
+    expect(await anchored($, on, gitStatus([OUTBOX, 'scratch/try.py', 'docs/specs/import.md'], ['build/out.py']), [...KEPT, ...NOT])).toEqual(KEPT)
   })
 
-  test('new code is an anchor before it is committed; a document git was never given is not; nothing git ignores is', () => {
-    expect(isAnchorable(OUTBOX, 'untracked')).toBe(true)
-    expect(isAnchorable('scratch/try.py', 'untracked')).toBe(false)
-    expect(isAnchorable('docs/specs/import.md', 'untracked')).toBe(false)
-    expect(isAnchorable('docs/specs/import.md', undefined), 'git could not be asked: the name decides').toBe(true)
-    expect(isAnchorable(PLAN_FILE, undefined)).toBe(false)
-    expect(isAnchorable('build/out.py', 'ignored')).toBe(false)
-  })
+  test('by git status as it prints it, file by file: an ignored folder holds what lies in it', async ($, on) => {
+    const porcelain = '?? new.md\0!! build/\0R  moved.ts\0old.ts\0 M changed.ts\0'
+    const git = (args: readonly string[]) => (args[0] === 'status' ? { exitCode: 0, stdout: porcelain } : undefined)
 
-  test('a build or package manifest written as text is code; prose is not', () => {
-    for (const path of ['requirements.txt', 'requirements-dev.txt', 'apps/api/constraints.txt', 'CMakeLists.txt', 'src\\CMakeLists.txt']) {
-      expect(isCode(path), path).toBe(true)
-    }
-
-    for (const path of ['docs/notes.txt', 'README.md', 'docs/adr/0007.rst']) {
-      expect(isCode(path), path).toBe(false)
-    }
-  })
-
-  test('a decision or a gotcha waits for its code; a correction waits for nothing', () => {
-    expect(isWaiting({ kind: 'decision', anchors: [{ path: 'docs/specs/import.md' }] })).toBe(true)
-    expect(isWaiting({ kind: 'gotcha', anchors: [] })).toBe(true)
-    expect(isWaiting({ kind: 'correction', anchors: [] })).toBe(false)
-    expect(isWaiting({ kind: 'decision', anchors: [{ path: OUTBOX }] })).toBe(false)
-  })
-
-  test('git status is read file by file, an ignored folder holding what lies in it', () => {
-    const states = statesOf('?? new.md\0!! build/\0R  moved.ts\0old.ts\0 M changed.ts\0', [
-      'new.md',
-      'build/x.py',
+    expect(await anchored($, on, git, ['new.md', 'build/x.py', 'moved.ts', 'old.ts', 'changed.ts', 'kept.ts'])).toEqual([
       'moved.ts',
       'old.ts',
       'changed.ts',
       'kept.ts',
     ])
+  })
 
-    expect(Object.fromEntries(states)).toEqual({
-      'new.md': 'untracked',
-      'build/x.py': 'ignored',
-      'moved.ts': 'tracked',
-      'old.ts': 'tracked',
-      'changed.ts': 'tracked',
-      'kept.ts': 'tracked',
+  test('by name, where git cannot say: only a whole word that says plan, notes, to-do, draft or scratch marks a working file', async ($, on) => {
+    // `plan-format` begins with the word plan: only git can tell it from a plan of the work.
+    const KEPT = [...KEPT_DOCS.filter(one => one !== 'docs/specs/plan-format.md'), 'src/billing/plans/pricing.ts', 'docs/specs/import.md']
+    const WORKING = [PLAN_FILE, 'docs/auth-plan.md', 'TODO.md', 'NOTES.md', 'plan.md', 'wip_auth.md', '.claude/plans/x.md', 'scratch/try.py']
+
+    expect(await anchored($, on, undefined, [...KEPT, ...WORKING])).toEqual(KEPT)
+  })
+
+  test('a decision or a gotcha without its code waits for it, a correction for nothing; a manifest written as text is code, prose is not', async ($, on) => {
+    const GOTCHA = { kind: 'gotcha', content: 'Run the import before the worker starts.', detail: 'It fails otherwise.', triggers: ['import run'], anchors: [] }
+    const CORRECTION = { kind: 'correction', content: 'The import is not retried on failure.', detail: '', anchors: [] }
+    const set = stage(on, {
+      git: gitStatus([PLAN_FILE]),
+      replies: [
+        verdict({ records: [OUTBOX_DECISION, GOTCHA, CORRECTION] }),
+        later(['docs/notes.txt']),
+        JSON.stringify({
+          outcome: 'act',
+          records: [],
+          anchor: [
+            { id: idOf(101), paths: ['requirements.txt', 'CMakeLists.txt'] },
+            { id: idOf(102), paths: ['requirements.txt'] },
+            { id: idOf(103), paths: ['requirements.txt'] },
+          ],
+        }),
+      ],
     })
+
+    await $.session.start(START)
+    await turn($, set, dev(`plan the L5/L6 partial confirmations ${TALK}`), claude('Planned.', writePlan))
+    await turn($, set, dev('write the notes down'), claude('Written.', edit('docs/notes.txt')))
+
+    expect(set.of('amend_memory'), 'prose is never a later place').toEqual([])
+
+    await set.clock.advance(180_000)
+    await turn($, set, dev('pin the dependencies and the build'), claude('Pinned.', edit('requirements.txt'), edit('CMakeLists.txt')))
+
+    expect(set.of('amend_memory')).toEqual([
+      { atom_id: idOf(101), op: 'fix', anchors: [{ path: 'requirements.txt' }, { path: 'CMakeLists.txt' }] },
+      { atom_id: idOf(102), op: 'fix', anchors: [{ path: 'requirements.txt' }] },
+    ])
+  })
+})
+
+describe('a file’s place in the tree', () => {
+  test('a file in the tree is named from its root; a file outside it, or a path that climbs, is named in full and anchors nothing', async ($, on) => {
+    const OUTSIDE = ['/work/repo-other/a.ts', '/etc/passwd', '/work/repo', '../a.ts', 'src/../a.ts', 'a\\b.ts', 'C:/a.ts', 'src/', `src/${'x'.repeat(400)}.ts`]
+    const set = stage(on, {
+      replies: [verdict({ records: [decision({ anchors: [{ path: 'src/a.ts' }, ...OUTSIDE.map(path => ({ path }))] })] })],
+    })
+
+    await $.session.start(START)
+    await turn(
+      $,
+      set,
+      dev(`change them all ${TALK}`),
+      claude('Done.', ...['./src/a.ts', ...OUTSIDE].map(path => use('Edit', { file_path: path, old_string: 'a', new_string: 'b' }))),
+    )
+
+    const prompt = set.asked[0]?.prompt ?? ''
+
+    expect(prompt).toMatch('[tool] Edit src/a.ts ok')
+
+    for (const path of OUTSIDE) {
+      expect(prompt, path).toMatch(`[tool] Edit ${path} (outside the working tree) ok`)
+    }
+
+    expect(set.of('remember')[0]?.anchors).toEqual([{ path: 'src/a.ts' }])
+  })
+})
+
+describe('a record as Fylgja sends it', () => {
+  test('is read from either shape of its anchors; one that is no record, or comes twice, is left out', async ($, on) => {
+    const set = stage(on, {
+      tools: {
+        recall: () =>
+          answer({
+            facts: [
+              fact(1, { content: 'FIRST-RECORD', anchors: { paths: [{ path: 'src/a.ts', symbol: 'f', added_by: 'author' }], commits: [{ sha: '1a2b3c4', added_by: 'author' }] } }),
+              fact(2, { content: 'SECOND-RECORD', anchors: [{ kind: 'path', ref: 'src/b.ts' }, { kind: 'commit', ref: '1a2b3c4' }] }),
+              { id: 'not-an-id', content: 'NO-ID-RECORD' },
+              { id: idOf(3) },
+              fact(1, { content: 'FIRST-RECORD' }),
+            ],
+          }),
+      },
+    })
+
+    await $.session.start(START)
+    await turn($, set, dev(`change both ${TALK}`), claude('Done.', edit('src/a.ts'), edit('src/b.ts')))
+
+    const prompt = set.asked[0]?.prompt ?? ''
+
+    expect(prompt.match(/<<< record id=/g)?.length).toBe(2)
+    expect(prompt).toMatch(`id=${idOf(1)} kind=decision`)
+    expect(prompt).toMatch(/FIRST-RECORD\n(?:.*\n)*?Anchored to: src\/a\.ts/)
+    expect(prompt).toMatch(/SECOND-RECORD\n(?:.*\n)*?Anchored to: src\/b\.ts/)
+    expect(prompt).not.toMatch('NO-ID-RECORD')
   })
 })

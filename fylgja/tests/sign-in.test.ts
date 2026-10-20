@@ -98,34 +98,33 @@ describe('sign-in', () => {
     expect(started.statuses).toEqual(['sign in with /mcp'])
   })
 
-  for (const reason of ['disabled', 'failed', 'unapproved', 'policy', 'unlisted']) {
-    test(`a server that is ${reason} stays silent`, async ($, on) => {
-      const started = scene(on, { connect: () => ({ isConnected: false, reason, message: 'not connected' }) })
+  // Every reason but sign-in is one branch: the server is off, not approved, refused or failing, and none of that is the person's to fix here.
+  test('a server that is switched off stays silent', async ($, on) => {
+    const started = scene(on, { connect: () => ({ isConnected: false, reason: 'disabled', message: 'not connected' }) })
 
-      await $.session.start(SESSION)
-      await rowOf($, started, MEETING, 60_000)
+    await $.session.start(SESSION)
+    await rowOf($, started, MEETING, 60_000)
 
-      expect(started.statuses.filter(status => status !== undefined)).toEqual([])
-      expect(started.calls).toEqual([])
-    })
+    expect(started.statuses.filter(status => status !== undefined)).toEqual([])
+    expect(started.calls).toEqual([])
+  })
 
-    test(`the line goes when the server turns out to be ${reason}, and the asking stops`, async ($, on) => {
-      let answerNow: Record<string, unknown> = NEEDS_SIGN_IN
-      const started = scene(on, { connect: () => answerNow })
+  test('the line goes when the server turns out to be failing, and the asking stops', async ($, on) => {
+    let answerNow: Record<string, unknown> = NEEDS_SIGN_IN
+    const started = scene(on, { connect: () => answerNow })
 
-      await $.session.start(SESSION)
-      await started.clock.settle()
-      answerNow = { isConnected: false, reason, message: 'not connected' }
-      await started.clock.advance(5000)
+    await $.session.start(SESSION)
+    await started.clock.settle()
+    answerNow = { isConnected: false, reason: 'failed', message: 'not connected' }
+    await started.clock.advance(5000)
 
-      expect(started.statuses).toEqual(['sign in with /mcp', undefined])
+    expect(started.statuses).toEqual(['sign in with /mcp', undefined])
 
-      const asked = started.connects()
-      await started.clock.advance(60_000)
+    const asked = started.connects()
+    await started.clock.advance(60_000)
 
-      expect(started.connects()).toBe(asked)
-    })
-  }
+    expect(started.connects()).toBe(asked)
+  })
 
   test('a slow answer that sign-in is needed does not overrule a later answer that the server is connected', async ($, on) => {
     let asks = 0

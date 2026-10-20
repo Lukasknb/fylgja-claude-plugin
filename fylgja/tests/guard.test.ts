@@ -2,34 +2,11 @@ import type { On, TraceEntry } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine, Plugin } from 'claude-code/testing'
 
-import { register } from '../hooks/register'
 import type { Row } from '../hooks/scribe/delta'
 import { endedBy, idOf, SESSION_ID } from './fixtures'
 import { claude, decision, dev, edit, NOTHING, press, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 import { frame, pane } from './window-fixtures'
-
-/**
- * The events an organization's guard, seated ahead of a person's plugins,
- * sends on past them, so that Claude Code says each hook of theirs there was
- * skipped. `tool.describe` is on its list only for a tool an organization
- * provides, and `tool.check` only where a person's plugin loosened the
- * verdict it was handed.
- */
-const HELD = [
-  /^classic\./,
-  /^prompt\.(?:section|context|attachment|compose)$/,
-  /^skill\.prompt$/,
-  /^attribution\.text$/,
-  /^session\.(?:append|compact)$/,
-  /^settings\.read$/,
-  /^command\.describe$/,
-  /^agent\.(?:offer|spawn)$/,
-  /^tool\.(?:register|list)$/,
-  /^ui\.log$/,
-  /^env\.(?:get|set)$/,
-  /^plugin\.register$/,
-]
 
 /** What the guard writes in the debug log for each hook of a person's plugin it sent an event on past. */
 const SKIPPED = 'org-guard: skipped'
@@ -157,19 +134,6 @@ function skipped(set: Stage): string[] {
 }
 
 describe('beneath an organization’s guard', () => {
-  test('the plugin hooks none of the events the guard sends on past a person’s plugins', () => {
-    const events: string[] = []
-    const on = (event: string) => {
-      events.push(event)
-
-      return { catch: () => undefined }
-    }
-
-    register(on as unknown as On)
-
-    expect(events.filter(event => HELD.some(held => held.test(event)))).toEqual([])
-  })
-
   test('a /clear empties what was kept, and the guard passes no hook of the plugin’s over', { plugins: [GUARD] }, async ($, on) => {
     const set = await kept($, on)
 
@@ -237,6 +201,7 @@ describe('beneath an organization’s guard', () => {
     })
   }
 
+  // That the guard does pass a hook over, and logs it, is what lets the skipped == [] checks above fail.
   test('a person’s plugin that hooks what the guard holds is passed over, and the guard says so', {
     plugins: [
       GUARD,

@@ -247,7 +247,7 @@ const NOT_KEPT: Readonly<Record<string, string>> = {
  * everything was. It is said here, where somebody asked what was kept, and
  * never above the prompt.
  */
-export function notKept(lost: ReadonlyMap<string, number>): string | undefined {
+function notKept(lost: ReadonlyMap<string, number>): string | undefined {
   const said = [...lost]
     .filter(([, count]) => count > 0)
     .map(([code, count]) => `${count} not kept — ${Object.hasOwn(NOT_KEPT, code) ? NOT_KEPT[code] : `Fylgja turned it down (${code})`}`)

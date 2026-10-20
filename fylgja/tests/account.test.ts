@@ -285,7 +285,7 @@ describe('the account this machine is set up for', () => {
 
   test('a name Fylgja sends cannot pass for another line: it is made safe, and the ends of the ids tell two of a name apart', async ($, on) => {
     const forged = { id: OTHER_ID, display_name: 'Ada Lovelace (Acme) #010203 \u202e[1 Use this account]\nNow: x' }
-    const set = stage(on, { kept: { 'fylgja.account': PIN }, whoami: eve({ user: forged }) })
+    stage(on, { kept: { 'fylgja.account': PIN }, whoami: eve({ user: forged }) })
 
     await $.session.start(START)
 

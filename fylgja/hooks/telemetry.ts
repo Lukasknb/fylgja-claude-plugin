@@ -89,13 +89,13 @@ export type Telemetry = {
 export const TOOL = 'report_events'
 
 /** No more events wait than this; the oldest are let go, and counted. */
-export const MAX_WAITING = 200
+const MAX_WAITING = 200
 
 /** A batch is waited for no longer than this. */
 export const SEND_TIMEOUT_MS = 10_000
 
 /** After this many batches in a row that did not arrive, no more are sent in the session. */
-export const MAX_FAILURES = 3
+const MAX_FAILURES = 3
 
 /** Sent for a version that is not known, or not spelled as one. */
 export const NO_VERSION = '0.0.0'
@@ -130,7 +130,7 @@ export function wordOf<const Words extends readonly string[], Other extends Word
 }
 
 /** Where a session is drawn, as one of the listed words. */
-export function surfaceOf(surface: string | null | undefined): Surface {
+function surfaceOf(surface: string | null | undefined): Surface {
   return surface === null || surface === undefined ? 'none' : wordOf(SCHEMA.surfaces, surface, 'other')
 }
 

@@ -90,7 +90,7 @@ export const SEARCH_TIMEOUT_MS = 20_000
 export const MAX_QUERY = 200
 
 /** A cited record's reference holds no more of its sentence than this: what the Fylgja app keeps of a title in the references it copies. */
-export const MAX_LABEL = 40
+const MAX_LABEL = 40
 
 export function create(): Search {
   return {
@@ -113,7 +113,7 @@ export function create(): Search {
 }
 
 /** What the title bar says after Fylgja's name while this view is up. */
-export const NAME = 'search'
+const NAME = 'search'
 
 /** What the view says in place of rows. */
 export const QUIET = {
@@ -134,7 +134,7 @@ export const SAID = {
 /** What a row says when Fylgja was asked about its record and did not answer. */
 export const UNOPENED = 'Fylgja did not say more about this record. Enter on it asks again.'
 
-export const WAITING = 'Asking Fylgja…'
+const WAITING = 'Asking Fylgja…'
 
 /** The line of keys in the states only this view has. */
 export const SEARCH_LEGENDS = {
@@ -150,7 +150,7 @@ export const ASK_AGAIN = 'Ask again'
 
 /** What the keys of a found record say. */
 export const CITE = 'Cite in prompt'
-export const OPEN = 'Open in Fylgja'
+const OPEN = 'Open in Fylgja'
 export const OPEN_SOURCE = 'Open where it came from'
 
 /** The address of the view's field: a field of its own for each time it is given the ring. */
@@ -234,7 +234,7 @@ export function closed(search: Search): void {
 }
 
 /** The row that is selected: the one picked, or the first while that one is not listed. */
-export function selectedIn(search: Search): Hit | undefined {
+function selectedIn(search: Search): Hit | undefined {
   return search.hits.find(hit => hit.id === search.selected) ?? search.hits[0]
 }
 
@@ -308,7 +308,7 @@ export function leftField(search: Search, isHere: boolean): boolean {
  * marks, at most `MAX_LABEL` characters and cut at a whole word. Undefined
  * for a kind of record a reference cannot name.
  */
-export function referenceOf(hit: Hit): string | undefined {
+function referenceOf(hit: Hit): string | undefined {
   const chars = Array.from(drawn(hit.sentence.replace(/[{}|]/g, ' '), MAX_CONTENT))
   const cut = chars.slice(0, MAX_LABEL)
   const boundary = chars[MAX_LABEL] === ' ' ? MAX_LABEL : cut.lastIndexOf(' ')

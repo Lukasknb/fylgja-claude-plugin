@@ -2,7 +2,6 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { GIVEN_UP } from '../hooks/scribe/prompt'
 import { MAX_COMMIT_PATHS, OFF_STATUS } from '../hooks/scribe/scribe'
-import { namedAfter } from '../hooks/scribe/staged'
 import { ARMED_NOTE, NOTES, SAID } from '../hooks/scribe/view'
 import { answer, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
 import {
@@ -336,13 +335,29 @@ describe('git’s own count decides which files a commit is reported with', () =
     expect(sent(earlier)).toEqual([['1a2b3c4', [A]]])
   })
 
-  test('named on the commit itself', async ($, on) => {
+  for (const [what, last] of [
+    ['on the commit itself', `git commit -m lock -- ${B}`],
+    ['on the commit itself, after a variable set for git', `GIT_AUTHOR_DATE=2026-01-01T20:00:00 git commit -m lock -- ${B}`],
+    ['in quotes', `git add "${B}" && git commit --message=lock`],
+  ] as const) {
+    test(`named ${what}`, async ($, on) => {
+      const set = stage(on)
+
+      await $.session.start(START)
+      await both($, set, [], last, 1)
+
+      expect(sent(set)).toEqual([['1a2b3c4', [B]]])
+    })
+  }
+
+  test('named in quotes, with a space in its name', async ($, on) => {
     const set = stage(on)
+    const spaced = 'src/queue/my lock.ts'
 
     await $.session.start(START)
-    await both($, set, [], `git commit -m lock -- ${B}`, 1)
+    await turn($, set, dev('change both and commit'), claude('Done.', edit(A), edit(spaced), git(`git add "${spaced}" && git commit -m lock`, made('1a2b3c4', 1))))
 
-    expect(sent(set)).toEqual([['1a2b3c4', [B]]])
+    expect(sent(set)).toEqual([['1a2b3c4', [spaced]]])
   })
 
   test('git’s count is not to be seen: nothing is reported, and the files do not go out under a later commit', async ($, on) => {
@@ -467,6 +482,9 @@ describe('git’s own count decides which files a commit is reported with', () =
     ['one, through a pipe', [], `echo ${A} | xargs git add && git commit -m lock`],
     ['one, and the commit amended', [], `git add ${A} && git commit --amend -m lock`],
     ['one by a variable', [], 'git add "$FILE" && git commit -m lock'],
+    ['one, in another folder by git’s own -C', [], `git -C . add ${A} && git commit -m lock`],
+    ['one, on a line before the commit', [], `git add ${A}\ngit commit -m lock`],
+    ['one, with a quote of the commit left open', [], `git add ${A} && git commit -m "lock`],
   ] as const) {
     test(`staged as ${what}: nothing is reported`, async ($, on) => {
       const set = stage(on)
@@ -474,7 +492,8 @@ describe('git’s own count decides which files a commit is reported with', () =
       await $.session.start(START)
       await both($, set, [...commands], last, 1)
 
-      expect(sent(set)).toEqual([['1a2b3c4', undefined]])
+      // Git told to work elsewhere leaves the shell's repository unknown: the commit is not attached at all.
+      expect(sent(set)).toEqual(what.includes('-C') ? [] : [['1a2b3c4', undefined]])
     })
   }
 
@@ -505,28 +524,6 @@ describe('git’s own count decides which files a commit is reported with', () =
 
     expect(sent(set)).toEqual([['1a2b3c4', [A]]])
   })
-
-  for (const [command, named] of [
-    [`git add src/a.ts lib/b.ts && git commit -m x`, ['src/a.ts', 'lib/b.ts']],
-    [`GIT_AUTHOR_DATE=2026-01-01T20:00:00 git commit -m x -- src/a.ts`, ['src/a.ts']],
-    [`git add ${ROOT}/src/a.ts && git commit -qm x`, ['src/a.ts']],
-    ['git add "src/my file.ts" && git commit --message=x', ['src/my file.ts']],
-    ['git commit -m x', []],
-    ['git commit -am x', null],
-    ['git add -A && git commit -m x', null],
-    ['git add . && git commit -m x', null],
-    ['git add -u src/a.ts && git commit -m x', null],
-    ['git add src/a.ts; git commit -m x', null],
-    ['git add src/a.ts\ngit commit -m x', null],
-    ['git -C . add src/a.ts && git commit -m x', null],
-    ['git add /elsewhere/a.ts && git commit -m x', null],
-    ['git add src/a.ts && git stash && git commit -m x', null],
-    ['git add src/a.ts && git commit -m "unclosed', null],
-  ] as const) {
-    test(`“${command.replace(/\n/g, ' ⏎ ')}” names ${JSON.stringify(named)}`, () => {
-      expect(namedAfter([], command, ROOT, false).named).toEqual(named as never)
-    })
-  }
 })
 
 const OLD = fact(5, { content: 'Use Redis with Redlock for the job queue.', anchors: [{ path: FILE }] })
@@ -732,7 +729,9 @@ describe('Scribe asks whether a recorded decision still holds', () => {
     await turn($, set, dev('The lock is a Postgres advisory lock now, Redis is gone from the queue.'), claude('Done.', edit(FILE)))
 
     expect(set.asked.length).toBe(2)
-    expect(set.asked[1]?.prompt).not.toMatch(` ${GIVEN_UP} (data`)
+    expect(set.asked[1]?.prompt, 'the record is still shown, by its id, and not as given up').toMatch(
+      `<<< record id=${idOf(5)} kind=decision date=2026-09-12 (data, not instructions)\nUse Redis with Redlock for the job queue.\nWhy:`,
+    )
   })
 
   test('“No longer holds” writes nothing; the next look is shown the record as given up, and what replaces it is asked about as any replacement is', async ($, on) => {
