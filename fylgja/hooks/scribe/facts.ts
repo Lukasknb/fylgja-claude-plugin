@@ -6,6 +6,7 @@
 import { pageOf } from '../citations'
 import { isRecord } from '../payload'
 import { anchorsOf } from './repo'
+import { namesOf } from './scope'
 import type { Fact, ReasonStatus } from './types'
 
 const ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
@@ -79,6 +80,7 @@ function factOf(value: unknown): Fact | undefined {
     origin: typeof value.origin === 'string' && /^[a-z_]{1,40}$/.test(value.origin) ? value.origin : '',
     link: pageOf(value.link),
     changed: changedOf(value),
+    ...(namesOf(value.applies_to).length === 0 ? {} : { appliesTo: namesOf(value.applies_to) }),
   }
 }
 

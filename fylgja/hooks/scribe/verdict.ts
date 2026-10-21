@@ -15,6 +15,7 @@ import { proseOf } from './labels'
 import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
+import { MAX_APPLIES_TO, MAX_ORGANIZATION } from './scope'
 import type { Anchor, Ask, Draft, Fact, Place, ReasonStatus, RecordKind, Reported, Verdict } from './types'
 import { OFFERED_MARK, shareIn } from './words'
 
@@ -345,6 +346,7 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   const supersedes = idOf(value.supersedes)
   const updates = idOf(value.updates)
   const triggers = kind === 'gotcha' ? sentences(value.triggers, 5, 80) : []
+  const appliesTo = sentences(value.applies_to, MAX_APPLIES_TO, MAX_ORGANIZATION)
 
   return {
     kind,
@@ -361,6 +363,7 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
     updates: updates !== null && seen.own?.has(updates) === true ? updates : null,
     // Only where the developer did answer a question in this turn.
     fromChoice: value.from_choice === true && (seen.choices ?? 0) > 0,
+    ...(appliesTo.length === 0 ? {} : { appliesTo }),
   }
 }
 

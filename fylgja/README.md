@@ -17,7 +17,8 @@ quiet touches that make working with it feel at home.
   records each decision in Fylgja with its reason, what was rejected and the
   code it concerns, so whoever reads that code later can find out why it is
   the way it is. When a decision has no reason it asks, once and briefly.
-  When you work in a file that has a recorded decision or gotcha, it tells
+  A decision that holds for one customer only is recorded for that
+  customer, not as general knowledge. When you work in a file that has a recorded decision or gotcha, it tells
   you. It runs beside the conversation, never in it.
 - **A compaction does not lose what was decided.** Once a conversation
   has been compacted, the records Scribe kept in the session go to Claude

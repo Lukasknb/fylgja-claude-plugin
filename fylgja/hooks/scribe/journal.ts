@@ -59,6 +59,7 @@ import { isRecord } from '../payload'
 import { SCHEMA } from '../telemetry-schema'
 import type { Question } from './band'
 import type { Row } from './delta'
+import { namesOf } from './scope'
 import type { Away, Index, Whole } from './staged'
 import type { Anchor, Commit, Deferred, Doubted, Draft, Fact, Place, ReasonStatus, RecordKind, Written } from './types'
 
@@ -171,6 +172,7 @@ export type Work = {
   own: string[]
   takesPaths: boolean
   takesBase: boolean
+  takesScope: boolean
   amendTakesBase: boolean
   filesIn: [string, number][]
 }
@@ -443,6 +445,7 @@ export function writtenOf(value: unknown): Written | undefined {
     ...(Array.isArray(value.alternatives) ? { alternatives: texts(value.alternatives) } : {}),
     ...(Array.isArray(value.triggers) ? { triggers: texts(value.triggers) } : {}),
     ...(against === undefined ? {} : { against }),
+    ...(namesOf(value.appliesTo).length === 0 ? {} : { appliesTo: namesOf(value.appliesTo) }),
   }
 }
 
@@ -496,6 +499,7 @@ function draftOf(value: unknown): Draft | undefined {
     repo,
     updates,
     ...(value.fromChoice === true ? { fromChoice: true } : {}),
+    ...(namesOf(value.appliesTo).length === 0 ? {} : { appliesTo: namesOf(value.appliesTo) }),
   }
 }
 
@@ -542,6 +546,7 @@ function factOf(value: unknown): Fact | undefined {
     origin,
     link,
     changed,
+    ...(namesOf(value.appliesTo).length === 0 ? {} : { appliesTo: namesOf(value.appliesTo) }),
   }
 }
 
@@ -721,6 +726,7 @@ const GROUPS: { [K in keyof Groups]: (value: unknown) => Groups[K] | undefined }
           own: texts(value.own, 120),
           takesPaths: value.takesPaths !== false,
           takesBase: value.takesBase !== false,
+          takesScope: value.takesScope !== false,
           amendTakesBase: value.amendTakesBase !== false,
           filesIn: pairsOf(value.filesIn, one => (typeof one === 'number' && Number.isInteger(one) && one > 0 ? one : undefined)),
         }

@@ -42,6 +42,12 @@ export type Draft = {
   /** The id of one of Scribe's own records of this session that this one rewrites in place; null for a new record. */
   updates: string | null
   /**
+   * The organizations (customers, suppliers, partners) it holds for alone,
+   * as the session names them; none when it holds generally, which is most
+   * records.
+   */
+  appliesTo?: string[]
+  /**
    * Whether it records a choice the developer made between options Claude
    * put to them. Such a record is never dropped for the number of records a
    * wake may write, and nobody is asked why about it.
@@ -116,6 +122,8 @@ export type Fact = {
    * is every record of a server that does not say.
    */
   changed: string[] | null
+  /** The organizations it holds for alone, by Fylgja's names for them; none when it holds generally. */
+  appliesTo?: string[]
 }
 
 /** A record Scribe wrote in this session. */
@@ -146,6 +154,8 @@ export type Written = {
    * that one because the question whether it replaces it went unanswered.
    */
   against?: string
+  /** The organizations it holds for alone, as Fylgja answered: none when it holds generally. */
+  appliesTo?: string[]
 }
 
 /** A commit made in the session's own repository: its sha, the files it holds as paths from that repository's root, and the rule they were reported by. */

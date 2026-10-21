@@ -30,6 +30,8 @@ import type { GitState } from './anchoring'
 import * as Band from './band'
 import { baseOf, isUnknownBase, rootOf } from './base'
 import type { Base } from './base'
+import { isUnknownScope, namesOf } from './scope'
+import type { Scope } from './scope'
 import { gitIn } from './git'
 import type { Run } from './git'
 import { carried } from './carry'
@@ -405,6 +407,8 @@ export type Scribe = {
   takesPaths: boolean
   /** Whether Fylgja's server takes the commit a decision was written at: true until it turned a write down for it. */
   takesBase: boolean
+  /** Whether Fylgja's server takes the organizations a record holds for: true until it turned a write down for them. */
+  takesScope: boolean
   /**
    * Whether it takes that commit with places added to a record later: true
    * until it turned such a fix down for it. A server may take it with a
@@ -718,6 +722,7 @@ export function create(options: Options): Scribe {
     toAttach: [],
     takesPaths: true,
     takesBase: true,
+    takesScope: true,
     amendTakesBase: true,
     doubted: [],
     denied: new Map(),
@@ -869,6 +874,7 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   scribe.hasAsked = false
   scribe.takesPaths = true
   scribe.takesBase = true
+  scribe.takesScope = true
   scribe.amendTakesBase = true
   scribe.index = cleared(false)
   scribe.created.clear()
@@ -1003,6 +1009,7 @@ function nowOf(scribe: Scribe): Journal.Now {
         own: [...scribe.own].slice(-Journal.MAX_LIST),
         takesPaths: scribe.takesPaths,
         takesBase: scribe.takesBase,
+        takesScope: scribe.takesScope,
         amendTakesBase: scribe.amendTakesBase,
         filesIn: [...scribe.filesIn],
       },
@@ -1583,6 +1590,7 @@ function restoreWork(scribe: Scribe, work: Journal.Work): void {
   scribe.own = new Set([...work.own, ...scribe.own].slice(-MAX_OWN))
   scribe.takesPaths &&= work.takesPaths
   scribe.takesBase &&= work.takesBase
+  scribe.takesScope &&= work.takesScope
   scribe.amendTakesBase &&= work.amendTakesBase
 
   for (const [repo, files] of work.filesIn) {
@@ -2288,15 +2296,32 @@ async function send(
   let answer: Record<string, unknown> | undefined
   let refusal: string | undefined
   // The commit the code is at goes with a new decision; a confirmation writes nothing new.
-  const base = recalled === undefined ? await baseFor(host, scribe, who, draft, scribe.takesBase) : undefined
+  let base = recalled === undefined ? await baseFor(host, scribe, who, draft, scribe.takesBase) : undefined
+  // Where it holds goes with a new record, when the session said it holds for some organizations only.
+  let scope: Scope | undefined =
+    recalled === undefined && scribe.takesScope && (draft.appliesTo ?? []).length > 0 ? { applies_to: draft.appliesTo ?? [] } : undefined
 
   try {
-    ;({ answer, refusal } = await tried(host, scribe, 'remember', base === undefined ? args : { ...args, ...base }))
+    ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope }))
 
-    if (answer === undefined && base !== undefined && isUnknownBase(refusal ?? '')) {
+    // A server from before it took one of them turns the write down for it: sent again once, without what it does not take.
+    const isOldBase = answer === undefined && base !== undefined && isUnknownBase(refusal ?? '')
+    const isOldScope = answer === undefined && scope !== undefined && isUnknownScope(refusal ?? '')
+
+    if (isOldBase) {
       scribe.takesBase = false
+      base = undefined
       host.debug('Scribe: Fylgja does not take the commit a decision was written at here; decisions are written without it in this session')
-      ;({ answer, refusal } = await tried(host, scribe, 'remember', args))
+    }
+
+    if (isOldScope) {
+      scribe.takesScope = false
+      scope = undefined
+      host.debug('Scribe: Fylgja does not take where a record holds here; records are written without it in this session')
+    }
+
+    if (isOldBase || isOldScope) {
+      ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope }))
     }
   } catch {
     answer = undefined
@@ -2349,6 +2374,8 @@ async function send(
     replaced: prior !== undefined && answer.supersede === 'applied' ? prior.content : null,
     repo: draft.repo,
     anchors: draft.anchors,
+    // Where it holds as Fylgja answered: its names for the organizations, never the session's guess at them.
+    ...(namesOf(answer.applies_to).length === 0 ? {} : { appliesTo: namesOf(answer.applies_to) }),
   }
 
   if (written.outcome === 'held') {

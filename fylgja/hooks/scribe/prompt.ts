@@ -112,6 +112,7 @@ Never how the work of THIS session's task is organised, however carefully it was
 - "triggers" (gotcha only, required): 1 to 3 words or error strings a later shell command or error message would contain.
 - "supersedes": the id of a recorded decision this one replaces. Only an id from a record shown to you. Otherwise null.
 - "updates": the id of one of YOUR OWN records of this session, from the list "Already recorded in this session", when this record is that same decision as it now stands: the developer changed their mind, the plan moved on, the decision was refined, or its reason has now been given. The earlier record is then rewritten in place and no second one is written. Never write a second record about a subject you already recorded in this session: update the first. Otherwise null.
+- "applies_to": the organizations (customers, suppliers, partners) the record holds for alone, by the name the session uses, e.g. ["Northwind"], when the session makes clear it is true only for that one: a constraint of their ERP or their data, a decision taken for them. [] when it holds generally, which is most records: how the code works holds generally even when one customer's case brought it up. A record that holds for one customer only is still recorded, never left out for it.
 - "plan": when the reason or the alternatives come from a plan document, {"doc":<its number>,"section":"<the heading as written, or null>"}; then "detail" gives the reason in the plan's own words and "reason_status" is "stated". Otherwise null.
 
 ## Plan documents
@@ -192,6 +193,7 @@ export function recordText(fact: Fact, isDenied = false): string {
     fact.reasonStatus === null || fact.reasonStatus === 'stated' ? '' : `Reason: ${fact.reasonStatus}`,
     fact.alternatives.length === 0 ? '' : `Rejected: ${short(fact.alternatives.join('; '), 200)}`,
     where.length === 0 ? '' : `Anchored to: ${where.join(', ')}`,
+    (fact.appliesTo ?? []).length === 0 ? '' : `Holds only for: ${short((fact.appliesTo ?? []).join(', '), 200)}`,
     changedLine(fact, short) ?? '',
   ]
 

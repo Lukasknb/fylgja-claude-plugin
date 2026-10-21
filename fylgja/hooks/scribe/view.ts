@@ -9,6 +9,7 @@ import { drawn } from '../plain'
 import { armOf } from './band'
 import type { Band, Item, Receipt } from './band'
 import { changedLine } from './facts'
+import { forLine } from './scope'
 import type { Fact, Written } from './types'
 
 export type Part = { text: string; tone?: 'dim' | 'strong' | 'good' | 'mark' } | { link: string; label: string }
@@ -176,6 +177,13 @@ export function provenanceOf(fact: Fact): string {
   return `Fylgja record ${shortId(fact.id)}${writer === undefined ? '' : `, ${writer}`}`
 }
 
+/** The one dim line that says a record holds for some organizations alone; none for a record that holds generally. */
+function holds(names: readonly string[] | undefined): Row[] {
+  return (names ?? []).length === 0
+    ? []
+    : [{ parts: [{ text: drawn(forLine(names ?? []), MAX_CONTENT), tone: 'dim' }] }]
+}
+
 function tell(band: Band, item: Item & { kind: 'tell' }): View {
   const { fact } = item
   const rest: Key[] = [
@@ -190,7 +198,8 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
       head: 'has a note on this code',
       note: NOTES.told,
       // A record whose code changed since says so before it is opened: it is not to be read as settled.
-      rows: [{ parts: headline(fact) }, ...changed(fact)],
+      // Nor is one that holds for some organizations alone to be read as general.
+      rows: [{ parts: headline(fact) }, ...holds(fact.appliesTo), ...changed(fact)],
       keys: withAbout(band, [{ key: 'open', hotkey: '1', label: 'Open' }, ...rest]),
     }
   }
@@ -209,6 +218,7 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
     note: NOTES.told,
     rows: [
       { parts: headline(fact) },
+      ...holds(fact.appliesTo),
       ...changed(fact),
       ...why(fact),
       ...(rejected.length === 0
@@ -402,6 +412,7 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
         {
           parts: [mark('✓'), { text: HEADS[only.outcome], tone: 'good' }, ...written(only)],
         },
+        ...holds(only.appliesTo),
       ],
       // A record another member holds is theirs to change: there is nothing to fix or remove from here.
       // One that Scribe took back can be put back, and is then the developer's to keep.
@@ -443,6 +454,9 @@ function receipt(band: Band, shown: Receipt, destination: string | undefined): V
         parts: [
           ...(record.outcome === 'created' ? [] : [{ text: HEADS[record.outcome], tone: 'dim' } as const]),
           ...written(record),
+          ...((record.appliesTo ?? []).length === 0
+            ? []
+            : [{ text: ` · ${drawn(forLine(record.appliesTo ?? []), MAX_OPTION)}`, tone: 'dim' } as const]),
           // Where it points, places added later included.
           ...((record.anchors ?? []).length === 0
             ? []

@@ -18,6 +18,7 @@ import type { Action, Line, View } from '../listing'
 import { drawn } from '../plain'
 import { isWaiting } from './anchoring'
 import type { Armed } from './band'
+import { forLine } from './scope'
 import type { Written } from './types'
 import { kindName, MAX_CONTENT, MAX_OPTION, why } from './view'
 import type { Part } from './view'
@@ -302,6 +303,8 @@ function opened(record: Written, isCut: boolean): Part[][] {
           ]),
     ],
     ...(record.replaced === null ? [] : [[{ text: 'Replaces: ', tone: 'dim' } as const, { text: drawn(record.replaced, MAX_CONTENT) }]]),
+    // A record that holds for some organizations alone says so, in Fylgja's names for them.
+    ...((record.appliesTo ?? []).length === 0 ? [] : [[{ text: drawn(forLine(record.appliesTo ?? []), MAX_CONTENT), tone: 'dim' } as const]]),
   ]
 }
 
