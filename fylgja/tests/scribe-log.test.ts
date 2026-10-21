@@ -751,6 +751,30 @@ describe('a record picked up from the log is as Fylgja holds it before Scribe ch
     ])
   })
 
+  test('scoped to a customer elsewhere since: the rewrite keeps Fylgja’s scope and its card says for whom', async ($, on) => {
+    const MOVED = { ...CAP, content: 'Cap retries at six.', updates: SECOND }
+    const asKept = openOf(AS_KEPT)
+    const set = await kept($, on, () => SESSION_ID, {
+      replies: [verdict({ records: [LOCK, CAP] }), verdict({ records: [MOVED] })],
+      tools: {
+        open: args => {
+          const answered = asKept(args) as { content: { text: string }[] }
+          const payload = JSON.parse(answered.content[0]?.text ?? '{}') as { focus?: { atom?: Record<string, unknown> } }
+
+          return args.ref === SECOND && payload.focus?.atom !== undefined
+            ? answer({ ...payload, focus: { ...payload.focus, atom: { ...payload.focus.atom, applies_to: ['Northwind'] } } })
+            : answered
+        },
+      },
+    })
+
+    await reloaded($, set)
+    await turn($, set, dev('six retries'), claude('Changed.', edit(FILE)))
+
+    expect('applies_to' in (set.of('amend_memory')[0] ?? {}), 'none named: its scope is left as it is').toBe(false)
+    expect(await shown($)).toMatch('For: Northwind')
+  })
+
   test('places Fylgja could not be asked for are never sent: the rewrite changes the words alone', async ($, on) => {
     const MOVED = { ...CAP, content: 'Cap retries at six.', anchors: [{ path: FILE }, { path: 'src/queue/backoff.ts' }], updates: SECOND }
     const set = await kept($, on, () => SESSION_ID, { replies: [verdict({ records: [LOCK, CAP] }), verdict({ records: [MOVED] })], tools: { open: openOf(AS_KEPT) } })

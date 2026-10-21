@@ -30,7 +30,7 @@ import type { GitState } from './anchoring'
 import * as Band from './band'
 import { baseOf, isUnknownBase, rootOf } from './base'
 import type { Base } from './base'
-import { isUnknownScope, namesOf } from './scope'
+import { isUnknownScope, namesOf, openedScope } from './scope'
 import type { Scope } from './scope'
 import { gitIn } from './git'
 import type { Run } from './git'
@@ -2169,6 +2169,8 @@ async function verified(host: ScribeHost, scribe: Scribe, id: string): Promise<b
           paths.length > 0 ? { repo: own.repo, paths, limit: MOST_RECALLED } : { repo: own.repo, query: detail.sentence.slice(0, 300) },
         ).catch(() => undefined)
   const places = asked === undefined ? undefined : factsOf(asked).find(fact => fact.id === id)?.anchors
+  // Where it holds as Fylgja says now: it may have been scoped or cleared elsewhere since it was logged.
+  const holds = openedScope(opened.answer)
   const now: Written = {
     ...own,
     content: detail.sentence,
@@ -2176,6 +2178,14 @@ async function verified(host: ScribeHost, scribe: Scribe, id: string): Promise<b
     detail: detail.reason,
     alternatives: detail.alternatives,
     ...(places === undefined ? {} : { anchors: places }),
+  }
+
+  if (holds !== undefined) {
+    if (holds.length === 0) {
+      delete now.appliesTo
+    } else {
+      now.appliesTo = holds
+    }
   }
 
   scribe.written = scribe.written.map(one => (one.id === id ? now : one))
@@ -2843,7 +2853,16 @@ async function rewrite(
     ...(draft.alternatives.length === 0 ? {} : { alternatives: draft.alternatives }),
     ...(draft.reasonStatus === null ? {} : { reason_status: draft.reasonStatus }),
   }
-  const done = await tried(host, scribe, 'amend_memory', args).catch(() => undefined)
+  // Where it holds goes with the rewrite when the session named organizations; none named keeps it as it is.
+  const scope = scribe.takesScope && (draft.appliesTo ?? []).length > 0 ? { applies_to: draft.appliesTo ?? [] } : {}
+  let done = await tried(host, scribe, 'amend_memory', { ...args, ...scope }).catch(() => undefined)
+
+  if (done !== undefined && done.answer === undefined && 'applies_to' in scope && isUnknownScope(done.refusal ?? '')) {
+    scribe.takesScope = false
+    host.debug('Scribe: Fylgja does not take where a record holds here; records are written without it in this session')
+    done = await tried(host, scribe, 'amend_memory', args).catch(() => undefined)
+  }
+
   const outcome = done?.answer?.outcome
 
   if (outcome !== 'fixed' && outcome !== 'unchanged') {
@@ -2866,6 +2885,16 @@ async function rewrite(
     anchors,
     outcome: 'updated',
     replaced: null,
+  }
+  // Where it holds as Fylgja answered; an answer that does not say keeps what it had.
+  const holds = Array.isArray(done?.answer?.applies_to) ? namesOf(done?.answer?.applies_to) : undefined
+
+  if (holds !== undefined) {
+    if (holds.length === 0) {
+      delete now.appliesTo
+    } else {
+      now.appliesTo = holds
+    }
   }
 
   scribe.written = scribe.written.map(one => (one.id === own.id ? now : one))

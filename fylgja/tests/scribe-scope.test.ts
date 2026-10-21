@@ -127,4 +127,43 @@ describe('where a record holds', () => {
 
     expect(await shown($)).toMatch('For: Northwind')
   })
+
+  test('a record Scribe rewrites in place is sent where it holds too, and the card after the update says for whom', async ($, on) => {
+    const set = stage(on, {
+      replies: [verdict({ records: [{ ...SLOTS, applies_to: [] }] }), verdict({ records: [{ ...SLOTS, updates: idOf(101) }] })],
+      tools: {
+        amend_memory: args => answer({ atom_id: args.atom_id, outcome: 'fixed', ...('applies_to' in args ? { applies_to: ['Northwind'] } : {}) }),
+      },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await turn($, set, dev('that is only for Northwind, mind'), claude('Noted.', edit(FILE)))
+
+    expect(set.of('amend_memory')[0]).toMatchObject({ atom_id: idOf(101), op: 'fix', applies_to: ['northwind'] })
+    expect(await shown($)).toMatch('For: Northwind')
+  })
+
+  test('a server that does not take it with a rewrite gets the rewrite without it, once', async ($, on) => {
+    const untaken = {
+      content: [
+        {
+          type: 'text',
+          text: 'amend_memory was called with invalid arguments — an argument this tool does not take (it takes: alternatives, anchors, atom_id, base_dirty, base_sha, content, detail, op, reason_status, remove_anchors)',
+        },
+      ],
+      isError: true,
+    }
+    const set = stage(on, {
+      replies: [verdict({ records: [{ ...SLOTS, applies_to: [] }] }), verdict({ records: [{ ...SLOTS, updates: idOf(101) }] })],
+      tools: { amend_memory: args => ('applies_to' in args ? untaken : answer({ atom_id: args.atom_id, outcome: 'fixed' })) },
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await turn($, set, dev('that is only for Northwind, mind'), claude('Noted.', edit(FILE)))
+
+    expect(set.of('amend_memory').map(args => args.applies_to)).toEqual([['northwind'], undefined])
+    expect(await shown($)).toMatch('Updated')
+  })
 })

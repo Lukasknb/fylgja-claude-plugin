@@ -10,6 +10,8 @@
  * session, as the commit a decision was written at is (`base.ts`).
  */
 
+import { isRecord } from '../payload'
+
 /** No more organizations are named for one record than this, nor longer names. */
 export const MAX_APPLIES_TO = 3
 export const MAX_ORGANIZATION = 80
@@ -42,4 +44,16 @@ export function isUnknownScope(refusal: string): boolean {
   const isUntaken = /invalid arguments[\s\S]{0,40}an argument this tool does not take/i.test(refusal) && !/\bapplies_to\b/.test(refusal)
 
   return isUntaken || OLD_WORDS.test(refusal)
+}
+
+/**
+ * Where a record holds, as `open` of it says: Fylgja's names for the
+ * organizations, none for a record that holds generally; undefined when the
+ * answer says nothing about it (a server from before it did).
+ */
+export function openedScope(payload: Record<string, unknown> | undefined): string[] | undefined {
+  const focus = payload !== undefined && isRecord(payload.focus) ? payload.focus : undefined
+  const atom = focus !== undefined && isRecord(focus.atom) ? focus.atom : undefined
+
+  return atom === undefined || !Array.isArray(atom.applies_to) ? undefined : namesOf(atom.applies_to)
 }
