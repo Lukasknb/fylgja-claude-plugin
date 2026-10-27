@@ -86,20 +86,20 @@ describe('a record is about the repository its files lie in', () => {
     expect(set.of('remember')[0]).toMatchObject({ repo: 'scratch', anchors: [{ path: 'a.ts' }] })
   })
 
-  test('a checkout beside the session’s is named owner/name from its remote, whatever the address looks like, or by its folder', async ($, on) => {
+  test('a checkout beside the session’s is named by its remote’s whole path, whatever the address looks like, or by its folder', async ($, on) => {
     // The remote, the checkout's folder, and the name its records are filed under.
     const NAMES: readonly (readonly [string | null, string, string | undefined])[] = [
       // A folder that gives no name a person would know: no repository, so its file is no anchor.
       [null, 'local thing', undefined],
       ['git@github.com:acme/web.git', 'web', 'acme/web'],
       ['https://github.com/acme/web', 'web', 'acme/web'],
-      ['ssh://git@gitlab.example.com:2222/group/sub/web.git', 'web', 'sub/web'],
+      ['ssh://git@gitlab.example.com:2222/group/sub/web.git', 'web', 'group/sub/web'],
       ['https://user:secret@github.com/acme/web.git/', 'web', 'acme/web'],
-      ['https://dev.azure.com/acme/Platform/_git/web', 'web', 'Platform/web'],
-      ['git@ssh.dev.azure.com:v3/acme/Platform/web', 'web', 'Platform/web'],
+      ['https://dev.azure.com/acme/Platform/_git/web', 'web', 'acme/Platform/web'],
+      ['git@ssh.dev.azure.com:v3/acme/Platform/web', 'web', 'acme/Platform/web'],
       ['../web-upstream', 'web', 'web'],
-      ['../../mirrors/web.git', 'web', 'mirrors/web'],
-      ['/srv/git/web.git', 'checkout', 'git/web'],
+      ['../../mirrors/web.git', 'web', 'web'],
+      ['/srv/git/web.git', 'checkout', 'srv/git/web'],
       ['file:///srv/_git/web', 'checkout', 'srv/web'],
       ['not a remote', 'fallback', 'fallback'],
       [null, 'local-thing', 'local-thing'],

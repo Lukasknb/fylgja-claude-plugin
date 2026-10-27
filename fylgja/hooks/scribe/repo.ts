@@ -17,30 +17,50 @@ function tail(path: string): string {
 
 const PART = /^[A-Za-z0-9][\w.-]*$/
 
+const AZURE_SSH_HOSTS = new Set(['ssh.dev.azure.com', 'vs-ssh.visualstudio.com'])
+const VISUALSTUDIO = '.visualstudio.com'
+
+/** The host of a remote, lowercased, without login or port. */
+function hostOf(remote: string): string {
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/([^/]*)\//i.exec(remote)
+  const scp = /^([^/:@]+@[^:/]+):/.exec(remote)
+  const host = scheme?.[1] ?? scp?.[1] ?? ''
+  return (host.split('@').at(-1) ?? '').split(':')[0]?.toLowerCase() ?? ''
+}
+
 /**
- * The repository's name: `owner/name` read from the remote's address, or the
- * folder's name when the repository has no remote or its address does not
- * give an owner and a name. Undefined when neither gives a name a person
- * would recognise.
+ * The repository's name: its path read from the remote's address
+ * (`owner/name`, `group/sub/name` for a nested group, `org/project/repo` for
+ * Azure DevOps — the server normalises casing), or the folder's name when the
+ * repository has no remote or its address does not give an owner and a name.
+ * Undefined when neither gives a name a person would recognise.
  *
  * Both spellings of a remote are read (`git@host:owner/name.git`,
- * `https://host/owner/name`); a longer path keeps its last two parts, and
- * the `_git` an Azure address puts between project and repository is left
- * out. A relative remote (`../name`) names no owner, so the folder is used.
+ * `https://host/owner/name`) and the whole path is kept, so `group/sub/repo`
+ * stays one repository. Azure DevOps: the `_git` between project and
+ * repository, and the `v3/` its ssh form starts with, are left out, and the
+ * old `org.visualstudio.com` host gives the organization its path leaves out.
+ * A relative remote (`../name`) names no owner, so the folder is used.
  */
 export function repoNameOf(remote: string | null, root: string): string | undefined {
   if (remote !== null) {
-    const path = remote
-      .trim()
+    const trimmed = remote.trim()
+    const host = hostOf(trimmed)
+    const path = trimmed
       .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\//i, '')
       .replace(/^[^/:@]+@[^:/]+:/, '')
       .replace(/\.git\/?$/i, '')
       .replace(/\/+$/, '')
-    const parts = path.split('/').filter(part => part !== '' && part !== '_git')
-    const [owner, name] = parts.slice(-2)
+    let parts = path.split('/').filter(part => part !== '' && part !== '_git')
 
-    if (parts.length >= 2 && owner !== undefined && name !== undefined && PART.test(owner) && PART.test(name)) {
-      return `${owner}/${name}`
+    if (AZURE_SSH_HOSTS.has(host) && parts[0] === 'v3') {
+      parts = parts.slice(1)
+    } else if (host.endsWith(VISUALSTUDIO) && !AZURE_SSH_HOSTS.has(host)) {
+      parts = [host.slice(0, -VISUALSTUDIO.length), ...parts]
+    }
+
+    if (parts.length >= 2 && parts.every(part => PART.test(part))) {
+      return parts.join('/')
     }
   }
 
