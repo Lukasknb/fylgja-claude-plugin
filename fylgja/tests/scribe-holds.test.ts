@@ -123,33 +123,6 @@ describe('a commit is reported with the files the session changed', () => {
     expect(paths[0]).toBe('src/gen/file-0.ts')
   })
 
-  test('a server that does not know of a commit’s files: the commit is attached without them, no later one sends any, and Scribe goes on', async ($, on) => {
-    const unknown = {
-      content: [{ type: 'text', text: '1 validation error for call[attach_commit]\npaths\n  Unexpected keyword argument' }],
-      isError: true,
-    }
-    const set = stage(on, {
-      replies: [verdict({ records: [decision()] }), NOTHING],
-      tools: { attach_commit: args => (args.paths === undefined ? answer({ attached: 1, atom_ids: [] }) : unknown) },
-    })
-
-    await $.session.start(START)
-    await turn($, set, ...TALK, commit())
-
-    expect(set.of('attach_commit')).toEqual([
-      { repo: REPO, sha: '1a2b3c4', session_id: SESSION_ID, paths: [FILE] },
-      { repo: REPO, sha: '1a2b3c4', session_id: SESSION_ID },
-    ])
-    expect(await shown($), 'what it recorded is shown as ever').toMatch('✓ Recorded')
-
-    await turn($, set, dev('and the worker'), claude('Done.', edit('src/queue/worker.ts')), commit('2b3c4d5'))
-
-    expect(set.of('attach_commit').slice(2), 'found out once').toEqual([{ repo: REPO, sha: '2b3c4d5', session_id: SESSION_ID }])
-    expect(set.asked.length, 'and the second turn was looked at').toBe(2)
-    expect(set.statuses).not.toContain(OFF_STATUS)
-    expect(set.toasts).toEqual([])
-  })
-
   test('a call that fails for any other reason says nothing about the server: it is not tried without the files, and the next commit sends its own', async ($, on) => {
     let calls = 0
     const set = stage(on, {

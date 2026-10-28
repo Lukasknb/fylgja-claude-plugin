@@ -282,7 +282,10 @@ card around them.
   it out exists, and then points at no code: the opened list says `In:
   no code yet`, and keeps saying so after the plugin is loaded again.
   When a later turn of the same session writes, edits or commits the
-  code files that implement it (a file only read does not count; no
+  code files that implement it (a shell command that plainly writes a
+  file counts as an edit of it: a redirection into it, `tee`, `sed -i`,
+  the file a `mv` or a `cp` names last, the file `patch` is given; a
+  file only read does not count; no
   more than three for one record at a time; never a document; a
   manifest such as `requirements.txt` counts as code), Scribe adds them
   to its
@@ -433,8 +436,9 @@ card around them.
   reason, and `Fylgja record 1a2b3c4d` with who wrote it down, so Claude
   can open it by that id; the link follows only where the record has one.
   It sends nothing, and leaves a box with text in it alone. Knew this
-  keeps that record away on this machine for good. A record whose code a
-  commit changed after it was last confirmed says so under its sentence,
+  keeps that record away on this machine for good. A record whose code
+  changed after it was last confirmed (a commit touched it, or the file
+  no longer reads as it did) says so under its sentence,
   with the file, and so does the note for Claude; Scribe's model is told
   the same. Neither is to take it for settled.
 
@@ -489,15 +493,34 @@ card around them.
   its code existed is given them when its code is added as its place:
   the commit that code's working tree is at then, and whether those
   files had changes not yet committed. A commit made at that very
-  commit never marks the decision as one whose code changed. A Fylgja
-  server from before it took them gets the decision, or its places,
-  without them, and is not sent them again for the session.
+  commit never marks the decision as one whose code changed.
+- **It notes how the code reads, without git.** Each place a record is
+  written with goes with a fingerprint of its code: a hash of the
+  symbol's region (the line that defines it and its block, up to 400
+  lines) when the place names a symbol that is found, else of the whole
+  file when it is no longer than 400 lines, else none. Line endings,
+  whitespace at a line's end and blank lines do not count. Only the hash
+  is sent, 32 hex characters behind `r1:` or `f1:`; no file's text ever
+  leaves the machine, and a file larger than 1 MiB, one that cannot be
+  read or is not there is not fingerprinted. When a lookup by files
+  returns records, the files they are anchored to are read again, at
+  most 30, and only where one reads otherwise than Fylgja remembers it,
+  or Fylgja holds no fingerprint of it yet, is the lookup asked once more
+  with how they read, within the lookup's own time. Fylgja takes the
+  first reading of a file as how it was, and a reading that differs marks
+  the record as one whose code changed, with no commit, exactly as a
+  commit would; Still holds sends how the files read then, and that is
+  what holds from there.
 - **It notes the commit.** After a `git commit` in this repository, the
   commit is attached to what the session recorded, Claude's own records
   included. Only a commit the command itself shows to be this repository's:
   a plain `git commit`, or one that names this repository's root. One made
   after `cd` into another folder or with `git -C` elsewhere is not, since
-  a folder inside the tree may be a repository of its own.
+  a folder inside the tree may be a repository of its own; but one whose
+  command names in full the root of another repository the session
+  changed files in (`git -C /work/other commit`, `cd /work/other && git
+  commit`) is attached there, with no file. A commit in a session that
+  sits in no repository is attached nowhere, and is reported as such.
   With the commit go files the session wrote or changed in this
   repository, as paths from its root, at most 200. Fylgja marks the
   other decisions anchored to those very files as ones whose code
@@ -507,7 +530,9 @@ card around them.
   itself prints for the commit, and it reports a file only when the two
   agree. A mark on somebody's record that the commit never touched is
   worse than a missed one, so a commit goes unreported more often than
-  it need be; that is the price, and it is paid on purpose. The rule:
+  it need be; that is the price, and it is paid on purpose. A file a
+  shell command plainly writes (as above, for places) is one the session
+  changed. The rule:
   - the candidates are the files the session changed since the commit
     before and before the commit's own command, in the main
     conversation or through an agent, in the working tree the commit
@@ -539,11 +564,8 @@ card around them.
   made after the shell was taken out of the working tree altogether is
   another repository's, and is not attached at all. A file the commit
   holds that the session never touched is unknown to Scribe, and a
-  record anchored to such a file is not marked. A Fylgja server that
-  does not know of a commit's files yet turns that call down and names
-  the argument; the commit is then attached without them, as before,
-  and the session sends none again. A call that fails for any other
-  reason changes nothing.
+  record anchored to such a file is not marked. A call that fails
+  changes nothing.
 - **It asks whether a decision still holds.** When a commit of the
   session marks a recorded decision that way, or a record that comes
   back for a file in hand already reads so, one of them is asked about
@@ -576,9 +598,10 @@ card around them.
 
 What Scribe writes to Fylgja without a key of yours, all of it: a new
 record; a rewrite or a withdrawal of a record it wrote as new in this
-session and you have not touched; places added to such a record; and
-the session's commit attached to the session's records, with the files
-the session changed in it. Everything else (a replacement of a recorded
+session and you have not touched; places added to such a record; the
+session's commit attached to the session's records, with the files
+the session changed in it; and, with a lookup, the fingerprints of the
+files the records it returned are anchored to. Everything else (a replacement of a recorded
 decision, a confirmation that one still holds, a reason, a fix, a
 removal, putting a record back) is written on your key, pressed twice.
 
@@ -1191,8 +1214,9 @@ The events, each with every key it may carry. Any key may be left out.
 | `window_action` | a key of the window did something to a record | `view` (kept, search); `action` (reword, remove, put_back, open_record, cite); `outcome` (done, trouble) |
 | `search` | a search you made in the window was answered, or failed | `asked_by` (command, field, again); `outcome` (found, failed, signed_out); `results` (none, 1_3, 4_10, over_10); `duration_ms` (number) |
 | `compaction` | Scribe saw that the conversation was compacted | `is_scribe_running` (always yes: only a running Scribe sees one); number: `records_carried` |
-| `commit` | a commit was attached to what the session recorded | `rule` (count_match, named_set, none_count_unknown, none_away, none_count_mismatch, none_named_mismatch, none_no_repo); numbers: `files_sent`, `attached`, `flagged`; `is_old_server_fallback`, `is_attached` (yes/no each) |
-| `error` | something failed, or went another way than usual | `component` (session_start, turn_step, turn_end, compaction, context, band, window, scribe); `kind` (threw, not_let_through, wake_ceiling, no_prompt_row, no_repository, held_rows_dropped, known_repos_offered, old_server_paths); `cause` (timeout, network, auth, aborted, parse, other), told from the failure's type |
+| `commit` | a commit was attached to what the session recorded | `rule` (count_match, named_set, none_count_unknown, none_away, none_count_mismatch, none_named_mismatch, none_no_repo); numbers: `files_sent`, `attached`, `flagged`; `is_attached` (yes/no) |
+| `anchors_dropped` | a look left places the model named off its records | numbers, by why: `not_known` (no file the session touched), `working_file`, `ignored` (by git), `untracked_doc` (a document git was never given), `other_repo` (another repository than the record's), `plan_not_kept` (a plan the repository does not keep) |
+| `error` | something failed, or went another way than usual | `component` (session_start, turn_step, turn_end, compaction, context, band, window, scribe); `kind` (threw, not_let_through, wake_ceiling, no_prompt_row, no_repository, held_rows_dropped, known_repos_offered); `cause` (timeout, network, auth, aborted, parse, other), told from the failure's type |
 | `sign_in` | whether Fylgja is here changed in the session | `state` (here, needs_sign_in, other_account, not_here) |
 | `telemetry_stopped` | batches kept failing: the last one says so | `reason` (old_server, not_let_through, failing) |
 | `events_dropped` | more events waited than are held | `count` (number) |

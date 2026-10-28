@@ -148,46 +148,6 @@ describe('the commit a decision was written at', () => {
     expect(commitRuns(set).map(argv => argv[argv.indexOf('-C') + 1])).toEqual(['/work/wt', '/work/wt'])
   })
 
-  test('a server that does not take the commit gets the decision without it, and is not sent it again this session', async ($, on) => {
-    const untaken = {
-      content: [
-        {
-          type: 'text',
-          text: 'remember was called with invalid arguments — an argument this tool does not take (it takes: alternatives, anchors, author, content, cwd, detail, hostname, kind, reason_status, recalled_atom_id, repo, scope, session_id, supersedes, triggers, volatility)',
-        },
-      ],
-      isError: true,
-    }
-    let written = 0
-    const set = stage(on, {
-      replies: [verdict({ records: [decision()] }), verdict({ records: [decision({ content: 'Use B.' })] })],
-      tools: {
-        remember: args => {
-          if ('base_sha' in args) {
-            return untaken
-          }
-
-          written += 1
-
-          return answer({ atom_id: `00000000-0000-4000-8000-00000000020${written}`, outcome: 'created' })
-        },
-      },
-      git: gitAt(),
-    })
-
-    await $.session.start(START)
-    await turn($, set, ...TALK)
-    await turn($, set, dev('and the retry?'), claude('Done.', edit(FILE)))
-
-    expect(sentOf(set)).toEqual([
-      [SHA, false],
-      [undefined, undefined],
-      [undefined, undefined],
-    ])
-    expect(written, 'both decisions are written').toBe(2)
-    expect(commitRuns(set).length, 'and git is asked only for the first').toBe(2)
-  })
-
   test('a refusal for anything else is not taken for an old server: the commit is sent again with the next decision', async ($, on) => {
     const refused = { content: [{ type: 'text', text: 'refused:not_imperative — say it as an instruction' }], isError: true }
     const set = stage(on, {
@@ -236,37 +196,6 @@ describe('the commit a decision written before its code is given with that code'
     expect(set.of('amend_memory')).toEqual([{ atom_id: OWN, op: 'fix', anchors: [{ path: FILE }], base_sha: SHA, base_dirty: true }])
   })
 
-  test('a server that does not take the commit with a fix is given the code without it, and still gets it with a later decision', async ($, on) => {
-    const untaken = {
-      content: [
-        {
-          type: 'text',
-          text: 'amend_memory was called with invalid arguments — an argument this tool does not take (it takes: alternatives, anchors, atom_id, content, detail, op, reason_status, remove_anchors)',
-        },
-      ],
-      isError: true,
-    }
-    const set = stage(on, {
-      replies: [verdict({ records: [PLANNED] }), pairs, verdict({ records: [decision({ content: 'Use B.' })] })],
-      tools: { amend_memory: args => ('base_sha' in args ? untaken : answer({ atom_id: OWN, outcome: 'fixed' })) },
-      git: gitWith(''),
-    })
-
-    await $.session.start(START)
-    await turn($, set, ...PLANNING)
-    await turn($, set, ...BUILDING)
-    await turn($, set, dev('and the retry?'), claude('Done.', edit(FILE)))
-
-    expect(set.of('remember').map(args => [args.content, args.base_sha]), 'a write still takes the commit').toEqual([
-      [PLANNED.content, undefined],
-      ['Use B.', SHA],
-    ])
-
-    expect(set.of('amend_memory')).toEqual([
-      { atom_id: OWN, op: 'fix', anchors: [{ path: FILE }], base_sha: SHA, base_dirty: false },
-      { atom_id: OWN, op: 'fix', anchors: [{ path: FILE }] },
-    ])
-  })
 })
 
 describe('which commit is attached', () => {

@@ -385,7 +385,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
     expect(set.of('attach_commit')).toMatchObject([{ sha: '1a2b3c4', paths: [FILE] }])
     expect(propsOf(set, 'commit')).toEqual([
-      { rule: 'count_match', files_sent: 1, is_old_server_fallback: false, is_attached: true, attached: 1, flagged: 5 },
+      { rule: 'count_match', files_sent: 1, is_attached: true, attached: 1, flagged: 5 },
     ])
     nothingPrivateIn(set)
   })
@@ -397,27 +397,6 @@ describe('each event is noted where the thing happens, and sent when the turn en
     await turn($, set, ...TALK, claude('Committed.', { tool: 'Bash', input: { command: 'git commit -am chore' }, text: '[main 0a1b2c3] chore' }))
 
     expect(propsOf(set, 'commit')).toMatchObject([{ rule: 'none_count_unknown', files_sent: 0, is_attached: true }])
-  })
-
-  test('a server that does not take a commit’s files is said to be one, once, and the commit is attached without them', async ($, on) => {
-    const set = stage(on, {
-      replies: [RECORDS],
-      tools: {
-        attach_commit: args =>
-          'paths' in args ? refusing('attach_commit() got an unexpected keyword argument paths') : answer({ attached: 1, atom_ids: [] }),
-      },
-    })
-
-    await $.session.start(START)
-    await turn(
-      $,
-      set,
-      ...TALK,
-      claude('Committed.', { tool: 'Bash', input: { command: 'git add -A && git commit -m "queue lock"' }, text: '[main 1a2b3c4] queue lock\n 1 file changed' }),
-    )
-
-    expect(propsOf(set, 'commit')).toMatchObject([{ rule: 'count_match', files_sent: 0, is_old_server_fallback: true, is_attached: true }])
-    expect(propsOf(set, 'error')).toContainEqual({ component: 'scribe', kind: 'old_server_paths' })
   })
 
   test('the window asked for with the command, and a search made in it, are noted with how they went and how much was found', async ($, on) => {

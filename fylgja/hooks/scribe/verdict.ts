@@ -5,7 +5,7 @@
  */
 
 import { isRecord } from '../payload'
-import { isAnchorable, isCode, MAX_LATE_FILES } from './anchoring'
+import { isAnchorable, isCode, MAX_LATE_FILES, whyNotAnchor } from './anchoring'
 import type { GitState } from './anchoring'
 import { reasonStatusOf } from './facts'
 import { MAX_ALTERNATIVE_CHARS, MAX_ALTERNATIVES, MAX_ANCHORS, MAX_CONTENT_CHARS, MAX_DETAIL_CHARS } from './gate'
@@ -16,7 +16,7 @@ import { headingOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
 import { MAX_APPLIES_TO, MAX_ORGANIZATION } from './scope'
-import type { Anchor, Ask, Draft, Fact, Place, ReasonStatus, RecordKind, Reported, Verdict } from './types'
+import type { Anchor, Ask, Draft, Dropped, Fact, Place, ReasonStatus, RecordKind, Reported, Verdict } from './types'
 import { OFFERED_MARK, shareIn } from './words'
 
 /** No record's sentence is longer than this; a longer one is not written at all. */
@@ -118,6 +118,8 @@ export type Seen = {
   offered?: string
   /** What the developer typed in this turn: their own words. */
   typed?: string
+  /** Counts the places the model named that a record was not given, by why; filled in as the verdict is read. */
+  dropped?: Dropped
   /** The numbers of the agents' reports this wake was shown: the only ones a record may come out of. */
   reports?: ReadonlySet<number>
   /** The keys of the decisions held from earlier wakes as only proposed (`p1`, `p2`, …): the only ones a record may settle or the model may drop. */
@@ -129,13 +131,33 @@ export function stateKey(place: Place): string {
   return `${place.repo}\u0000${place.path}`
 }
 
-/** Whether a file as the session names it may be an anchor: never a plan, notes or a scratch file (`anchoring.ts`). */
+/** Whether a file as the session names it may be an anchor: never a plan, notes or a scratch file (`anchoring.ts`). One that may not is counted. */
 function mayAnchor(seen: Seen, path: string): boolean {
   const place = seen.places?.get(path)
+  const why = place === undefined ? whyNotAnchor(path, undefined) : whyNotAnchor(place.path, seen.gitStates?.get(stateKey(place)))
 
-  return place === undefined
-    ? isAnchorable(path, undefined)
-    : isAnchorable(place.path, seen.gitStates?.get(stateKey(place)))
+  if (why !== undefined && seen.dropped !== undefined) {
+    seen.dropped[why] += 1
+  }
+
+  return why === undefined
+}
+
+/** No place was left off a record yet. */
+function noneDropped(): Dropped {
+  return { not_known: 0, working_file: 0, ignored: 0, untracked_doc: 0, other_repo: 0, plan_not_kept: 0 }
+}
+
+/** The places the model named that are files the session touched; those it is not are counted. */
+function knownAnchors(value: unknown, max: number, seen: Seen): Anchor[] {
+  const unknown = { count: 0 }
+  const anchors = anchorsOf(value, max, seen.paths, unknown)
+
+  if (seen.dropped !== undefined) {
+    seen.dropped.not_known += unknown.count
+  }
+
+  return anchors
 }
 
 /**
@@ -144,7 +166,11 @@ function mayAnchor(seen: Seen, path: string): boolean {
  * root. Anchors in any other repository are left off: a record is about one
  * repository, and is filed under it.
  */
-function inOnePlace(anchors: readonly Anchor[], places: ReadonlyMap<string, Place>): { repo: string | null; anchors: Anchor[] } {
+function inOnePlace(
+  anchors: readonly Anchor[],
+  places: ReadonlyMap<string, Place>,
+  dropped?: Dropped,
+): { repo: string | null; anchors: Anchor[] } {
   const placed = anchors.flatMap(anchor => {
     const place = places.get(anchor.path)
 
@@ -170,7 +196,9 @@ function inOnePlace(anchors: readonly Anchor[], places: ReadonlyMap<string, Plac
   for (const one of placed) {
     const key = `${one.anchor.path}\u0000${one.anchor.symbol ?? ''}`
 
-    if (one.repo === repo && !seen.has(key)) {
+    if (one.repo !== repo && dropped !== undefined) {
+      dropped.other_repo += 1
+    } else if (one.repo === repo && !seen.has(key)) {
       seen.add(key)
       kept.push(one.anchor)
     }
@@ -296,8 +324,8 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   }
 
   const plan = planOf(value.plan, seen.plans)
-  const named = anchorsOf(value.anchors, MAX_ANCHORS - 1, seen.paths).filter(anchor => mayAnchor(seen, anchor.path))
-  const held = seen.places === undefined ? { repo: null, anchors: named } : inOnePlace(named, seen.places)
+  const named = knownAnchors(value.anchors, MAX_ANCHORS - 1, seen).filter(anchor => mayAnchor(seen, anchor.path))
+  const held = seen.places === undefined ? { repo: null, anchors: named } : inOnePlace(named, seen.places, seen.dropped)
   const { anchors } = held
   let repo = held.repo ?? seen.home ?? null
   const suffix =
@@ -358,6 +386,8 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
     ) {
       anchors.push(plan.heading === undefined ? { path: at.path } : { path: at.path, symbol: plan.heading })
       repo ??= at.repo
+    } else if (seen.dropped !== undefined && (at === undefined || !anchors.some(anchor => anchor.path === at.path))) {
+      seen.dropped.plan_not_kept += 1
     }
 
     if (detail !== '' && !detail.includes(plan.doc.title)) {
@@ -427,10 +457,14 @@ function askOf(value: unknown, records: readonly (Draft | undefined)[], kept: re
  * replaces, or one to tell about, only by an id a lookup of this wake
  * returned.
  */
-export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
+export function verdictOf(value: Record<string, unknown>, asked: Seen): Verdict {
   if (value.outcome !== 'act') {
     return { records: [], question: null, tells: [], withdrawn: [], stated: [] }
   }
+
+  // What this verdict left off its records is counted here, and only here.
+  const dropped = noneDropped()
+  const seen: Seen = { ...asked, dropped }
 
   // What came out of an agent's report is kept apart, and never written as it stands.
   const proposed = Array.isArray(value.records) ? value.records : []
@@ -572,8 +606,8 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     }
 
     // Only code the session changed, and only to a record still waiting for it: a file is added because it carries the decision out.
-    const named = anchorsOf(entry.paths, MAX_ANCHORS, seen.paths).filter(anchor => mayAnchor(seen, anchor.path))
-    const placed = inOnePlace(named, seen.places)
+    const named = knownAnchors(entry.paths, MAX_ANCHORS, seen).filter(anchor => mayAnchor(seen, anchor.path))
+    const placed = inOnePlace(named, seen.places, seen.dropped)
     const code = placed.anchors
       .filter(anchor => isCode(anchor.path) && (placed.repo === null || seen.changed?.has(stateKey({ repo: placed.repo, path: anchor.path })) !== false))
       .slice(0, MAX_LATE_FILES)
@@ -596,6 +630,7 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     anchored,
     proposed: Array.isArray(value.anchor) ? value.anchor.length : 0,
     aboutWork: own.slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS).filter(isAboutTheWork).length,
+    dropped,
   }
 }
 

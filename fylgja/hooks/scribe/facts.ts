@@ -4,14 +4,18 @@
  */
 
 import { pageOf } from '../citations'
+import { isPrint } from './fingerprint'
 import { isRecord } from '../payload'
 import { anchorsOf } from './repo'
 import { namesOf } from './scope'
-import type { Fact, ReasonStatus } from './types'
+import type { Fact, Printed, ReasonStatus } from './types'
 
 const ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
 const MAX_FACTS = 30
+
+/** No more of one record's path anchors are held against the files than a read returns. */
+const MAX_PRINTED = 12
 
 /** Every record id written in `text`, lower-cased. */
 export function idsIn(text: string): string[] {
@@ -41,8 +45,21 @@ function paths(value: unknown): unknown[] {
       return []
     }
 
-    return [{ path: entry.path ?? entry.ref, symbol: entry.symbol, added_by: entry.added_by }]
+    return [{ path: entry.path ?? entry.ref, symbol: entry.symbol, added_by: entry.added_by, fingerprint: entry.fingerprint }]
   })
+}
+
+/** A record's path anchors with the fingerprint Fylgja holds of each: what a lookup holds the files against. */
+function printedOf(value: unknown): Printed[] {
+  return paths(value)
+    .flatMap(entry => {
+      const [anchor] = anchorsOf([entry], 1)
+
+      return anchor === undefined
+        ? []
+        : [{ ...anchor, fingerprint: isRecord(entry) && isPrint(entry.fingerprint) ? entry.fingerprint : null }]
+    })
+    .slice(0, MAX_PRINTED)
 }
 
 function factOf(value: unknown): Fact | undefined {
@@ -80,6 +97,7 @@ function factOf(value: unknown): Fact | undefined {
     origin: typeof value.origin === 'string' && /^[a-z_]{1,40}$/.test(value.origin) ? value.origin : '',
     link: pageOf(value.link),
     changed: changedOf(value),
+    printed: printedOf(value.anchors),
     ...(namesOf(value.applies_to).length === 0 ? {} : { appliesTo: namesOf(value.applies_to) }),
   }
 }

@@ -80,6 +80,12 @@ export type Seen = {
   commits: string[]
   /** Those commits in the order they were made, each with what the rows say of the files it holds. */
   landed: Landed[]
+  /**
+   * The commits a shell call made in another working tree, in the order they
+   * were made, each with the folder its command ran git in, written in full:
+   * a commit of a repository the session works in beside its own.
+   */
+  elsewhere: { sha: string; folder: string }[]
   /** The files written or changed after the last of those commits, as absolute paths: no commit among the rows holds them. */
   loose: string[]
   /** Those among them the rows show to be new files. */
@@ -203,6 +209,26 @@ function commitOf(command: string, printed: string | undefined, root: string): s
   }
 
   return /^\[[^\]\n]* ([0-9a-f]{7,40})\]/m.exec(printed)?.[1]
+}
+
+/**
+ * A commit a shell call made somewhere else than at the root of the tree at
+ * `root`, read from the line git printed for it, with the folder the command
+ * ran git in: the last `cd` or `git -C` of its text, written in full.
+ * Undefined for a commit made here, and wherever the folder is not plainly
+ * said.
+ */
+function elsewhereOf(command: string, printed: string | undefined, root: string): { sha: string; folder: string } | undefined {
+  if (printed === undefined || !/\bgit\b[^\n]*\bcommit\b/.test(command) || ELSEWHERE.test(command) || isHere(command, root.replace(/\/+$/, ''))) {
+    return undefined
+  }
+
+  const sha = /^\[[^\]\n]* ([0-9a-f]{7,40})\]/m.exec(printed)?.[1]
+  const folder = [...command.matchAll(DIRS)].at(-1)?.[1]?.replace(/^(["'])(.*)\1$/s, '$2').replace(/\/+$/, '')
+
+  return sha === undefined || folder === undefined || !folder.startsWith('/') || isUnsure(folder) || folder.split('/').includes('..')
+    ? undefined
+    : { sha, folder }
 }
 
 function planOf(
@@ -504,6 +530,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
   const changed = new Set<string>()
   const commits: string[] = []
   const landed: Landed[] = []
+  const elsewhere: { sha: string; folder: string }[] = []
   // Since the last commit among the rows: the files changed, those of them
   // that are new, and what the commands say of what is staged.
   let since = new Set<string>()
@@ -617,6 +644,11 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
       }
 
       const sha = use.tool === 'Bash' && typeof input.command === 'string' ? commitOf(input.command, use.text, root) : undefined
+      const other = use.tool === 'Bash' && typeof input.command === 'string' ? elsewhereOf(input.command, use.text, root) : undefined
+
+      if (other !== undefined && !elsewhere.some(one => one.sha === other.sha)) {
+        elsewhere.push(other)
+      }
 
       // Every shell command is read for the files it stages by name and for
       // where it leaves the shell. A commit that did not show, and a command
@@ -694,6 +726,7 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
     offeredText: offeredText.join('\n'),
     commits,
     landed,
+    elsewhere,
     loose: [...since],
     created: [...created],
     index: { named, hasStaged, whole, isAway: away },
@@ -809,6 +842,110 @@ function namedBy(command: string, cwd: string): string[] {
   return named
 }
 
+/** A redirection of what a command prints (`>`, `>>`, `>|`, `1>`), and the file it names when written onto it. */
+const REDIRECT = /^1?(?:>>?|>\|)(.*)$/
+
+/** Where a shell writes what is no file of a repository. */
+const NO_FILE = /^\/(?:dev|proc)\//
+
+/**
+ * The files a shell command writes or changes, each made absolute from the
+ * folder its words are read in, as `namedBy` reads them: the file a
+ * redirection prints into (`>`, `>>`, a here-document's `cat > file`), the
+ * files `tee` writes, the files `sed -i` edits in place, the one a `mv` or a
+ * `cp` names last, and the file `patch` is given by name. Nothing else that
+ * a command does is taken as a change: a command that only reads changes
+ * nothing, and one that writes some other way is not followed.
+ */
+function writtenBy(command: string, cwd: string): string[] {
+  const written: string[] = []
+  const parts: string[][] = [[]]
+  let folder: string | undefined = cwd
+
+  for (const word of (shellWords(command) ?? []).slice(0, MAX_WORDS)) {
+    if (isSeparator(word)) {
+      parts.push([])
+    } else {
+      parts.at(-1)?.push(word)
+    }
+  }
+
+  for (const all of parts) {
+    // Settings given to one command stand before it.
+    const at = all.findIndex(word => !/^[A-Za-z_]\w*=/.test(word))
+    const words = at === -1 ? [] : all.slice(at)
+    const [first = '', ...args] = words
+    const add = (word: string | undefined): void => {
+      const path = word === undefined || NO_FILE.test(word) ? undefined : pathWord(word)
+      const full = path === undefined ? undefined : from(folder, path)
+
+      if (full !== undefined && !written.includes(full)) {
+        written.push(full)
+      }
+    }
+
+    if (first === 'cd') {
+      folder = folderAfter(folder, args[0] ?? '')
+      continue
+    }
+
+    // A folder changed in a way not followed here: only paths written in full are taken after it.
+    if (/^\(|^(?:pushd|popd)$/.test(first)) {
+      folder = undefined
+    }
+
+    const plain: string[] = []
+
+    for (let index = 0; index < words.length; index += 1) {
+      const target = REDIRECT.exec(words[index] ?? '')?.[1]
+
+      if (target === undefined) {
+        plain.push(words[index] ?? '')
+      } else if (target === '') {
+        index += 1
+        add(words[index])
+      } else {
+        add(target)
+      }
+    }
+
+    // A word that is no redirection, and is no option either: what each command takes as its files.
+    const operands = plain.slice(1).filter(word => !word.startsWith('-') && !/^\d*<|^<</.test(word))
+
+    if (first === 'tee') {
+      operands.forEach(add)
+    } else if (first === 'sed' && plain.some(word => /^-[a-zA-Z]*i|^--in-place/.test(word))) {
+      // The files are the words that are no option, past the script: the first of them, unless an option gave it.
+      const files: string[] = []
+      let isScriptGiven = false
+
+      for (let index = 1; index < plain.length; index += 1) {
+        const word = plain[index] ?? ''
+
+        if (word === '-i' && /^(["'])\1$/.test(plain[index + 1] ?? '')) {
+          // `sed -i ''`, as macOS writes it: the empty word is the backup's suffix, not the script.
+          index += 1
+        } else if (/^-[a-zA-Z]*[ef]$/.test(word)) {
+          isScriptGiven = true
+          index += 1
+        } else if (/^-[a-zA-Z]*[ef].|^--(?:expression|file)=/.test(word)) {
+          isScriptGiven = true
+        } else if (!word.startsWith('-')) {
+          files.push(word)
+        }
+      }
+
+      ;(isScriptGiven ? files : files.slice(1)).forEach(add)
+    } else if ((first === 'mv' || first === 'cp') && !plain.some(word => /^-[^-]*t|^--target-directory/.test(word))) {
+      add(operands.at(-1))
+    } else if (first === 'patch') {
+      add(operands[0])
+    }
+  }
+
+  return written
+}
+
 /**
  * The paths prose names, an agent's brief: each word with the marks that
  * stand around a path in text (backticks, quotes, brackets, a sentence's
@@ -830,13 +967,14 @@ function namedIn(text: string, cwd: string): string[] {
 /**
  * The files one tool call names, each once, as absolute paths, and how:
  * read, or written or changed, by a tool that works on a file (made
- * absolute from the working tree's root, as the tool's own line names it);
- * or only named, by a shell command, by the folder a search looks in, or by
+ * absolute from the working tree's root, as the tool's own line names it)
+ * or by a shell command that plainly writes it (`writtenBy`, read from
+ * `cwd`, or the root without it); or only named, by a shell command, by the folder a search looks in, or by
  * the brief an agent is handed (made absolute from `cwd`). Whether a named
  * one is there at all is not known here. No more than `MAX_NAMED_IN_CALL`.
  *
  * @param root the working tree's root
- * @param cwd the folder the session is in; without it, only the files the call opens are read
+ * @param cwd the folder the session is in; without it, only the files the call opens or writes are read
  */
 export function pathsIn(use: { name: string; input: unknown }, root: string, cwd?: string): Named[] {
   const input = isRecord(use.input) ? use.input : {}
@@ -845,6 +983,12 @@ export function pathsIn(use: { name: string; input: unknown }, root: string, cwd
     if (!found.has(path) && found.size < MAX_NAMED_IN_CALL) {
       found.set(path, { path, how })
     }
+  }
+
+  // What a shell command writes is a file of the session as an edit's is,
+  // read from where the shell is, or from the tree's root where that is not said.
+  if (use.name === 'Bash' && typeof input.command === 'string') {
+    writtenBy(input.command, cwd ?? root).forEach(path => add(path, 'changed'))
   }
 
   if (FILE_TOOLS.has(use.name)) {

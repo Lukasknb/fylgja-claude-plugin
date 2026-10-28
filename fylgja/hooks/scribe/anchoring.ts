@@ -113,15 +113,20 @@ function isWorkingFile(path: string): boolean {
  *   and then its path alone decides
  */
 export function isAnchorable(path: string, state: GitState | undefined): boolean {
+  return whyNotAnchor(path, state) === undefined
+}
+
+/** Why a file may not be an anchor, by the rules of `isAnchorable`; undefined for one that may. */
+export function whyNotAnchor(path: string, state: GitState | undefined): 'working_file' | 'ignored' | 'untracked_doc' | undefined {
   switch (state) {
     case 'tracked':
-      return true
+      return undefined
     case 'ignored':
-      return false
+      return 'ignored'
     case 'untracked':
-      return isCode(path) && !isWorkingFile(path)
+      return isDoc(path) ? 'untracked_doc' : isWorkingFile(path) ? 'working_file' : undefined
     default:
-      return !isWorkingFile(path)
+      return isWorkingFile(path) ? 'working_file' : undefined
   }
 }
 

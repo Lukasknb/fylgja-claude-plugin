@@ -72,17 +72,3 @@ export async function baseOf(run: Run, after: After, root: string, paths: readon
 
   return status?.exitCode === 0 ? { base_sha: sha, base_dirty: status.stdout.trim() !== '' } : { base_sha: sha }
 }
-
-const OLD_WORDS = /\bbase_(?:sha|dirty)\b[\s\S]{0,200}?unexpected[ _]keyword[ _]argument|unexpected[ _]keyword[ _]argument[\s\S]{0,200}?\bbase_(?:sha|dirty)\b/i
-
-/**
- * Whether Fylgja turned a write down for the commit fields: a server from
- * before it took them. Such an answer from today's servers names no
- * argument the tool does not take, only the ones it does, and `base_sha`
- * is not among them; older servers name the argument.
- */
-export function isUnknownBase(refusal: string): boolean {
-  const isUntaken = /invalid arguments[\s\S]{0,40}an argument this tool does not take/i.test(refusal) && !/\bbase_sha\b/.test(refusal)
-
-  return isUntaken || OLD_WORDS.test(refusal)
-}

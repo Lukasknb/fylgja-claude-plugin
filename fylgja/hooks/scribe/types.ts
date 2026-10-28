@@ -12,8 +12,15 @@ export type ReasonStatus = 'stated' | 'not_stated' | 'no_strong_reason'
 
 export type RecordKind = 'decision' | 'gotcha' | 'correction'
 
-/** A place in the code a record concerns: a path relative to the tree's root, and a symbol in it. */
-export type Anchor = { path: string; symbol?: string }
+/**
+ * A place in the code a record concerns: a path relative to the tree's
+ * root, and a symbol in it. `fingerprint` is the hash of that code as it is
+ * now, set only just before it is sent (`fingerprint.ts`).
+ */
+export type Anchor = { path: string; symbol?: string; fingerprint?: string }
+
+/** A path anchor of a record as a lookup by paths returned it, with the fingerprint Fylgja holds of its code (null: none yet). */
+export type Printed = { path: string; symbol?: string; fingerprint: string | null }
 
 /** A record the model proposed and the plugin checked, before it is written. */
 export type Draft = {
@@ -103,7 +110,12 @@ export type Verdict = {
   proposed?: number
   /** How many records the model said are about how the work of the session is organised: none of them is written. */
   aboutWork?: number
+  /** How many of the places the model named were left off a record, by why. */
+  dropped?: Dropped
 }
+
+/** Places a record was not given, by why: counts only. */
+export type Dropped = Record<'not_known' | 'working_file' | 'ignored' | 'untracked_doc' | 'other_repo' | 'plan_not_kept', number>
 
 /** A record as Fylgja returned it, as much as the band shows. Its texts are held as received and made safe where drawn. */
 export type Fact = {
@@ -128,11 +140,14 @@ export type Fact = {
   link: string | null
   /**
    * The files among its anchors that a commit touched after the record was
-   * last confirmed, the most recently touched first: what it says may no
-   * longer be so. Null for a record no such commit was reported for, which
+   * last confirmed, or that a lookup found reading otherwise than when it
+   * was (no commit then), the most recently touched first: what it says may
+   * no longer be so. Null for a record no such commit was reported for, which
    * is every record of a server that does not say.
    */
   changed: string[] | null
+  /** Its path anchors with what Fylgja holds of their code; only on a lookup by paths. */
+  printed?: Printed[]
   /** The organizations it holds for alone, by Fylgja's names for them; none when it holds generally. */
   appliesTo?: string[]
 }
@@ -170,7 +185,12 @@ export type Written = {
 }
 
 /** A commit made in the session's own repository: its sha, the files it holds as paths from that repository's root, and the rule they were reported by. */
-export type Commit = { sha: string; paths: string[]; rule: Word<'commit', 'rule'> }
+/**
+ * A commit to attach, with the files it is reported with and the rule they
+ * were read by. `repo` is set for a commit made in another working tree than
+ * the session's own, one of a repository the session changed files in.
+ */
+export type Commit = { sha: string; paths: string[]; rule: Word<'commit', 'rule'>; repo?: string }
 
 /** A recorded decision whose code changed, waiting its turn; `asks` is false once another of its batch was asked about. */
 export type Doubted = { fact: Fact; repo: string; asks: boolean }

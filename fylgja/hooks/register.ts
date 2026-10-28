@@ -165,6 +165,11 @@ function scribeHostOf($: EngineInterface, session: Session.Session, report: Repo
         () => false,
       ),
     read: path => $.fs.read(path),
+    size: path =>
+      $.fs.stat(path).then(
+        stat => (stat.kind === 'file' ? stat.size : undefined),
+        () => undefined,
+      ),
     send: (agentId, text) => $.session.send({ to: { agentId }, text }).then(sent => sent.isDelivered),
     vouched: root => isLeftToPlugin(hostOf($, session, live), root),
     surfaces: () => $.session.surfaces(),

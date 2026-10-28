@@ -113,8 +113,9 @@ function sharpness(anchor: Anchor): number {
  *
  * @param known when given, only these paths are taken: the files the session
  *   itself touched, so a record never points at a file nobody opened
+ * @param unknown counts the paths left out for not being among `known`
  */
-export function anchorsOf(value: unknown, max: number, known?: ReadonlySet<string>): Anchor[] {
+export function anchorsOf(value: unknown, max: number, known?: ReadonlySet<string>, unknown?: { count: number }): Anchor[] {
   const anchors: Anchor[] = []
   const seen = new Set<string>()
 
@@ -126,6 +127,10 @@ export function anchorsOf(value: unknown, max: number, known?: ReadonlySet<strin
     // it, in full where the file lies outside the session's own tree; where
     // it lies is then looked up. Without them it must be a path of the tree.
     if (known === undefined ? !isAnchorPath(path) : !known.has(path)) {
+      if (known !== undefined && unknown !== undefined && path !== '') {
+        unknown.count += 1
+      }
+
       continue
     }
 

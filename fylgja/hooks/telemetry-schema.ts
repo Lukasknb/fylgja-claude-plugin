@@ -92,6 +92,14 @@ export const SCHEMA = {
       is_old_server_fallback: { flag: true },
       is_attached: { flag: true },
     },
+    anchors_dropped: {
+      not_known: { whole: [0, 100000] },
+      working_file: { whole: [0, 100000] },
+      ignored: { whole: [0, 100000] },
+      untracked_doc: { whole: [0, 100000] },
+      other_repo: { whole: [0, 100000] },
+      plan_not_kept: { whole: [0, 100000] },
+    },
     error: {
       component: { oneOf: ['session_start', 'turn_step', 'turn_end', 'compaction', 'context', 'band', 'window', 'scribe'] },
       kind: { oneOf: ['threw', 'not_let_through', 'wake_ceiling', 'no_prompt_row', 'no_repository', 'held_rows_dropped', 'known_repos_offered', 'old_server_paths'] },

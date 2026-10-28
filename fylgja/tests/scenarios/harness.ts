@@ -141,6 +141,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     exists: path => Promise.resolve(path === `${ROOT}/.git`),
     // The files git keeps are not read: every tree but the session's own is named by its folder.
     read: () => Promise.reject(new Error('not read')),
+    // Nor any file of the code: no anchor is given a fingerprint.
+    size: () => Promise.resolve(undefined),
     // A scenario has no agent to tell anything to.
     send: () => Promise.resolve(false),
     // No project configuration is read here: the stand-in is the only server there is.

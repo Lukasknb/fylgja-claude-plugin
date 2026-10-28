@@ -25,10 +25,10 @@ import { drawn } from '../plain'
 import { SCHEMA } from '../telemetry-schema'
 import { wordOf } from '../telemetry'
 import type { Report, Word } from '../telemetry'
-import { isCode, isWaiting, MAX_GIT_PATHS, statesOf } from './anchoring'
+import { isCode, isWaiting, MAX_GIT_PATHS, statesOf, whyNotAnchor } from './anchoring'
 import type { GitState } from './anchoring'
 import * as Band from './band'
-import { baseOf, isUnknownBase, rootOf } from './base'
+import { baseOf, rootOf } from './base'
 import type { Base } from './base'
 import { isUnknownScope, namesOf, openedScope } from './scope'
 import type { Scope } from './scope'
@@ -43,6 +43,8 @@ import { leaningOf, leaningRefusal } from './labels'
 import type { Leaning } from './labels'
 import * as Ledger from './ledger'
 import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
+import { fingerprintOf, isSecretFile, MAX_PRINT_BYTES, schemeOf } from './fingerprint'
+import type { Scheme } from './fingerprint'
 import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
 import type { LoopHost, NamingSession, Proposal, Usage } from './loop'
 import * as Plans from './plans'
@@ -55,7 +57,7 @@ import { CADENCE_FIELD, CADENCE_STEP, cadenceOf, MODEL_FIELD, modelOf } from './
 import { cleared } from './staged'
 import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
-import type { Commit, Deferred, Doubted, Draft, Fact, Place, Reported, Verdict, Written } from './types'
+import type { Anchor, Commit, Deferred, Doubted, Draft, Fact, Place, Reported, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReason } from './verdict'
 import { stateKey } from './verdict'
 import type { Seen } from './verdict'
@@ -116,6 +118,12 @@ export type ScribeHost = LoopHost & {
    * thing: the files git keeps about a repository, to read its name.
    */
   read: (path: string) => Promise<string>
+  /**
+   * `$.fs.stat`: how many bytes the file at `path` holds; undefined for a
+   * folder, and for anything that is not there. Asked before a file is read
+   * for its fingerprint (`fingerprint.ts`), so a large one never is.
+   */
+  size: (path: string) => Promise<number | undefined>
   /**
    * Whether no `.mcp.json` from `root` upward holds an entry that could
    * stand in for the plugin's server (see `project.ts`). Asked of a working
@@ -413,18 +421,8 @@ export type Scribe = {
    * does.
    */
   toAttach: Commit[]
-  /** Whether Fylgja's server takes the files of a commit: true until it turned a commit down for them. */
-  takesPaths: boolean
-  /** Whether Fylgja's server takes the commit a decision was written at: true until it turned a write down for it. */
-  takesBase: boolean
   /** Whether Fylgja's server takes the organizations a record holds for: true until it turned a write down for them. */
   takesScope: boolean
-  /**
-   * Whether it takes that commit with places added to a record later: true
-   * until it turned such a fix down for it. A server may take it with a
-   * write and not yet with a fix, so the two are known apart.
-   */
-  amendTakesBase: boolean
   /**
    * Recorded decisions whose code a commit changed after they were last
    * confirmed, not yet asked about: one of them is asked about when a look
@@ -768,10 +766,7 @@ export function create(options: Options): Scribe {
     deferred: [],
     commits: new Set(),
     toAttach: [],
-    takesPaths: true,
-    takesBase: true,
     takesScope: true,
-    amendTakesBase: true,
     doubted: [],
     denied: new Map(),
     index: cleared(false),
@@ -932,10 +927,7 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   scribe.hasAsked = false
   scribe.query = ''
   scribe.isQueried = false
-  scribe.takesPaths = true
-  scribe.takesBase = true
   scribe.takesScope = true
-  scribe.amendTakesBase = true
   scribe.index = cleared(false)
   scribe.created.clear()
   scribe.own.clear()
@@ -1067,10 +1059,7 @@ function nowOf(scribe: Scribe): Journal.Now {
         commitsToPair: scribe.commitsToPair,
         agentRepo: scribe.agentRepo,
         own: [...scribe.own].slice(-Journal.MAX_LIST),
-        takesPaths: scribe.takesPaths,
-        takesBase: scribe.takesBase,
         takesScope: scribe.takesScope,
-        amendTakesBase: scribe.amendTakesBase,
         filesIn: [...scribe.filesIn],
       },
       places: [...scribe.places].slice(-MAX_LOGGED_PLACES),
@@ -1648,10 +1637,7 @@ function restoreWork(scribe: Scribe, work: Journal.Work): void {
   scribe.commitsToPair = [...work.commitsToPair, ...scribe.commitsToPair].slice(-MAX_PENDING_COMMITS)
   scribe.agentRepo ??= work.agentRepo
   scribe.own = new Set([...work.own, ...scribe.own].slice(-MAX_OWN))
-  scribe.takesPaths &&= work.takesPaths
-  scribe.takesBase &&= work.takesBase
   scribe.takesScope &&= work.takesScope
-  scribe.amendTakesBase &&= work.amendTakesBase
 
   for (const [repo, files] of work.filesIn) {
     scribe.filesIn.set(repo, Math.max(scribe.filesIn.get(repo) ?? 0, files))
@@ -2318,20 +2304,15 @@ async function amend(host: ScribeHost, scribe: Scribe, args: Record<string, unkn
 /**
  * The commit the working tree a decision's files lie in is at, and whether
  * one of those files is changed there; undefined for anything but a
- * decision about files, on a server that does not take it, and whenever git
- * does not say at once.
- *
- * @param isTaken whether the server takes it with the call it is meant for:
- *   a write (`takesBase`) or places added later (`amendTakesBase`)
+ * decision about files, and whenever git does not say at once.
  */
 async function baseFor(
   host: ScribeHost,
   scribe: Scribe,
   who: Identity,
   draft: Pick<Draft, 'kind' | 'repo' | 'anchors'>,
-  isTaken: boolean,
 ): Promise<Base | undefined> {
-  if (!isTaken || draft.kind !== 'decision' || draft.anchors.length === 0 || draft.repo === null) {
+  if (draft.kind !== 'decision' || draft.anchors.length === 0 || draft.repo === null) {
     return undefined
   }
 
@@ -2364,6 +2345,10 @@ async function send(
   prior?: Fact,
   recalled?: string,
 ): Promise<Sent> {
+  // Each anchor with the fingerprint of its code as it is now; on a
+  // confirmation only those that have one, as what the record now holds of.
+  const printed = await printedAnchors(host, scribe, who, draft.repo, draft.anchors)
+  const anchors = recalled === undefined ? printed : printed.filter(anchor => anchor.fingerprint !== undefined)
   const args: Record<string, unknown> = {
     content: draft.content,
     // The repository the record is about, which need not be the one the session sits in.
@@ -2372,7 +2357,7 @@ async function send(
     author: 'scribe',
     session_id: who.sessionId,
     ...(draft.detail === '' ? {} : { detail: draft.detail }),
-    ...(draft.anchors.length === 0 ? {} : { anchors: draft.anchors }),
+    ...(anchors.length === 0 ? {} : { anchors }),
     ...(draft.alternatives.length === 0 ? {} : { alternatives: draft.alternatives }),
     ...(draft.triggers.length === 0 ? {} : { triggers: draft.triggers }),
     ...(draft.reasonStatus === null ? {} : { reason_status: draft.reasonStatus }),
@@ -2383,32 +2368,21 @@ async function send(
   let answer: Record<string, unknown> | undefined
   let refusal: string | undefined
   // The commit the code is at goes with a new decision; a confirmation writes nothing new.
-  let base = recalled === undefined ? await baseFor(host, scribe, who, draft, scribe.takesBase) : undefined
+  const base = recalled === undefined ? await baseFor(host, scribe, who, draft) : undefined
   // Where it holds goes with a new record, when the session said it holds for some organizations only.
-  let scope: Scope | undefined =
+  const scope: Scope | undefined =
     recalled === undefined && scribe.takesScope && (draft.appliesTo ?? []).length > 0 ? { applies_to: draft.appliesTo ?? [] } : undefined
 
   try {
     ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope }))
 
-    // A server from before it took one of them turns the write down for it: sent again once, without what it does not take.
-    const isOldBase = answer === undefined && base !== undefined && isUnknownBase(refusal ?? '')
+    // A server from before it took where a record holds turns the write down for it: sent again once, without it.
     const isOldScope = answer === undefined && scope !== undefined && isUnknownScope(refusal ?? '')
-
-    if (isOldBase) {
-      scribe.takesBase = false
-      base = undefined
-      host.debug('Scribe: Fylgja does not take the commit a decision was written at here; decisions are written without it in this session')
-    }
 
     if (isOldScope) {
       scribe.takesScope = false
-      scope = undefined
       host.debug('Scribe: Fylgja does not take where a record holds here; records are written without it in this session')
-    }
-
-    if (isOldBase || isOldScope) {
-      ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope }))
+      ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base }))
     }
   } catch {
     answer = undefined
@@ -3256,15 +3230,10 @@ async function anchorMore(
     return
   }
 
-  const args = { atom_id: id, op: 'fix', anchors: all }
-  const base = await baseFor(host, scribe, who, { kind: own.kind, repo: own.repo ?? null, anchors: fresh }, scribe.amendTakesBase)
-  let done = await tried(host, scribe, 'amend_memory', base === undefined ? args : { ...args, ...base }).catch(() => undefined)
-
-  if (done !== undefined && done.answer === undefined && base !== undefined && isUnknownBase(done.refusal ?? '')) {
-    scribe.amendTakesBase = false
-    host.debug('Scribe: Fylgja does not take the commit with places added later here; places are added without it in this session')
-    done = await tried(host, scribe, 'amend_memory', args).catch(() => undefined)
-  }
+  // Each place with how its code reads now: the new ones are what Fylgja holds the files against later.
+  const args = { atom_id: id, op: 'fix', anchors: await printedAnchors(host, scribe, who, own.repo ?? null, all) }
+  const base = await baseFor(host, scribe, who, { kind: own.kind, repo: own.repo ?? null, anchors: fresh })
+  const done = await tried(host, scribe, 'amend_memory', base === undefined ? args : { ...args, ...base }).catch(() => undefined)
 
   const outcome = done?.answer?.outcome
 
@@ -3735,24 +3704,34 @@ async function recalled(
   how: Lookup = 'path',
 ): Promise<string[] | undefined> {
   const { epoch } = scribe
+  const startedAt = performance.now()
   // Asked again for particular records, it is asked for as many as Fylgja
   // gives of one lookup: a marked record past that number is not found here.
-  const facts = factsOf(
-    await call(
-      host,
-      scribe,
-      'recall',
-      {
-        repo,
-        paths: files.length === 0 ? [PROBE] : files,
-        ...(isAgain ? { limit: MOST_RECALLED } : {}),
-      },
-      how,
-    ),
-  )
+  const args = {
+    repo,
+    paths: files.length === 0 ? [PROBE] : files,
+    ...(isAgain ? { limit: MOST_RECALLED } : {}),
+  }
+  let facts = factsOf(await call(host, scribe, 'recall', args, how))
 
   if (epoch !== scribe.epoch) {
     return undefined
+  }
+
+  // The anchored files read otherwise than Fylgja remembers them: asked once
+  // more with how they read, and Fylgja answers with the records whose code
+  // changed marked as such, commit or not. Only within the lookup's time; past
+  // it the first answer stands.
+  const readings = files.length === 0 ? [] : await readingsOf(host, scribe, repo, facts)
+
+  if (readings.length > 0 && performance.now() - startedAt < LOOKUP_WAIT_MS) {
+    const again = factsOf(await call(host, scribe, 'recall', { ...args, seen: readings }, how))
+
+    if (epoch !== scribe.epoch) {
+      return undefined
+    }
+
+    facts = again.length === 0 ? facts : again
   }
 
   for (const fact of facts) {
@@ -3776,6 +3755,145 @@ async function recalled(
   }
 
   return facts.map(fact => fact.id)
+}
+
+/**
+ * The fingerprint of the code an anchor names in the file at `file`
+ * (`fingerprint.ts`); undefined for a file that is not there, cannot be
+ * read or is larger than `MAX_PRINT_BYTES`, and for one that has none.
+ */
+async function printOf(host: ScribeHost, file: string, symbol: string | undefined, scheme?: Scheme): Promise<string | undefined> {
+  const size = await host.size(file).catch(() => undefined)
+
+  if (size === undefined || size > MAX_PRINT_BYTES) {
+    return undefined
+  }
+
+  const text = await host.read(file).catch(() => undefined)
+
+  return text === undefined ? undefined : fingerprintOf(text, symbol, scheme).catch(() => undefined)
+}
+
+/**
+ * Whether the file at `path` of `repo` may be read for a fingerprint: never
+ * one that holds secrets by its name, and never one that may be no anchor
+ * (a file git ignores, a document it was never given, a working file),
+ * whoever anchored a record to it.
+ */
+function mayPrint(scribe: Scribe, repo: string, path: string): boolean {
+  return !isSecretFile(path) && whyNotAnchor(path, scribe.gitStates.get(stateKey({ repo, path }))) === undefined
+}
+
+/**
+ * `anchors` of a record about `repo`, each with the fingerprint of its
+ * code as it stands now where the file can be read in the one working tree
+ * the anchors lie in (`rootOf`). Only the hash goes out with them.
+ */
+async function printedAnchors(
+  host: ScribeHost,
+  scribe: Scribe,
+  who: Identity,
+  repo: string | null,
+  anchors: readonly Anchor[],
+): Promise<Anchor[]> {
+  const root = repo === null || anchors.length === 0 ? undefined : rootOf(scribe.places, repo, anchors, who)
+
+  if (repo === null || root === undefined) {
+    return [...anchors]
+  }
+
+  return Promise.all(
+    anchors.map(async anchor => {
+      const fingerprint = !mayPrint(scribe, repo, anchor.path) ? undefined : await printOf(host, `${root.replace(/\/+$/, '')}/${anchor.path}`, anchor.symbol)
+
+      return fingerprint === undefined ? anchor : { ...anchor, fingerprint }
+    }),
+  )
+}
+
+/**
+ * What git says of `paths` of `repo` in the tree at `root`, for those it was
+ * not asked about yet: asked as `askGit` asks, at most `MAX_GIT_PATHS` at
+ * once and no longer than any git call. Where git cannot say, nothing is
+ * noted, and the files stay unknown.
+ */
+async function gitStatesOf(host: ScribeHost, scribe: Scribe, repo: string, root: string, paths: readonly string[]): Promise<void> {
+  const unknown = [...new Set(paths)].filter(path => !scribe.gitStates.has(stateKey({ repo, path }))).slice(0, MAX_GIT_PATHS)
+
+  if (unknown.length === 0) {
+    return
+  }
+
+  const ran = await gitIn(host.run, host.after, root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=traditional', '--', ...unknown])
+
+  if (ran?.exitCode !== 0) {
+    return
+  }
+
+  for (const [path, state] of statesOf(ran.stdout, unknown)) {
+    scribe.gitStates.set(stateKey({ repo, path }), state)
+  }
+}
+
+/** One file of a record as a lookup's client just read it, for Fylgja to hold against what it remembers. */
+type Reading = { path: string; symbol?: string; fingerprint: string }
+
+/**
+ * How the anchored files of `facts` read now, for those that read
+ * otherwise than Fylgja remembers them or that it holds no fingerprint of
+ * yet: each fingerprint taken under the scheme Fylgja holds, at most
+ * `MAX_LOOKUP_PATHS` of them. A file of a record already marked as changed
+ * for it, and one `mayPrint` turns down, is not read; git is asked about
+ * each first, and where it cannot say, only a file the session opened is. Empty where no working tree of `repo` is
+ * known, or every file reads as remembered.
+ */
+async function readingsOf(host: ScribeHost, scribe: Scribe, repo: string, facts: readonly Fact[]): Promise<Reading[]> {
+  const who = scribe.identity ?? null
+  const all = facts.flatMap(fact => fact.printed ?? [])
+  const root = who === null || all.length === 0 ? undefined : rootOf(scribe.places, repo, all.map(({ path }) => ({ path })), who)
+
+  if (root === undefined) {
+    return []
+  }
+
+  const base = root.replace(/\/+$/, '')
+  // A file a record is already marked for says nothing new, and one that holds secrets by its name is never read.
+  const wanted = facts.flatMap(fact =>
+    (fact.printed ?? []).filter(
+      anchor => (fact.changed === null || (fact.changed.length > 0 && !fact.changed.includes(anchor.path))) && !isSecretFile(anchor.path),
+    ),
+  )
+
+  await gitStatesOf(host, scribe, repo, base, wanted.map(anchor => anchor.path))
+
+  // What git says decides which may be read; where it could not say, only a file this session itself opened is.
+  const printed = wanted.filter(anchor =>
+    scribe.gitStates.has(stateKey({ repo, path: anchor.path }))
+      ? mayPrint(scribe, repo, anchor.path)
+      : scribe.places.has(`${base}/${anchor.path}`) && mayPrint(scribe, repo, anchor.path),
+  )
+  const asked = new Map<string, (typeof printed)[number]>()
+
+  for (const anchor of printed) {
+    const key = `${anchor.path}\u0000${anchor.symbol ?? ''}`
+
+    if (!asked.has(key) && asked.size < MAX_LOOKUP_PATHS) {
+      asked.set(key, anchor)
+    }
+  }
+
+  const read = await Promise.all(
+    [...asked.values()].map(async (anchor): Promise<Reading | undefined> => {
+      const stored = anchor.fingerprint
+      const now = await printOf(host, `${root.replace(/\/+$/, '')}/${anchor.path}`, anchor.symbol, stored === null ? undefined : schemeOf(stored))
+
+      return now === undefined || now === stored
+        ? undefined
+        : { path: anchor.path, ...(anchor.symbol === undefined ? {} : { symbol: anchor.symbol }), fingerprint: now }
+    }),
+  )
+
+  return read.filter((one): one is Reading => one !== undefined)
 }
 
 /**
@@ -4570,39 +4688,23 @@ function reportedWith(scribe: Scribe, who: Identity, repo: string, commit: Lande
 }
 
 /**
- * How Fylgja's server words its refusal of an argument it does not know,
- * when that argument is a commit's files: the argument's name, and that it
- * was not expected.
- */
-const UNKNOWN_PATHS = /\bpaths\b[\s\S]{0,200}?unexpected[ _]keyword[ _]argument|unexpected[ _]keyword[ _]argument[\s\S]{0,200}?\bpaths\b/i
-
-/**
  * Attaches one commit to what the session recorded in `repo`, Scribe's
  * records and Claude's own, and tells Fylgja which files the commit holds
  * (`reportedWith`): it marks the other decisions anchored to those very
  * files as ones whose code changed, and answers with the ones it marked.
  * Those files are then asked about again, thirty at a time, until every
  * record it named has come back.
- *
- * A server that does not know of a commit's files turns the call down, and
- * says that it is that argument it does not know. Only then is the commit
- * attached without them, as it always was, and no later commit of the
- * session sends any: nothing else of Scribe changes for it. A call that
- * failed for any other reason says nothing about the server, and the next
- * commit is sent with its files.
  */
 async function attach(host: ScribeHost, scribe: Scribe, who: Identity, repo: string, commit: Commit): Promise<void> {
   const args = { repo, sha: commit.sha, session_id: who.sessionId }
-  const paths = scribe.takesPaths ? commit.paths : []
-  let isFallback = false
+  const { paths } = commit
   // How the commit went, in counts: which rule its files were reported by, how many went, and what Fylgja did with them.
   const went = (answered: Record<string, unknown> | undefined): void => {
     const count = (value: unknown): number => (typeof value === 'number' ? value : 0)
 
     host.report('commit', {
       rule: commit.rule,
-      files_sent: isFallback ? 0 : paths.length,
-      is_old_server_fallback: isFallback,
+      files_sent: paths.length,
       is_attached: answered !== undefined,
       ...(answered === undefined
         ? {}
@@ -4610,27 +4712,9 @@ async function attach(host: ScribeHost, scribe: Scribe, who: Identity, repo: str
     })
   }
   let answer: Record<string, unknown> | undefined
-  let refusal: string | undefined
 
   try {
-    ;({ answer, refusal } = await tried(host, scribe, 'attach_commit', paths.length === 0 ? args : { ...args, paths }).catch(
-      (error: unknown): Tried => {
-        // The same refusal, where the call itself is failed for it.
-        if (paths.length > 0 && error instanceof Error && UNKNOWN_PATHS.test(error.message)) {
-          return { answer: undefined, refusal: error.message }
-        }
-
-        throw error
-      },
-    ))
-
-    if (answer === undefined && paths.length > 0 && UNKNOWN_PATHS.test(refusal ?? '')) {
-      scribe.takesPaths = false
-      isFallback = true
-      host.debug('Scribe: Fylgja does not take the files of a commit here; commits are attached without them in this session')
-      host.report('error', { component: 'scribe', kind: 'old_server_paths' })
-      ;({ answer, refusal } = await tried(host, scribe, 'attach_commit', args))
-    }
+    ;({ answer } = await tried(host, scribe, 'attach_commit', paths.length === 0 ? args : { ...args, paths }))
   } catch (error) {
     went(undefined)
 
@@ -5275,6 +5359,20 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
   noteEdits(scribe, who, seen.loose, changed)
   scribe.index = seen.index
 
+  // A commit made in another working tree, one of a repository the session
+  // changed files in: attached to what the session recorded there, with no
+  // file named, since which of the session's files it holds is not read here.
+  for (const commit of seen.elsewhere) {
+    const tree = scribe.trees.get(commit.folder) ?? [...scribe.trees.values()].find(one => one?.root.replace(/\/+$/, '') === commit.folder)
+
+    if (scribe.commits.has(commit.sha) || tree === undefined || tree === null || tree.repo === who.repo || !scribe.editedRepos.has(tree.repo)) {
+      continue
+    }
+
+    scribe.commits.add(commit.sha)
+    scribe.toAttach = [...scribe.toAttach, { sha: commit.sha, paths: [], rule: 'none_away' as const, repo: tree.repo }].slice(-MAX_PENDING_COMMITS)
+  }
+
   for (const file of seen.created) {
     scribe.created.add(file)
   }
@@ -5517,6 +5615,13 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
         tally.ending = 'verdict'
         tally.proposed = woken.verdict.records.length
 
+        // The places the model named and no record was given, by why: counts alone.
+        const { dropped } = woken.verdict
+
+        if (dropped !== undefined && Object.values(dropped).some(count => count > 0)) {
+          host.report('anchors_dropped', dropped)
+        }
+
         const before = scribe.written.length
         const missed = missedBy(host)
 
@@ -5596,10 +5701,17 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
   // One whose call did not get to Fylgja stays noted for the next look. One
   // that Fylgja did not answer in time is let go: it is not waited for twice.
   for (const commit of scribe.toAttach) {
-    // A commit at the session's own root is its repository's; a session with none attaches none.
+    // A commit at the session's own root is its repository's; one made in another tree names its own.
+    const repo = commit.repo ?? who.repo
+
+    // A session in no repository attaches nothing at its root: said, never let go unsaid.
+    if (repo === null) {
+      host.report('commit', { rule: 'none_no_repo', files_sent: 0, is_attached: false })
+    }
+
     const isDone =
-      who.repo === null ||
-      (await attach(host, scribe, who, who.repo, commit).then(
+      repo === null ||
+      (await attach(host, scribe, who, repo, commit).then(
         () => true,
         (error: unknown) => error instanceof TimedOut,
       ))
@@ -6041,8 +6153,9 @@ async function pressedHolds(host: ScribeHost, scribe: Scribe, who: Identity, ite
               content: fact.content,
               detail: fact.detail,
               alternatives: fact.alternatives,
-              // Its places stay as they are: none is sent, so none is added.
-              anchors: [],
+              // Its places as they are, each sent only with how its code reads
+              // now: none is added, and that reading is what holds from here.
+              anchors: fact.anchors,
               triggers: [],
               reasonStatus: fact.reasonStatus,
               supersedes: null,

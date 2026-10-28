@@ -76,6 +76,7 @@ describe('the files a command or a search names are looked up as the files Claud
     await $.session.start(START)
     await ran($, on, set, 'look at the date parsing', bash(`sed -n 1,40p ${A}`))
 
+    // Only named, never opened, and git cannot say what it is: it is not read for how it reads.
     expect(set.of('recall')).toEqual([{ repo: REPO, paths: [A] }])
     expect(await shown($)).toMatch('Parse dates in UTC, never in local time.')
   })

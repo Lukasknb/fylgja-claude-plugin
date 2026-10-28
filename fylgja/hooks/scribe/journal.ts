@@ -170,10 +170,7 @@ export type Work = {
   agentRepo: string | null
   /** The records a commit of the session was attached to. */
   own: string[]
-  takesPaths: boolean
-  takesBase: boolean
   takesScope: boolean
-  amendTakesBase: boolean
   filesIn: [string, number][]
 }
 
@@ -622,7 +619,12 @@ function commitOf(value: unknown): Commit | undefined {
   }
 
   return typeof value.rule === 'string' && RULES.includes(value.rule)
-    ? { sha: value.sha, paths: texts(value.paths, 1000), rule: value.rule as Commit['rule'] }
+    ? {
+        sha: value.sha,
+        paths: texts(value.paths, 1000),
+        rule: value.rule as Commit['rule'],
+        ...(typeof value.repo === 'string' && value.repo !== '' ? { repo: value.repo } : {}),
+      }
     : undefined
 }
 
@@ -724,10 +726,7 @@ const GROUPS: { [K in keyof Groups]: (value: unknown) => Groups[K] | undefined }
           ),
           agentRepo: typeof value.agentRepo === 'string' ? value.agentRepo : null,
           own: texts(value.own, 120),
-          takesPaths: value.takesPaths !== false,
-          takesBase: value.takesBase !== false,
           takesScope: value.takesScope !== false,
-          amendTakesBase: value.amendTakesBase !== false,
           filesIn: pairsOf(value.filesIn, one => (typeof one === 'number' && Number.isInteger(one) && one > 0 ? one : undefined)),
         }
       : undefined,
