@@ -4,7 +4,7 @@ import type { Engine, Plugin } from 'claude-code/testing'
 
 import type { Row } from '../hooks/scribe/delta'
 import { endedBy, idOf, SESSION_ID } from './fixtures'
-import { claude, decision, dev, edit, NOTHING, press, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
+import { boundary, claude, decision, dev, edit, NOTHING, press, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 import { frame, pane } from './window-fixtures'
 
@@ -165,12 +165,12 @@ describe('beneath an organization’s guard', () => {
     expect(skipped(set)).toEqual([])
   })
 
-  test('after a compaction the next prompt carries what the session kept, once, and the guard passes no hook of the plugin’s over', { plugins: [GUARD] }, async ($, on) => {
+  test('a compaction the guard keeps the plugin out of is seen by its boundary row: the next prompt carries what the session kept, once', { plugins: [GUARD] }, async ($, on) => {
     const set = await kept($, on)
     const done = await $.session.compact({ trigger: 'manual', messages: [...set.rows] } as never)
 
     set.rows.splice(0, set.rows.length, ...(done.messages as unknown as Row[]))
-    set.window.hasReading = false
+    await boundary($, 'boundary-1')
     await $.prompt.context({ blocks: [] } as never)
     await turn($, set, ...MORE)
 
@@ -179,7 +179,9 @@ describe('beneath an organization’s guard', () => {
     await turn($, set, dev('and on'), claude('Sure.'))
 
     expect(set.beside.at(-1)).toBeUndefined()
-    expect(skipped(set)).toEqual([])
+    expect(set.events('compaction')).toHaveLength(1)
+    // The plugin's own dispatch hook is the one passed over; nothing else is.
+    expect(skipped(set)).toEqual(['org-guard: skipped fylgja at session.compact'])
   })
 
   for (const [what, beneath, reason] of [

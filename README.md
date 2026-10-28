@@ -726,11 +726,11 @@ The events, each with every key it may carry. Any key may be left out.
 A refusal code is the name of the rule Fylgja refused a write by, read off
 the start of its refusal and never the words after it: `alternatives_too_many`,
 `anchor_cap`, `anchor_invalid`, `anchors_too_many`, `atom_content_removed`,
-`atom_content_taken`, `atom_ids_too_many`, `burst`, `detail_too_long`,
+`atom_content_taken`, `atom_ids_too_many`, `burst`, `commit_invalid`, `cursor_invalid`, `detail_too_long`,
 `edit_conflict`, `guardrail_refused`, `invalid_arguments`, `kind_retired`,
 `leans_on_conversation`, `no_trigger`, `not_a_decision`, `not_found`, `not_imperative`,
-`not_one_sentence`, `pass_unavailable`, `project_state_error`, `rate_limited`,
-`reason_contradiction`, `reason_missing`, `recalled_gone`, `repo_mismatch`,
+`not_one_sentence`, `pass_unavailable`, `paths_too_many`, `project_state_error`, `rate_limited`,
+`read_bound_exceeded`, `reason_contradiction`, `reason_missing`, `recalled_gone`, `repo_mismatch`,
 `search_index_unavailable`, `server_validation`, `status_not_memory`,
 `structure_conflict`, `suggestion_state_error`, `supersedes_removed`,
 `too_long`, `validation_error`;

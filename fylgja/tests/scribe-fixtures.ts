@@ -570,6 +570,16 @@ export async function turn($: Engine, on: Stage, ...rows: Row[]): Promise<void> 
   await finish($, on, ...rows)
 }
 
+/** Claude Code appends the boundary row of a compaction to the main conversation, under the row id `uuid`. */
+export async function boundary($: Engine, uuid: string): Promise<void> {
+  await $.session.append({
+    message: { type: 'system', name: 'compact_boundary', content: [{ type: 'text', text: 'Conversation compacted' }] },
+    door: 'compaction',
+    origin: { kind: 'engine' },
+    uuid,
+  } as never)
+}
+
 /** The developer sends a prompt from the prompt box. */
 export async function send($: Engine, text: string): Promise<void> {
   await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })

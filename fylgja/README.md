@@ -992,19 +992,15 @@ that id.
   the rest. The session log says whether it was given since the latest
   compaction, so a conversation loaded afresh (a resume, `/reload-plugins`,
   a background job) gives it only if it was not.
-- **How the plugin knows.** Claude Code tells of a compaction only to
-  hooks that an organization's guard may keep a person's plugins out of
-  (below), so the plugin learns it from what it can always see, as a
-  prompt is sent, as each step of a turn begins and as a turn ends, and
-  only from two signs together: the context window had a reading and has
-  none now (Claude Code has none after a compaction until Claude next
-  answers), and the conversation's first row is a summary in place of
-  what it was, not a prompt of yours. Either alone is no compaction: a
-  rewind to your first prompt changes the first row, and the reading may
-  go for other reasons. Where the plugin has seen no reading at all yet
-  (a resumed conversation, before Claude first answers in it), the first
-  row alone, against the one the session log or the first prompt showed,
-  tells it. A compaction seen counts once.
+- **How the plugin knows.** Claude Code says so, two ways: its own
+  compaction event, which the plugin hooks, and the boundary row it
+  writes into the conversation. Either is enough, so a compaction is seen
+  where an organization's guard keeps the plugin out of the event (below);
+  the two of one compaction, a minute apart at most, count once, and two
+  compactions count twice. The plugin takes it in at the next prompt,
+  step or turn's end. A summary made ahead of time, one that is called
+  off and a subagent's own compaction are none. Nothing is guessed from
+  the context window's reading or from the conversation's first row.
 - **What is in it.** The records that stand when it is sent, each quoted
   in a fence: its sentence as it reads then (a record you reworded is in
   your words), its reason when it has one, at most four of its files,
@@ -1133,10 +1129,12 @@ that id.
   context and the system prompt, the rows Claude Code makes for the
   model, a compaction and settings, among others. For every hook a
   plugin has there, Claude Code then says that it was skipped. The
-  plugin hooks none of them, and works the same with and without such a
-  guard: a `/clear` and a resume are told by the end of the conversation
-  (`session.end`), a fork by its id, and a compaction as above. The one
-  hook such a guard can still pass over is the permission check, for
+  plugin hooks only the compaction event of them, and works the same with
+  and without such a guard: a `/clear` and a resume are told by the end
+  of the conversation (`session.end`), a fork by its id, and a compaction
+  by its boundary row as well as its event, as above; Claude Code may say
+  that the plugin's `session.compact` hook was skipped. The other
+  hook such a guard can pass over is the permission check, for
   Scribe's own calls to Fylgja: Claude Code puts a call a plugin makes to
   the same check as Claude's, and outside auto mode it would ask you, so
   the plugin answers that ask with an allow. A guard runs such a check
@@ -1224,11 +1222,11 @@ The events, each with every key it may carry. Any key may be left out.
 A refusal code is the name of the rule Fylgja refused a write by, read off
 the start of its refusal and never the words after it: `alternatives_too_many`,
 `anchor_cap`, `anchor_invalid`, `anchors_too_many`, `atom_content_removed`,
-`atom_content_taken`, `atom_ids_too_many`, `burst`, `detail_too_long`,
+`atom_content_taken`, `atom_ids_too_many`, `burst`, `commit_invalid`, `cursor_invalid`, `detail_too_long`,
 `edit_conflict`, `guardrail_refused`, `invalid_arguments`, `kind_retired`,
 `leans_on_conversation`, `no_trigger`, `not_a_decision`, `not_found`, `not_imperative`,
-`not_one_sentence`, `pass_unavailable`, `project_state_error`, `rate_limited`,
-`reason_contradiction`, `reason_missing`, `recalled_gone`, `repo_mismatch`,
+`not_one_sentence`, `pass_unavailable`, `paths_too_many`, `project_state_error`, `rate_limited`,
+`read_bound_exceeded`, `reason_contradiction`, `reason_missing`, `recalled_gone`, `repo_mismatch`,
 `search_index_unavailable`, `server_validation`, `status_not_memory`,
 `structure_conflict`, `suggestion_state_error`, `supersedes_removed`,
 `too_long`, `validation_error`;
@@ -1612,13 +1610,13 @@ see in ordinary work, and last what needs your setup changed.
     when asked for more. Ask again: the block is not sent a second time.
     Then let a long turn run into an automatic compaction and check that
     the prompt after that turn carries the block, and that a decision
-    made after the compaction in that turn is recorded once. Check that
-    `/context` shows no reading right after `/compact` and one again
-    after Claude's next answer: that is how the plugin tells a
-    compaction between turns. Then the same in a session with an
-    organization's guard seated (managed settings on the machine): no
-    line says that one of the plugin's hooks was skipped, but for
-    `tool.check` on Scribe's own calls outside auto mode.
+    made after the compaction in that turn is recorded once, and that
+    `mod_compaction` is reported once per compaction. Then the same in a
+    session with an organization's guard seated (managed settings on the
+    machine) that holds the compaction event: the block still goes, seen
+    by the boundary row, and the only hooks said to be skipped are the
+    plugin's `session.compact` and `tool.check` on Scribe's own calls
+    outside auto mode.
 24. The search: `/fylgja-search` and a few words, Enter. That one search
     is made, the rows read as your records do, Enter on one fills in its
     reason and where it was said, and `[ Cite in prompt ]` puts a chip

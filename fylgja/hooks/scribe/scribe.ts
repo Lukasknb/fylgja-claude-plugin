@@ -253,25 +253,18 @@ export type Scribe = {
    */
   seam: readonly string[] | undefined
   /**
-   * The first row of the conversation as a look last read it, as its mark;
-   * undefined until one has, and while the conversation is longer than the
-   * engine hands out whole (`wasLong`). A compaction puts its summary there.
+   * How many compactions Claude Code said it made since the window was last
+   * read: Scribe takes them in as a prompt is sent, a step begins or a turn
+   * ends (`windowRead`).
    */
-  opening: string | undefined
-  /** Whether the conversation was longer, when its first row was last noted, than the engine hands out whole. */
-  wasLong: boolean
+  compactionsDue: number
   /**
-   * Whether the context window has been seen with a reading since the
-   * conversation began, or since it was last seen to be compacted. After a
-   * compaction the engine has no reading until Claude next answers.
+   * The two ways Claude Code says a compaction happened: its
+   * `session.compact` dispatch, and the boundary row it appends. `unpaired`
+   * holds each signal no signal of the other kind has been matched with yet,
+   * with when it came; `boundaries` the ids of the boundary rows seen.
    */
-  hasReading: boolean
-  /**
-   * Whether the context window has been seen with a reading at all since the
-   * plugin took the conversation up. A resumed conversation has none until
-   * Claude first answers in it, so the loss of one is no sign there.
-   */
-  sawReading: boolean
+  compactSignals: { unpaired: { by: 'event' | 'boundary'; at: number }[]; boundaries: Set<string> }
   /** The token count the engine compacts the conversation at, as last read; null when it does not, undefined until read. */
   compactsAt: number | null | undefined
   /** The window's reading when a look was last made because a compaction was near; undefined when none was since the conversation began or was compacted. */
@@ -713,10 +706,8 @@ export function create(options: Options): Scribe {
     compactions: 0,
     hasCompacted: false,
     seam: undefined,
-    opening: undefined,
-    wasLong: false,
-    hasReading: false,
-    sawReading: false,
+    compactionsDue: 0,
+    compactSignals: { unpaired: [], boundaries: new Set() },
     compactsAt: undefined,
     nearAt: undefined,
     isOwed: false,
@@ -847,10 +838,8 @@ export function startOver(scribe: Scribe): void {
   scribe.held = []
   scribe.hasCompacted = false
   scribe.seam = undefined
-  scribe.opening = undefined
-  scribe.wasLong = false
-  scribe.hasReading = false
-  scribe.sawReading = false
+  scribe.compactionsDue = 0
+  scribe.compactSignals = { unpaired: [], boundaries: new Set() }
   scribe.compactsAt = undefined
   scribe.nearAt = undefined
   scribe.isOwed = false
@@ -1350,11 +1339,6 @@ export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
     // Started over while the rows were read: they are another conversation's.
     if (epoch !== scribe.epoch) {
       return
-    }
-
-    // Its first row, so a compaction before its first look is told by its summary.
-    if (scribe.opening === undefined && !scribe.wasLong) {
-      opened(scribe, rows)
     }
 
     const who = await identityOf(host, scribe)
@@ -4262,8 +4246,9 @@ function startOf(scribe: Scribe, rows: readonly Row[]): number {
  * the prompt.
  *
  * @param isBetween whether it was seen between turns: as a prompt was sent, or at a turn's end
+ * @param count how many compactions Claude Code said it made since the window was last read: each is reported
  */
-function compactionSeen(host: ScribeHost, scribe: Scribe, rows: readonly Row[], isBetween: boolean): void {
+function compactionSeen(host: ScribeHost, scribe: Scribe, rows: readonly Row[], isBetween: boolean, count: number): void {
   const prompt = rows.findLastIndex(row => isPrompt(row, scribe.prompts))
   const latest = [...scribe.prompts].at(-1)
   const last = rows.at(-1)
@@ -4271,47 +4256,25 @@ function compactionSeen(host: ScribeHost, scribe: Scribe, rows: readonly Row[], 
   const isSending = last !== undefined && latest !== undefined && isPrompt(last, new Set([latest]))
   const from = isBetween ? rows.length - (isSending ? 1 : 0) : prompt === -1 ? 1 : prompt
 
-  scribe.compactions += 1
+  scribe.compactions += count
   scribe.hasCompacted = true
   scribe.isOwed = true
-  scribe.hasReading = false
+  scribe.compactionsDue = 0
   scribe.nearAt = undefined
   scribe.consumed = from
   scribe.mark = markOf(rows[from - 1])
   scribe.seam = undefined
-  opened(scribe, rows)
   lapse(scribe)
 
   if (!isBetween && prompt === -1 && scribe.hasPrompt && latest !== undefined) {
     scribe.held = [...scribe.held, { role: 'user', text: latest, toolUses: [] }]
   }
 
-  host.report('compaction', { is_scribe_running: true, records_carried: scribe.written.length })
-  logged(host, scribe)
-}
-
-/** Notes the first row of `rows` as a look reads it, the summary's place after a compaction. */
-function opened(scribe: Scribe, rows: readonly Row[]): void {
-  scribe.wasLong = rows.length >= Journal.MAX_ROWS
-  scribe.opening = rows.length > 0 && !scribe.wasLong ? markOf(rows[0]) : undefined
-}
-
-/**
- * Whether `rows` read as a compacted conversation: its first row is another
- * than a look last read, and none of the developer's prompts. A rewind to the
- * first prompt puts the prompt sent after it there; only a compaction puts a
- * row there that nobody typed. A conversation that was longer than the
- * engine hands out whole had no first row to go by: there it is that the
- * whole conversation fits now.
- */
-function isCompacted(scribe: Scribe, rows: readonly Row[]): boolean {
-  const first = rows[0]
-
-  if (first === undefined || rows.length >= Journal.MAX_ROWS || isPrompt(first, scribe.prompts)) {
-    return false
+  for (let one = 0; one < count; one += 1) {
+    host.report('compaction', { is_scribe_running: true, records_carried: scribe.written.length })
   }
 
-  return scribe.opening === undefined ? scribe.wasLong : markOf(first) !== scribe.opening
+  logged(host, scribe)
 }
 
 /** Whether the context window is to be read for a compaction: Scribe is on, and not known to stay out of this conversation. */
@@ -4320,38 +4283,62 @@ export function watchesWindow(scribe: Scribe): boolean {
 }
 
 /**
- * The context window was read, as a prompt is sent, a step of a turn begins
- * or a turn ends: true when the conversation was compacted since.
- *
- * Claude Code says that a compaction happened only to hooks an organization
- * may keep a person's plugins out of, so it is learned from what stays in
- * view: the window has no reading, as after a compaction until Claude next
- * answers, and the conversation's first row is another than it was and none
- * of the developer's prompts, as a summary is. Where the window was seen
- * with a reading, it must have lost it since the last compaction, too. A
- * rewind to the first prompt puts the prompt sent after it first; neither
- * sign alone is a compaction.
- *
- * The first row is noted by a look, by picking up the conversation's log,
- * and, where neither has yet, as a prompt is sent: a compaction before
- * Scribe's first look in a resumed conversation is seen all the same.
- *
- * @param hasReading whether the engine has a reading of the context window
- * @param when as a prompt is sent, a step begins or a turn ends
+ * How far apart the two signals of one compaction may come and still be
+ * one: Claude Code appends the boundary row as it installs the compaction
+ * and ends its dispatch right after, while the next compaction needs a
+ * context window filled again.
  */
-export async function windowRead(host: ScribeHost, scribe: Scribe, hasReading: boolean, when: 'prompt' | 'step' | 'end'): Promise<boolean> {
+const PAIRED_WITHIN_MS = 60_000
+
+/**
+ * Claude Code said it compacted the main conversation, at `at`: by its
+ * `session.compact` dispatch (`event`) or by the boundary row it appends
+ * (`boundary`, with the row's id). Each compaction is due once, whichever
+ * of the two comes first and whether or not the other follows: a signal
+ * matched with an unmatched one of the other kind that came shortly before
+ * is that same compaction, and a boundary row read again is no new one.
+ * Taken in at the next window read (`windowRead`), which may come between
+ * the two.
+ */
+export function compactionSignalled(scribe: Scribe, at: number, signal: { by: 'event' } | { by: 'boundary'; id: string }): void {
   if (!watchesWindow(scribe)) {
-    return false
+    return
   }
 
-  scribe.hasReading ||= hasReading
-  scribe.sawReading ||= hasReading
+  const signals = scribe.compactSignals
 
-  const isUnknown = scribe.opening === undefined && !scribe.wasLong
-  const mayNote = when === 'prompt' && isUnknown
-  const mayBeCompacted = !hasReading && !isUnknown && (scribe.hasReading || !scribe.sawReading)
+  if (signal.by === 'boundary') {
+    if (signals.boundaries.has(signal.id)) {
+      return
+    }
 
-  if (!mayNote && !mayBeCompacted) {
+    signals.boundaries.add(signal.id)
+  }
+
+  const recent = signals.unpaired.filter(one => at - one.at <= PAIRED_WITHIN_MS)
+  const partner = recent.findIndex(one => one.by !== signal.by)
+
+  if (partner !== -1) {
+    signals.unpaired = recent.filter((_, index) => index !== partner)
+
+    return
+  }
+
+  signals.unpaired = [...recent, { by: signal.by, at }]
+  scribe.compactionsDue += 1
+}
+
+/**
+ * The context window is read, as a prompt is sent, a step of a turn begins
+ * or a turn ends: true when Claude Code said it compacted the conversation
+ * since (`compactionSignalled`), and that is then taken in
+ * (`compactionSeen`) against the rows the conversation reads now, each
+ * compaction reported.
+ *
+ * @param when as a prompt is sent, a step begins or a turn ends
+ */
+export async function windowRead(host: ScribeHost, scribe: Scribe, when: 'prompt' | 'step' | 'end'): Promise<boolean> {
+  if (!watchesWindow(scribe) || scribe.compactionsDue === 0) {
     return false
   }
 
@@ -4359,24 +4346,11 @@ export async function windowRead(host: ScribeHost, scribe: Scribe, hasReading: b
   const rows = await host.rows()
 
   // Started over while the rows were read: another conversation, with nothing of this one to go by.
-  if (epoch !== scribe.epoch) {
+  if (epoch !== scribe.epoch || scribe.compactionsDue === 0) {
     return false
   }
 
-  if (mayNote) {
-    opened(scribe, rows)
-
-    return false
-  }
-
-  // No compaction: nothing is read again until the window has had a reading.
-  if (!isCompacted(scribe, rows)) {
-    scribe.hasReading = false
-
-    return false
-  }
-
-  compactionSeen(host, scribe, rows, when !== 'step')
+  compactionSeen(host, scribe, rows, when !== 'step', scribe.compactionsDue)
 
   return true
 }
@@ -5053,11 +5027,6 @@ async function look(
   // Started over while the rows were read: they, and `who`, may be another conversation's.
   if (epoch !== scribe.epoch) {
     return
-  }
-
-  // A first row that reads as a summary is left for the context window to confirm (`windowRead`), not taken as the conversation's.
-  if (!isCompacted(scribe, rows)) {
-    opened(scribe, rows)
   }
 
   const from = startOf(scribe, rows)

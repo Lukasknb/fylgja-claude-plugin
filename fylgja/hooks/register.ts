@@ -570,10 +570,10 @@ async function vouch($: EngineInterface, held: Held, noted?: () => void, ms = SH
 
 /**
  * Reads the context window, as a prompt is sent, a step of a turn begins or
- * a turn ends, for a compaction since it was last read
- * (`Scribe.windowRead`). A step also learns whether a compaction is near
- * (`Scribe.isNearCompaction`), and as a turn begins the count it comes at
- * is read again. `isDue` when the step should have Scribe look now: the
+ * a turn ends, for a compaction Claude Code said it made since it was last
+ * read (`Scribe.windowRead`). A step also learns whether a compaction is
+ * near (`Scribe.isNearCompaction`), and as a turn begins the count it comes
+ * at is read again. `isDue` when the step should have Scribe look now: the
  * conversation was just compacted, or is about to be, and then `near` is
  * the window's reading that a look made for that is noted at. Never fails,
  * and asks nothing of Fylgja.
@@ -595,12 +595,13 @@ async function watchWindow(
   }
 
   try {
-    const { context } = await $.session.usage()
-    const isCompacted = await Scribe.windowRead(scribeHostOf($, session, report), scribe, context.tokens !== undefined, when)
+    const isCompacted = await Scribe.windowRead(scribeHostOf($, session, report), scribe, when)
 
     if (when !== 'step') {
       return { isDue: isCompacted }
     }
+
+    const { context } = await $.session.usage()
 
     if (step === 0) {
       const { breakdown } = (await $.session.usage({ breakdown: 'summary' })).context
@@ -934,6 +935,31 @@ export function register(on: On, options: PluginOptions = {}): void {
 
     await caughtUp($, held)
     await vouch($, held, noteSignIn, Math.min(SHORT_WAIT_MS, next.budget.remainingMs / 2))
+
+    return done
+  }).catch(($, e, next) => next(e))
+
+  // Claude Code compacting the main conversation, said two ways: its own
+  // dispatch, once the compaction is made, and the boundary row it appends.
+  // Either is enough; together they are one compaction (see
+  // `Scribe.compactionSignalled`). A summary made ahead of time, one called
+  // off and a subagent's own are no compaction of the conversation.
+  on('session.compact', async ($, e, next) => {
+    const done = await next(e)
+
+    if (e.trigger !== 'precompute' && e.agentId === undefined && done.skip === undefined) {
+      Scribe.compactionSignalled(held.scribe, await $.clock.now(), { by: 'event' })
+    }
+
+    return done
+  }).catch(($, e, next) => next(e))
+
+  on('session.append', { door: 'compaction' }, async ($, e, next) => {
+    const done = await next(e)
+
+    if (e.agentId === undefined && e.message.type === 'system' && e.message.name === 'compact_boundary') {
+      Scribe.compactionSignalled(held.scribe, await $.clock.now(), { by: 'boundary', id: e.uuid })
+    }
 
     return done
   }).catch(($, e, next) => next(e))

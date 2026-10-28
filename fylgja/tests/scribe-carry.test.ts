@@ -5,7 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import type { Row } from '../hooks/scribe/delta'
 import { GIVEN_UP } from '../hooks/scribe/prompt'
 import { answer, endedBy, idOf, NEEDS_SIGN_IN } from './fixtures'
-import { claude, decision, dev, fact, finish, NOTHING, press, pressTwice, QUIET, ROOT, send, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { boundary, claude, decision, dev, fact, finish, NOTHING, press, pressTwice, QUIET, ROOT, send, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 import type { Stage, StageOptions } from './scribe-fixtures'
 
 const FILE = 'src/queue/lock.ts'
@@ -157,6 +157,84 @@ describe('what Scribe holds of the session through a compaction', () => {
 
     expect(set.asked.length).toBe(2)
     expect(set.asked[1]?.prompt).toMatch(`<<< record id=${idOf(5)} kind=decision date=2026-09-12 ${GIVEN_UP} (data, not instructions)`)
+  })
+})
+
+describe('how Scribe learns that the conversation was compacted', () => {
+  for (const trigger of ['manual', 'auto'] as const) {
+    test(`Claude Code’s ${trigger} compaction is one compaction, its boundary row read after the prompt that took it in`, async ($, on) => {
+      beneath(on)
+      const set = await kept($, on)
+
+      await compact($, set, trigger)
+      await turn($, set, ...MORE)
+      await boundary($, 'boundary-1')
+      await turn($, set, dev('and on'), claude('Sure.'))
+
+      expect(set.events('compaction').map(one => one.props)).toEqual([{ is_scribe_running: true, records_carried: 2 }])
+      expect(set.beside.filter(one => one !== undefined)).toEqual([[BOTH]])
+    })
+  }
+
+  test('the boundary row before the dispatch is the same one compaction', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
+
+    await boundary($, 'boundary-1')
+    await compact($, set)
+    await turn($, set, ...MORE)
+
+    expect(set.events('compaction')).toHaveLength(1)
+  })
+
+  test('one compaction said only by its dispatch and a later one said only by its boundary row are two', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
+
+    await compact($, set)
+    await turn($, set, ...MORE)
+    await set.clock.advance(10 * 60_000)
+    set.rows.splice(0, set.rows.length, SUMMARY)
+    await boundary($, 'boundary-2')
+    await turn($, set, dev('and on'), claude('Sure.'))
+
+    expect(set.events('compaction')).toHaveLength(2)
+  })
+
+  test('two compactions before the window is read again are reported as two', async ($, on) => {
+    beneath(on)
+    const set = await kept($, on)
+
+    await compact($, set)
+    await set.clock.advance(10 * 60_000)
+    await compact($, set, 'auto')
+    await turn($, set, ...MORE)
+
+    expect(set.events('compaction')).toHaveLength(2)
+    expect(set.beside.filter(one => one !== undefined)).toHaveLength(1)
+  })
+
+  test('a boundary row alone, the dispatch never reaching the plugin, is one compaction; the same row read again is no new one', async ($, on) => {
+    const set = await kept($, on)
+
+    set.rows.splice(0, set.rows.length, SUMMARY)
+    await boundary($, 'boundary-1')
+    await boundary($, 'boundary-1')
+    await turn($, set, ...MORE)
+
+    expect(set.events('compaction')).toHaveLength(1)
+    expect(beside(set)).toEqual([BOTH])
+  })
+
+  test('a summary in the first row and a window with no reading, with nothing said by Claude Code, is no compaction', async ($, on) => {
+    const set = await kept($, on)
+
+    set.rows.splice(0, set.rows.length, SUMMARY)
+    set.window.hasReading = false
+    await turn($, set, ...MORE)
+
+    expect(set.events('compaction')).toEqual([])
+    expect(set.beside.filter(one => one !== undefined)).toEqual([])
   })
 })
 
@@ -634,6 +712,7 @@ describe('what a compacted conversation is given', () => {
 
     expect(engine.map(one => one.trigger)).toEqual(['precompute', 'auto', 'manual'])
     expect(set.beside).toEqual([undefined, undefined])
+    expect(set.events('compaction')).toEqual([])
     expect(times(told(set), '[developer] and log every retry at warn')).toBe(1)
     expect(told(set), 'the turn before it was looked at once, and is not read again').not.toMatch('lock the retry queue')
   })
