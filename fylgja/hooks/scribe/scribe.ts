@@ -516,6 +516,17 @@ export type Scribe = {
   unconfirmed: { draft: Draft; agentId: string; report: string }[]
   /** What was taken out of reports and written, put to the developer or let go, by its sentence: never again. */
   handled: Set<string>
+  /**
+   * Decisions put forward in the session that nobody has committed to yet,
+   * oldest first, each with its key: never written, asked about or held
+   * against what is recorded. Each later look is shown them, and one is let
+   * go once a record settles it or the developer turned it down; still
+   * unsettled at a compaction or when the conversation ends, it is let go
+   * and counted. At most `MAX_HELD_PROPOSALS`, the newest.
+   */
+  unsettled: { key: string; draft: Draft }[]
+  /** Counts the proposals held: each its own key. */
+  unsettledCount: number
 }
 
 /** An agent's final report, as Scribe holds it until a turn's end has looked at it. */
@@ -530,12 +541,17 @@ export const MAX_REPORT_CHARS = 4000
 /** No more gotchas of reports wait for the main conversation to confirm them than this. */
 const MAX_UNCONFIRMED = 6
 
+/** No more decisions only proposed are held for later looks than this. */
+const MAX_HELD_PROPOSALS = 10
+
 /** Why the plugin itself did not write a record: one word of the report's fixed list. */
 export type DropReason =
   | (typeof SCHEMA.events.look.first_drop_reason.oneOf)[number]
   // A gotcha of an agent's report that the main conversation never confirmed, and a choice of one nobody could be asked about.
   | 'unconfirmed_report'
   | 'report_choice'
+  // A decision only proposed that nobody committed to while the session held it.
+  | 'unsettled_proposal'
 
 /** The keys kept on this machine. */
 export const STORE = {
@@ -756,6 +772,8 @@ export function create(options: Options): Scribe {
     reporters: new Set(),
     unconfirmed: [],
     handled: new Set(),
+    unsettled: [],
+    unsettledCount: 0,
   }
 }
 
@@ -845,6 +863,8 @@ export function startOver(scribe: Scribe): void {
   scribe.reporters.clear()
   scribe.unconfirmed = []
   scribe.handled.clear()
+  lapse(scribe)
+  scribe.unsettledCount = 0
 }
 
 /**
@@ -3238,6 +3258,8 @@ async function apply(
     letGo(scribe, 'about_work')
   }
 
+  propose(scribe, verdict)
+
   for (const [index, draft] of verdict.records.entries()) {
     const isAskedOf = question?.record === index
     const prior = isAskedOf && question.form === 'reversal' ? facts.get(question.prior) : undefined
@@ -3457,6 +3479,56 @@ function endReports(scribe: Scribe, ending: readonly number[]): void {
   }
 
   scribe.unconfirmed = []
+}
+
+/**
+ * Holds what a verdict only proposed, and lets go what it settled or the
+ * developer turned down. A proposal is held once, by its sentence: one the
+ * session already holds or recorded is not held again. None of it is
+ * written, asked about or shown: it waits for a record of a later look to
+ * settle it, which is then written as any other. A record of this verdict
+ * that says what a held one says settles it too, whether or not the model
+ * named its key: it is never held beside its own record.
+ */
+function propose(scribe: Scribe, verdict: Verdict): void {
+  const done = new Set([...(verdict.settles ?? []), ...(verdict.dropProposals ?? [])])
+  const agreed = new Set(verdict.records.map(draft => draft.content.toLowerCase()))
+
+  scribe.unsettled = scribe.unsettled.filter(one => !done.has(one.key) && !agreed.has(one.draft.content.toLowerCase()))
+
+  for (const draft of verdict.unsettled ?? []) {
+    const key = draft.content.toLowerCase()
+
+    if (
+      scribe.unsettled.some(one => one.draft.content.toLowerCase() === key) ||
+      scribe.recorded.some(one => one.content.toLowerCase() === key)
+    ) {
+      continue
+    }
+
+    scribe.unsettledCount += 1
+    scribe.unsettled = [...scribe.unsettled, { key: `p${scribe.unsettledCount}`, draft }]
+  }
+
+  // The oldest beyond what is held are let go unsettled.
+  for (const _ of scribe.unsettled.slice(0, -MAX_HELD_PROPOSALS)) {
+    letGo(scribe, 'unsettled_proposal')
+  }
+
+  scribe.unsettled = scribe.unsettled.slice(-MAX_HELD_PROPOSALS)
+}
+
+/**
+ * The session ended, or was compacted, with decisions still only proposed:
+ * nobody committed to them while they were held, and they are let go
+ * without a word, and counted.
+ */
+function lapse(scribe: Scribe): void {
+  for (const _ of scribe.unsettled) {
+    letGo(scribe, 'unsettled_proposal')
+  }
+
+  scribe.unsettled = []
 }
 
 /**
@@ -3784,6 +3856,7 @@ function compactionSeen(host: ScribeHost, scribe: Scribe, rows: readonly Row[], 
   scribe.mark = markOf(rows[from - 1])
   scribe.seam = undefined
   opened(scribe, rows)
+  lapse(scribe)
 
   if (!isBetween && prompt === -1 && scribe.hasPrompt && latest !== undefined) {
     scribe.held = [...scribe.held, { role: 'user', text: latest, toolUses: [] }]
@@ -3964,10 +4037,16 @@ export function takenIn(host: ScribeHost, scribe: Scribe): void {
 function summaryOf(verdict: Verdict, written: readonly Written[]): string {
   return JSON.stringify({
     outcome:
-      verdict.records.length === 0 && verdict.question === null && verdict.tells.length === 0 && verdict.withdrawn.length === 0
+      verdict.records.length === 0 &&
+      verdict.question === null &&
+      verdict.tells.length === 0 &&
+      verdict.withdrawn.length === 0 &&
+      (verdict.unsettled ?? []).length === 0
         ? 'nothing'
         : 'act',
     recorded: written.map(one => one.content),
+    // What it held as only proposed: shown on with its key, never recorded.
+    ...((verdict.unsettled ?? []).length === 0 ? {} : { proposed: verdict.unsettled?.map(one => one.content) }),
     asked: verdict.question !== null,
     told: verdict.tells.length,
     // What it changed of its own: records rewritten in place, and records taken back.
@@ -5086,6 +5165,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
         ownRepos: new Map(mine.flatMap(one => (typeof one.repo === 'string' ? [[one.id, one.repo] as const] : []))),
         choices: seen.choices,
         reports: new Set(shownReports.map(one => one.n)),
+        proposals: new Set(scribe.unsettled.map(one => one.key)),
       }
       const woken = await unless(cut, wake(host, {
         model: scribe.model,
@@ -5109,6 +5189,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
             denied: denied.map(fact => fact.id),
             reports: shownReports.map(one => ({ n: one.n, brief: briefOf(rows, one.agentId), text: one.text })),
             waiting: scribe.unconfirmed.map(one => one.draft.content),
+            proposals: scribe.unsettled.map(one => ({ key: one.key, content: one.draft.content })),
           },
         ),
         repo: judged.home ?? who.repo,

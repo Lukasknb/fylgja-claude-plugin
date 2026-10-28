@@ -759,6 +759,7 @@ export function decision(overrides: Record<string, unknown> = {}): Record<string
     anchors: [{ path: 'src/queue/lock.ts', symbol: 'acquire' }],
     supersedes: null,
     plan: null,
+    settled: 'agreed',
     ...overrides,
   }
 }

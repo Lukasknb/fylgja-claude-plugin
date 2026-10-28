@@ -241,6 +241,7 @@ const NOT_KEPT: Readonly<Record<string, string>> = {
   about_work: 'about how this work was organised, not the code',
   unconfirmed_report: 'only an agent reported it, and nobody confirmed it',
   report_choice: 'a choice an agent made that could not be put to you',
+  unsettled_proposal: 'only proposed, and nobody agreed to it',
 }
 
 /**

@@ -79,6 +79,17 @@ export type Verdict = {
   records: Draft[]
   /** What it took out of agents' reports, kept apart from the records: none of it is written as it stands. */
   reported?: Reported[]
+  /**
+   * Decisions put forward, by the developer or by Claude, that nobody has
+   * committed to yet: none is written, asked about or held against what is
+   * recorded. They are held for a later wake, which writes one once the
+   * session shows somebody agreed to it.
+   */
+  unsettled?: Draft[]
+  /** The keys of proposals held from earlier wakes that a record of this verdict settles: they are held no longer. */
+  settles?: string[]
+  /** The keys of proposals held from earlier wakes that the developer turned down: they are let go. */
+  dropProposals?: string[]
   question: Ask | null
   /** Ids of records worth telling the developer about, each one a lookup returned. */
   tells: string[]

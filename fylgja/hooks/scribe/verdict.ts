@@ -120,6 +120,8 @@ export type Seen = {
   typed?: string
   /** The numbers of the agents' reports this wake was shown: the only ones a record may come out of. */
   reports?: ReadonlySet<number>
+  /** The keys of the decisions held from earlier wakes as only proposed (`p1`, `p2`, …): the only ones a record may settle or the model may drop. */
+  proposals?: ReadonlySet<string>
 }
 
 /** The key what git said of a file is held under: its repository and its path there. */
@@ -250,6 +252,26 @@ const MAX_SENT_CONTENT = 1000
 /** Whether the model said a record of its verdict is about how the work of this session is organised. */
 function isAboutTheWork(value: unknown): boolean {
   return isRecord(value) && value.about === 'work'
+}
+
+/**
+ * Whether a decision was committed to: the developer said yes to it, picked
+ * it, told Claude to do it or approved a plan holding it, or the session
+ * carried it out. The model says which ("settled": "agreed"); a decision it
+ * calls only proposed, or says nothing of, was put forward and nobody has
+ * committed to it yet, and is not written. A choice the developer made
+ * between options put to them is theirs, and agreed whatever the model said.
+ * Every other kind holds without it.
+ */
+function isAgreed(value: unknown, draft: Draft): boolean {
+  return draft.kind !== 'decision' || draft.fromChoice === true || (isRecord(value) && value.settled === 'agreed')
+}
+
+/** The key of a proposal held from an earlier wake that `value` names, when it is one; undefined for any other. */
+function proposalOf(value: unknown, seen: Seen): string | undefined {
+  const key = idOf(value)
+
+  return key !== null && seen.proposals?.has(key) === true ? key : undefined
 }
 
 /** A record as the plugin will write it, or undefined when it is no record. */
@@ -418,10 +440,20 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
   // each question the developer answered in the turn, up to `MAX_CHOICE_RECORDS`:
   // a choice they made is never what the limit drops.
   const room = { other: MAX_RECORDS, choice: Math.min(MAX_CHOICE_RECORDS, seen.choices ?? 0) }
-  const given = own.slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS).map(record => {
+  // A decision only proposed is held, never written, and takes none of that room.
+  const unsettled: Draft[] = []
+  const given = own.slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS + MAX_UNSETTLED).map(record => {
     const draft = draftOf(record, seen)
 
     if (draft === undefined) {
+      return undefined
+    }
+
+    if (!isAgreed(record, draft)) {
+      if (unsettled.length < MAX_UNSETTLED) {
+        unsettled.push({ ...draft, fromChoice: false })
+      }
+
       return undefined
     }
 
@@ -439,6 +471,18 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
 
     return undefined
   })
+  // The proposals held from before that a record taken settles; a key the session does not hold settles nothing.
+  const settles = [
+    ...new Set(
+      given.flatMap((draft, at) => {
+        const record = own[at]
+        // Only a decision is ever proposed, and only a decision settles one.
+        const key = draft?.kind !== 'decision' || !isRecord(record) ? undefined : proposalOf(record.settles, seen)
+
+        return key === undefined ? [] : [key]
+      }),
+    ),
+  ]
   const records = given.filter((draft): draft is Draft => draft !== undefined)
   const decisions = records.filter(draft => draft.kind === 'decision')
 
@@ -503,6 +547,17 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
     }
   }
 
+  // Proposals held from before that the developer turned down: they are let go.
+  const dropProposals: string[] = []
+
+  for (const entry of Array.isArray(value.drop_proposals) ? value.drop_proposals : []) {
+    const key = proposalOf(entry, seen)
+
+    if (key !== undefined && !settles.includes(key) && !dropProposals.includes(key) && dropProposals.length < MAX_UNSETTLED) {
+      dropProposals.push(key)
+    }
+  }
+
   // Files that carry out one of Scribe's own earlier decisions: the record
   // must be its own, the files among those the session touched, and in the
   // repository the record is filed under.
@@ -531,6 +586,9 @@ export function verdictOf(value: Record<string, unknown>, seen: Seen): Verdict {
   return {
     records,
     ...(reported.length === 0 ? {} : { reported }),
+    ...(unsettled.length === 0 ? {} : { unsettled }),
+    ...(settles.length === 0 ? {} : { settles }),
+    ...(dropProposals.length === 0 ? {} : { dropProposals }),
     question,
     tells,
     withdrawn,
@@ -580,6 +638,9 @@ function reportedOf(proposed: readonly unknown[], seen: Seen): Reported[] {
 
   return reported
 }
+
+/** No more decisions only proposed are taken from one verdict than this. */
+export const MAX_UNSETTLED = 3
 
 /** Beside the records of a wake, no more records of the developer's own choices than this. */
 export const MAX_CHOICE_RECORDS = 4

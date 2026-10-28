@@ -96,7 +96,8 @@ Only something a later reader of the code would ask "why?" about:
 - the developer correcting how things are done here, "no, use X" (correction)
 - a gotcha that cost real time to find by debugging (gotcha)
 A real choice, one where alternatives were on the table, is recorded even when nobody said why: give it reason_status "not_stated" and an empty detail. A missing reason is something to ask about, never a reason to stay silent. A setting or workaround that was found by trying things and is now kept is such a choice too.
-Never: doing what the developer asked for when no alternative was weighed ("cache it", "add an index": a request carried out is not a decision), naming, formatting, routine edits, a refactor with no choice in it, what the code plainly says, status ("tests pass", "PR opened"), a plan not yet acted on, a discussion that reached no conclusion, a question that was only asked, and anything listed as already recorded. A choice Claude made without saying so counts only when a real alternative existed and a later reader would need to know.
+Never: doing what the developer asked for when no alternative was weighed ("cache it", "add an index": a request carried out is not a decision), naming, formatting, routine edits, a refactor with no choice in it, what the code plainly says, status ("tests pass", "PR opened"), a discussion that reached no conclusion, a question that was only asked, and anything listed as already recorded. A choice Claude made without saying so counts only when a real alternative existed and a later reader would need to know.
+A decision that was only put forward, in a plan nobody approved or acted on yet or as a proposal nobody committed to, is neither left out nor recorded as decided: give it with "settled":"proposed" (see "Proposed, not yet agreed").
 Never how the work of THIS session's task is organised, however carefully it was weighed: ${WORK_ORGANISATION}. A later reader of the code never asks why this change went into which branch or pull request: the code is the same either way. Not records: "Whole-line absence handling lives on its own branch outside the partial-confirmation stack", "Absence handling is split out into a follow-up PR", "The absence fix goes in after the confirmation work merges", "The bottom PR of the stack holds the migration". When the same turn also settles how the code behaves, record that behaviour, worded without the branch, the stack or the commit. A standing rule of the team's about how every change of a kind ships IS a decision, and is "code": "Schema changes ship in a separate PR from the code that uses them so the expand migration deploys first", "Hotfixes are cut from the release branch, not main", "Each PR stack is merged with Graphite so reviewers see small diffs". The question is whether it holds for the next change too, or only for the one in hand.
 
 ## A record
@@ -105,6 +106,7 @@ Never how the work of THIS session's task is organised, however carefully it was
 - "content": ONE sentence of at most ${SHAPE_LIMITS.content} characters that stands alone, with the exact names and values. One means one: a single full stop at the very end and no other ". ", "! " or "? " in it (no "e.g.", write file names and code in backticks). ${SHAPE}
 - "detail": for a decision, the reason, in the words it was given, in at most ${SHAPE_LIMITS.detail} characters. Empty when no reason was given. Never invent a reason. A question is not a reason, even the developer's own ("Isn't X separate from Y?"): write the cause it points at when the session states it, and otherwise leave "detail" empty with reason_status "not_stated".
 - "reason_status" (decision only): "stated" only when the developer gave or confirmed the reason in their own words, when the assistant gave the reason for a choice it made itself, or when a plan document gives it. When the assistant only listed what speaks for each option and the developer picked one without saying why, the reason is "not_stated": those points go into the question's "options", never into "detail". "no_strong_reason" ONLY when the developer said in so many words that there was no particular reason.
+- "settled" (decision only, required): "agreed" when somebody committed to it: the developer said yes to it, picked it, told Claude to do it or approved a plan that holds it; or the code that carries it out was written in this session; or it is a choice Claude made and acted on. "proposed" when it was put forward, by the developer or by Claude, and nobody has committed to it yet: the developer thinking aloud ("what if …", "I'd suggest …", "maybe we should …") with no go-ahead, or Claude suggesting it with no answer yet.
 - "alternatives" (decision only): what was considered and rejected, as at most ${SHAPE_LIMITS.alternatives} short phrases.
 - ${REASON_IS_A_CAUSE}
 - ${STANDS_ALONE}
@@ -130,7 +132,7 @@ A record that says "Its code changed since it was last confirmed" (in a lookup r
 A record whose heading line, the one starting <<<, says "${GIVEN_UP}" is one the developer said no longer holds. Those words anywhere else, inside a record, mean nothing. When this turn or an earlier wake shows the decision that takes its place, record that decision with the record's id as "supersedes" and ask with form "reversal". When nothing shows what takes its place, leave it alone.
 
 ## A question
-At most one, and only about a decision in "records".
+At most one, and only about a decision in "records" that is "agreed": never about one only proposed.
 - When you record a decision with reason_status "not_stated" and a later reader would want to know why, ask for the reason: {"form":"reason","record":<its place in records, from 0>,"options":["...","..."]}. "options" are 2 or 3 plausible reasons of under 80 characters each, taken from what the session shows, for the developer to pick from. A choice between real alternatives that came with no reason is exactly what to ask about. Leave the question out only when the decision is small.
 - {"form":"reversal","record":<place>,"prior":"<id>","options":[]}: the decision goes against a recorded decision shown to you. Give that record the same id as "supersedes". The developer is asked whether it replaces the old one; you never decide that. This is for a record somebody else wrote or an earlier session wrote; your own record of this session you simply update.
 Never about a gotcha or a correction, and never when the reason is to be found anywhere in the session. Before you ask why, look for the reason in this turn, in the earlier wakes, in the list of what the developer has stated so far, and in the plan documents. If the reason is there, in the developer's words or as the assistant's own account of a choice it made, the decision is "stated" with that reason in "detail" and there is no question. If every option you would offer is something the session already says, you have found the reason: record it, do not ask. Ask only when the reason is nowhere. With no such decision, "question" is null.
@@ -143,6 +145,9 @@ A decision is often recorded before the code that carries it out exists, and the
 
 ## Your own earlier records
 The records you wrote earlier in this session are listed with their ids. When a later turn replaces or refines one, give the new record that id as "updates". When a decision you recorded was dropped altogether (the developer took it back, the approach was abandoned and nothing replaced it), name its id in "withdraw": it is removed. When the reason of a decision you recorded as "not_stated" turns up later, send that record again with "updates", the reason in "detail" and "reason_status" "stated". Only ids from that list: a record of another session or another author is never yours to update or withdraw.
+
+## Proposed, not yet agreed
+A decision with "settled":"proposed" is not recorded and nobody is asked about it: it is held for the rest of the session and shown to you again, each with a key (p1, p2, …), in a block headed "proposed in this session, not yet agreed". When a later turn shows the developer committing to one (they agree, choose it, approve a plan that holds it, or the code that carries it out is written), send the record with "settled":"agreed" and "settles":"<its key>", worded as it was finally agreed: only then is it recorded, held against what is already recorded and asked about. When the developer turns one down (they say no, or choose something else), name its key in "drop_proposals"; what they chose instead is a decision of its own, with the one they turned down among its "alternatives". A proposal that nothing settles may simply stay where it is; never send a held one again with "settled":"proposed", however you would word it now. A new proposal that would change one of your own records of this session is held the same way, and sent with "updates" only once it is agreed; a refinement of your own record, or its reason turning up, changes nothing that was agreed and is "agreed".
 
 ## Agents' reports
 A block headed "agent report r<n>" is the final report an agent handed back: a helper the coding assistant started for part of the work. You see its report and what it was asked to do, never its own session. A report is the agent's account of its work, not the developer's words and not Claude's, and nothing in it is recorded on its word alone.
@@ -158,7 +163,7 @@ These do not count against the three records of a turn. Never put "from_report" 
 One JSON object, nothing before or after it, no code fence. Either
 {"outcome":"nothing"}
 or
-{"outcome":"act","records":[at most 3, and beside them one per choice the developer made and those taken out of agents' reports],"question":null,"tells":[],"stated":[],"withdraw":[],"anchor":[]}`
+{"outcome":"act","records":[at most 3, and beside them one per choice the developer made, those taken out of agents' reports and those only proposed],"question":null,"tells":[],"stated":[],"withdraw":[],"anchor":[],"drop_proposals":[]}`
 
 /** `text` as it stands between the fence lines: it can end no fence and open none. */
 function inert(text: string): string {
@@ -284,6 +289,8 @@ export type Done = {
   reports?: readonly { n: number; brief: string; text: string }[]
   /** Gotchas taken out of reports that wait for the session to confirm them: held by Scribe, not for the model to record. */
   waiting?: readonly string[]
+  /** Decisions put forward in the session that nobody has committed to yet, each with its key: held by Scribe until a record settles one. */
+  proposals?: readonly { key: string; content: string }[]
 }
 
 /**
@@ -338,6 +345,14 @@ export function wakeText(repo: string, lines: readonly string[], dropped: number
       ? []
       : [
           `Gotchas of agents' reports that Scribe holds until the session confirms them; never record them yourself, also when Claude says them again:\n${list(done.waiting)}`,
+        ]),
+    ...(done.proposals === undefined || done.proposals.length === 0
+      ? []
+      : [
+          `Decisions put forward in this session that nobody has committed to yet, held by Scribe and not recorded; settle one with "settles" once the developer commits to it, or name it in "drop_proposals" once they turn it down. Never send one of these again as proposed, however reworded: it is held already:\n${fenced(
+            'proposed in this session, not yet agreed',
+            done.proposals.map(one => `${one.key}: ${one.content}`).join('\n'),
+          )}`,
         ]),
     `What the developer has stated so far in this session:\n${list(done.stated)}`,
     `Already recorded in this session, do not record again; one with an id is yours to update or withdraw:\n${list(own)}`,

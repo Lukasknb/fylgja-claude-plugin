@@ -177,7 +177,15 @@ at a time.
   it is yours: Scribe does not rewrite it, take it back or add places to
   it again in that session. A record from another session or another
   person is never touched that way; that is what the question below is
-  for. Fylgja takes a record only in a certain form (one
+  for. A decision only put forward, by you ("what if …") or by Claude,
+  and not yet agreed is not written, and nothing is asked about it:
+  Scribe holds it for the rest of the session and writes it once a
+  later turn shows that somebody committed to it (you say yes or choose
+  it, approve a plan that holds it, or its code is written). Only then
+  is it held against what is already recorded. One you turn down is let
+  go; one still unsettled at a compaction or when the conversation ends
+  is let go too, and counted where the window says what was not kept.
+  Fylgja takes a record only in a certain form (one
   sentence, worded as a rule) and refuses rather than trims, saying why.
   When it refuses one for its form, Scribe hands its model that record and
   the refusal once (the refusal names what it matched, a word, a phrase
