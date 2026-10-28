@@ -35,7 +35,7 @@ const FOLLOWING = decision({
 const WHY = { form: 'reason', record: 0, options: ['a', 'b'] }
 
 describe('Scribe reads the plan the session works from', () => {
-  test('a decision whose reason is in the plan is recorded with that reason, names the plan, and is not asked about; a plan of the work is no anchor', async ($, on) => {
+  test('a decision whose reason is in the plan is recorded with that reason and not the plan title, and is not asked about; a plan of the work is no anchor', async ($, on) => {
     const set = stage(on, { replies: [NOTHING, verdict({ records: [FOLLOWING], question: WHY })] })
 
     await $.session.start(START)
@@ -47,7 +47,7 @@ describe('Scribe reads the plan the session works from', () => {
     expect(set.of('remember')).toMatchObject([
       {
         reason_status: 'stated',
-        detail: 'It is one more service to run. (per Plan: queue rework, section Locking)',
+        detail: 'It is one more service to run.',
         anchors: [{ path: 'src/queue/lock.ts' }],
       },
     ])
@@ -72,7 +72,7 @@ describe('Scribe reads the plan the session works from', () => {
     ])
   })
 
-  test('a plan outside the working tree is no anchor: its name and its reasoning go into the record', async ($, on) => {
+  test('a plan outside the working tree is no anchor: its reasoning goes into the record, its title does not', async ($, on) => {
     const set = stage(on, { replies: [verdict({ records: [FOLLOWING] })] })
 
     await $.session.start(START)
@@ -86,7 +86,7 @@ describe('Scribe reads the plan the session works from', () => {
     expect(set.asked[0]?.prompt).toMatch('(outside the working tree, a later reader will not have it)')
     expect(set.of('remember')).toMatchObject([
       {
-        detail: 'It is one more service to run. (per Plan: queue rework, section Locking)',
+        detail: 'It is one more service to run.',
         anchors: [{ path: 'src/queue/lock.ts' }],
       },
     ])
@@ -105,7 +105,7 @@ describe('Scribe reads the plan the session works from', () => {
 
     expect(set.asked[0]?.prompt).toMatch('plan document 1: Plan: queue rework (outside the working tree')
     expect(set.of('remember')[0]?.detail).toBe(
-      'One less service to run, and the jobs table is already in Postgres. (per Plan: queue rework)',
+      'One less service to run, and the jobs table is already in Postgres.',
     )
     expect(set.of('remember')[0]?.anchors).toEqual([{ path: 'src/queue/lock.ts', symbol: 'acquire' }])
   })
@@ -211,7 +211,7 @@ describe('Scribe reads the plan the session works from', () => {
     await set.clock.advance(30_000)
 
     expect(JSON.stringify([...set.kept.entries()])).not.toMatch(/PLAN-SECRET-REASON|Redlock was rejected|Rollout/)
-    expect(JSON.stringify([...set.kept.entries()]), 'the record, as Fylgja holds it').toMatch('per Plan: queue rework, section Locking')
+    expect(JSON.stringify([...set.kept.entries()]), 'the record, as Fylgja holds it').toMatch('It is one more service to run.')
     expect(JSON.stringify([set.toasts, set.statuses])).not.toMatch(/PLAN-SECRET-REASON|queue rework/)
   })
 

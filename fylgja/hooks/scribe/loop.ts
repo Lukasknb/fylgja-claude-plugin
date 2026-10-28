@@ -752,10 +752,9 @@ export async function reasonIn(
       return isAccepted ? { reason: `${reason}${PROPOSED_MARK}` } : { suggestion: `${reason}${PROPOSED_MARK}` }
     }
 
-    // Found in a plan document: the record says which, as a reason the wake itself takes from a plan does.
-    const plan = at >= shown.spoken.length ? shown.plans[at - shown.spoken.length] : undefined
-
-    return { reason: plan === undefined || reason.includes(plan.title) ? reason : `${reason} (per ${plan.title})` }
+    // A reason found in a plan document is the plan's words and nothing more: the plan's
+    // title is a label of the conversation, never part of the record's reason.
+    return { reason }
   } catch {
     return undefined
   }

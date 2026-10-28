@@ -328,16 +328,8 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
   const held = seen.places === undefined ? { repo: null, anchors: named } : inOnePlace(named, seen.places, seen.dropped)
   const { anchors } = held
   let repo = held.repo ?? seen.home ?? null
-  const suffix =
-    plan === undefined ? '' : ` (per ${plan.doc.title}${plan.heading === undefined ? '' : `, section ${plan.heading}`})`
-  // Cut to what the server takes, with room for the plan's name after it.
-  let detail =
-    typeof value.detail === 'string'
-      ? value.detail
-          .trim()
-          .slice(0, MAX_DETAIL_CHARS - suffix.length)
-          .trim()
-      : ''
+  // Cut to what the server takes.
+  let detail = typeof value.detail === 'string' ? value.detail.trim().slice(0, MAX_DETAIL_CHARS).trim() : ''
   let reasonStatus: ReasonStatus | null = null
 
   if (kind === 'decision') {
@@ -359,13 +351,14 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
       fromOffer >= OFFERED_SHARE &&
       fromOffer > shareIn(detail, seen.typed ?? '')
     ) {
-      detail = `${detail.slice(0, MAX_DETAIL_CHARS - suffix.length - OFFERED_MARK.length).trim()}${OFFERED_MARK}`
+      detail = `${detail.slice(0, MAX_DETAIL_CHARS - OFFERED_MARK.length).trim()}${OFFERED_MARK}`
     }
   }
 
   if (plan !== undefined) {
-    // A plan in the tree is a place a later reader can open; one outside it
-    // will be gone, so only its name is carried, beside the reason.
+    // A plan the repository keeps is a place a later reader can open, so it is
+    // carried as an anchor. Its title never joins the reason: a plan's title is
+    // a label of the conversation ("P2 ... build plan"), not why the decision holds.
     const at =
       plan.doc.path === null
         ? undefined
@@ -388,10 +381,6 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
       repo ??= at.repo
     } else if (seen.dropped !== undefined && (at === undefined || !anchors.some(anchor => anchor.path === at.path))) {
       seen.dropped.plan_not_kept += 1
-    }
-
-    if (detail !== '' && !detail.includes(plan.doc.title)) {
-      detail = `${detail}${suffix}`
     }
   }
 
