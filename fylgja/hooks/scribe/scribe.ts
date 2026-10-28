@@ -2306,6 +2306,21 @@ async function baseFor(
 }
 
 /**
+ * The conversation a record is filed under: the one going on as it is sent,
+ * the session's id read now. Never merely the id Scribe began working under:
+ * a resume or a fork goes on under another id, and a record drafted from the
+ * rows of the conversation it went on from is the new one's. Where the id
+ * read is still the one Scribe began under, the id Claude Code named when the
+ * conversation started over is the newer, when there is one: the id read
+ * from the session may lag behind it.
+ */
+async function liveSessionId(host: ScribeHost, scribe: Scribe): Promise<string> {
+  const read = await host.sessionId()
+
+  return read === scribe.identity?.sessionId ? (scribe.log.conv ?? read) : read
+}
+
+/**
  * What sending one record came to: what was written, or the code Fylgja
  * refused it by and its words. `isTaken` says Fylgja took it, whether or not
  * anything new was written for it.
@@ -2339,7 +2354,7 @@ async function send(
     repo: draft.repo,
     kind: draft.kind,
     author: 'scribe',
-    session_id: who.sessionId,
+    session_id: await liveSessionId(host, scribe),
     ...(draft.detail === '' ? {} : { detail: draft.detail }),
     ...(anchors.length === 0 ? {} : { anchors }),
     ...(draft.alternatives.length === 0 ? {} : { alternatives: draft.alternatives }),
@@ -2348,6 +2363,8 @@ async function send(
     ...(prior === undefined ? {} : { supersedes: prior.id }),
     ...(recalled === undefined ? {} : { recalled_atom_id: recalled }),
   }
+  // The developer already said how it stands to the record it may replace: Fylgja does not judge that again.
+  const settled = draft.isSettled === true && recalled === undefined ? { check_relations: false } : {}
 
   let answer: Record<string, unknown> | undefined
   let refusal: string | undefined
@@ -2358,7 +2375,7 @@ async function send(
     recalled === undefined && scribe.takesScope && (draft.appliesTo ?? []).length > 0 ? { applies_to: draft.appliesTo ?? [] } : undefined
 
   try {
-    ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope }))
+    ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope, ...settled }))
 
     // A server from before it took where a record holds turns the write down for it: sent again once, without it.
     const isOldScope = answer === undefined && scope !== undefined && isUnknownScope(refusal ?? '')
@@ -2366,8 +2383,9 @@ async function send(
     if (isOldScope) {
       scribe.takesScope = false
       host.debug('Scribe: Fylgja does not take where a record holds here; records are written without it in this session')
-      ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base }))
+      ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...settled }))
     }
+
   } catch {
     answer = undefined
   }
@@ -2392,7 +2410,9 @@ async function send(
     -MAX_LISTED,
   )
 
-  if (typeof answer?.atom_id !== 'string') {
+  // Fylgja found a record that already said this and merged this one into it:
+  // written, and nothing new to show — no receipt, no question.
+  if (typeof answer?.atom_id !== 'string' || typeof answer.merged_into === 'string') {
     return none(undefined, true)
   }
 
@@ -4670,7 +4690,7 @@ function reportedWith(scribe: Scribe, who: Identity, repo: string, commit: Lande
  * record it named has come back.
  */
 async function attach(host: ScribeHost, scribe: Scribe, who: Identity, repo: string, commit: Commit): Promise<void> {
-  const args = { repo, sha: commit.sha, session_id: who.sessionId }
+  const args = { repo, sha: commit.sha, session_id: await liveSessionId(host, scribe) }
   const { paths } = commit
   // How the commit went, in counts: which rule its files were reported by, how many went, and what Fylgja did with them.
   const went = (answered: Record<string, unknown> | undefined): void => {
@@ -6213,8 +6233,16 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
   band.unanswered += key === 'skip' ? 1 : 0
   Band.clear(band)
 
-  // Only this key makes the new decision the replacement of the old one.
-  const one = await written(host, scribe, who, item.draft, await lone(host, scribe), key === 'replaces' ? item.prior : undefined)
+  // Only this key makes the new decision the replacement of the old one. Whichever was pressed, the
+  // developer has said how the two stand: Fylgja is not to judge it again.
+  const one = await written(
+    host,
+    scribe,
+    who,
+    { ...item.draft, isSettled: true },
+    await lone(host, scribe),
+    key === 'replaces' ? item.prior : undefined,
+  )
 
   if (one === undefined) {
     return

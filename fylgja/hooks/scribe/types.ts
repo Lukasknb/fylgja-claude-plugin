@@ -60,6 +60,12 @@ export type Draft = {
    * wake may write, and nobody is asked why about it.
    */
   fromChoice?: boolean
+  /**
+   * Whether the developer already said how it stands to the recorded one it
+   * may replace (they answered Scribe's question about it): Fylgja does not
+   * check it against the records like it again.
+   */
+  isSettled?: boolean
 }
 
 /** Where a file lies: its repository as `owner/name`, and its path from that repository's root. */
