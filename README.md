@@ -711,7 +711,7 @@ The events, each with every key it may carry. Any key may be left out.
 |-|-|-|
 | `session_started` | a session begins | `is_interactive`, `is_signed_in`, `is_scribe_on` (yes/no each) |
 | `look` | Scribe has looked at what happened, at a turn's end or after you answered a question of Claude's | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `drafts_dropped`, `calls_missed`; `first_refusal_code` (a refusal code, below); `first_drop_reason` (about_work, label_stayed) |
-| `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no) |
+| `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no); `lookup`, what a lookup of Scribe's own looked up by (path, named, query, probe, brief; none for any other call) |
 | `question` | a question of Scribe's was held back by a rule, came up, or was answered | `stage` (held_back, shown, answered); `form` (reason, reversal, holds); `held_back_by` (turn_asked, asked_before, session_share, unanswered); `key` (option, own_words, no_reason, skip, still_holds, no_longer_holds, replaces, different, told_claude, expired, withdrawn); `ms_until_answered` (number) |
 | `window` | you asked for the window, with the mark or a command | `view` (kept, search); `opened_by` (click, command); `outcome` (opened, not_placed, failed); `records_listed` (number) |
 | `window_action` | a key of the window did something to a record | `view` (kept, search); `action` (reword, remove, put_back, open_record, cite); `outcome` (done, trouble) |
@@ -744,7 +744,8 @@ the start of its refusal and never the words after it: `alternatives_too_many`,
   agent is started, and no prompt, reply or tool call is rewritten. The one
   change to a prompt is that each chip is put back as the reference you
   pasted. The one way anything from Scribe reaches Claude is you pressing
-  `Tell Claude` and then sending what it put in the box.
+  `Tell Claude` and then sending what it put in the box; the one way it
+  reaches an agent of the session is you pressing `Tell agent`.
 - It never delays a prompt. Putting the references back needs no network,
   and taking down an offer you typed past needs none either. If either
   fails, the prompt is sent as typed. The lookup for a message's chip is
@@ -841,11 +842,14 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   at each step and end of a turn for as long as no answer has come.
   Nothing is sent with the question.
 - **Sent to Fylgja, by Scribe:** the repository as `owner/name` and the
-  paths of the files Claude touched, to look up what is recorded about
+  paths of the files Claude touched, or a command, a search or an agent's
+  brief named, to look up what is recorded about
   them (the session's own repository and each one it changed a file in
   is asked about its own files; to name a
   repository the plugin reads the `config` git keeps for it, on this
-  machine, and takes the owner and name from its `origin`); at most three lookups a turn that the model asks for, one of them a
+  machine, and takes the owner and name from its `origin`); in a turn
+  with no such file, the words of your latest prompt that carry meaning,
+  200 characters at most, once a prompt; at most three lookups a turn that the model asks for, one of them a
   search; for a new decision, its sentence (300 characters at most), to
   find what is already recorded on its subject; the records it writes, each with its sentence, reason,
   alternatives, file anchors, your session's id, and `author: scribe`; your

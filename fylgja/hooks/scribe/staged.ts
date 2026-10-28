@@ -105,6 +105,28 @@ function withoutBodies(command: string): string | undefined {
   return kept.join('\n')
 }
 
+/**
+ * The words of a shell command as it splits them, a separator (`&&`, `||`,
+ * `;`, `|`, `&`, a line's end) each a word of its own and a quote kept whole
+ * with its marks; the bodies of here-documents left out. Undefined when a
+ * body does not end: nothing after it is what it seems.
+ */
+export function shellWords(command: string): string[] | undefined {
+  const text = withoutBodies(command)
+
+  return text === undefined ? undefined : (text.match(TOKEN) ?? [])
+}
+
+/** Whether a word of `shellWords` is a separator between two commands. */
+export function isSeparator(word: string): boolean {
+  return SEPARATOR.test(word)
+}
+
+/** Whether a word cannot be taken at its word as a path: it holds a pattern, a variable, a substitution or a quote. */
+export function isUnsure(word: string): boolean {
+  return UNSURE.test(word)
+}
+
 /** A file as a command names it, as a path from the working tree's root; undefined when it cannot be taken at its word. */
 function fileOf(word: string, root: string): string | undefined {
   const bare = /^(["']).*\1$/s.test(word) ? word.slice(1, -1) : word
@@ -194,11 +216,11 @@ function commitOf(
  * @param whole whether the whole tree was staged by an earlier command
  */
 export function namedAfter(named: string[] | null, command: string, root: string, isAway: Away, whole: Whole = false): Step {
-  const text = withoutBodies(command)
-  const words = text?.match(TOKEN) ?? []
+  const split = shellWords(command)
+  const words = split ?? []
   const parts: string[][] = [[]]
   // A quote that never closes, or a body that never ends: nothing after it is what it seems.
-  let isSure = text !== undefined && !words.some(word => /^["']/.test(word) && !/^(["']).*\1$/s.test(word))
+  let isSure = split !== undefined && !words.some(word => /^["']/.test(word) && !/^(["']).*\1$/s.test(word))
   let now = named
   let away = isAway
   let hasStaged = false
@@ -277,6 +299,27 @@ function movedTo(from: Away, word: string, root: string): Away {
 
   // A folder named from where the shell is: deeper into the tree, or deeper into wherever it was left.
   return from === 'outside' ? 'outside' : 'inside'
+}
+
+/**
+ * The folder a `cd` to `word` leaves the shell in, from `from`; undefined
+ * where that cannot be told from the word itself (a pattern, a variable,
+ * `..`, `-`, home), or was not known before.
+ */
+export function folderAfter(from: string | undefined, word: string): string | undefined {
+  const to = word.replace(/^(["'])(.*)\1$/s, '$2').replace(/\/+$/, '')
+
+  if (to === '' || UNSURE.test(to) || to.split('/').includes('..') || to === '-') {
+    return undefined
+  }
+
+  const parts = to.split('/').filter(part => part !== '' && part !== '.')
+
+  if (to.startsWith('/')) {
+    return `/${parts.join('/')}`
+  }
+
+  return from === undefined ? undefined : [from.replace(/\/+$/, ''), ...parts].join('/')
 }
 
 /**

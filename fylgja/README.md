@@ -415,7 +415,9 @@ card around them.
   review in Fylgja; the plugin does nothing more about it.
 - **It tells.** When Claude reads or changes a file that a recorded decision
   or gotcha is anchored to, or an agent Claude started changes one (that
-  file is looked up when the turn ends):
+  file is looked up when the turn ends), or a shell command or a search of
+  Claude's names one (`sed -n 1,40p src/mail/send.ts`, `cat`, `grep`,
+  `git diff` on it, a search's folder):
 
   `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12   1 Open  2 Tell Claude  3 Knew this  0 Dismiss`
 
@@ -435,6 +437,38 @@ card around them.
   commit changed after it was last confirmed says so under its sentence,
   with the file, and so does the note for Claude; Scribe's model is told
   the same. Neither is to take it for settled.
+
+  A file a command or a search only names counts when it looks like a
+  path (it holds a `/` or ends in a file's extension), is written out as
+  it is (no pattern, no variable, no quote, no `..`), lies in a repository
+  Scribe already knows and is there on the disk; a path after a `cd` is
+  read from where the `cd` left the shell, and the body of a here-document
+  names nothing. Such a file is only looked up: a record never points at
+  it, only at files the session opened. No file is read for it.
+
+  A turn with no file to look up by is looked up by what your prompt is
+  about: its words that carry meaning (lower case, four letters or more,
+  without the small words, 200 characters at most), once a prompt, in the
+  session's own repository. The record Fylgja ranks first, if it returns
+  any, is told the same way. A prompt with no such word asks about the
+  file every repository has, `README.md`, as the first lookup of a session
+  always did: whether that call gets through decides whether Scribe runs.
+- **It tells an agent, on your key.** When Claude starts an agent whose
+  brief names files with records anchored to them, the band says so at
+  once, as the turn's one tell:
+
+  `◆ 2 records on files this agent's brief names   1 Tell agent  2 Open  0 Dismiss`
+
+  Agents started in the same step are looked up together, in one lookup
+  that holds the step no longer than any other, and nothing is looked up
+  once the turn has had its tell. Tell agent sends each agent, as one
+  message quoted as Tell Claude quotes them, the records on the files its
+  own brief names, while it works; the agent is known by the Agent call
+  that started it, as it starts. Records no agent took (it has not started
+  yet, its turn has ended however it ended, the message did not reach it)
+  go in your prompt box instead, and only an empty one. Open lists the
+  records. Nothing is sent to an agent without the key, and no brief is
+  changed: the plugin only watches an agent start.
 - **It reads the plan.** If the session works from a plan (plan mode's own,
   or a markdown file that calls itself a plan, a design, a spec, an RFC, an
   ADR or a work package), that is where Scribe looks first for the reason.
@@ -562,9 +596,10 @@ Staying out of the way is the point, and the limits are in the code:
   holds a step for at most 0.4 seconds; past that the files count as in
   no repository for that step, and what is found out is kept per folder
   for the session.
-- At most one tell per turn, never the same record twice in a session.
-  From the lookup by path alone, only a record anchored to the very file
-  in hand. A record anchored to a folder above it is shown only when
+- At most one tell per turn, never the same record twice in a session;
+  the records on an agent's brief are that one tell. From the lookup by
+  path alone, only a record anchored to the very file in hand; from the
+  lookup by a prompt's words, only the record Fylgja ranks first. A record anchored to a folder above it is shown only when
   Scribe's model, reading the turn, judged that it bears on the work; it
   still counts as the turn's one tell.
 - Nothing new comes up while you are typing: not a tell, not a question,
@@ -1150,7 +1185,7 @@ The events, each with every key it may carry. Any key may be left out.
 |-|-|-|
 | `session_started` | a session begins | `is_interactive`, `is_signed_in`, `is_scribe_on` (yes/no each) |
 | `look` | Scribe has looked at what happened, at a turn's end, after you answered a question of Claude's, or after so many steps (that look carries no `trigger`) | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `drafts_dropped`, `calls_missed`; `first_refusal_code` (a refusal code, below); `first_drop_reason` (about_work, label_stayed; a record let go for an agent's report counts in `drafts_dropped` and is not named) |
-| `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no) |
+| `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no); `lookup`, what a lookup of Scribe's own looked up by (path, named, query, probe, brief; none for any other call) |
 | `question` | a question of Scribe's was held back by a rule, came up, or was answered; one about an agent's report is not reported | `stage` (held_back, shown, answered); `form` (reason, reversal, holds); `held_back_by` (turn_asked, asked_before, session_share, unanswered); `key` (option, own_words, no_reason, skip, still_holds, no_longer_holds, replaces, different, told_claude, expired, withdrawn); `ms_until_answered` (number) |
 | `window` | you asked for the window, with the mark or a command | `view` (kept, search); `opened_by` (click, command); `outcome` (opened, not_placed, failed); `records_listed` (number) |
 | `window_action` | a key of the window did something to a record | `view` (kept, search); `action` (reword, remove, put_back, open_record, cite); `outcome` (done, trouble) |
@@ -1185,7 +1220,8 @@ the start of its refusal and never the words after it: `alternatives_too_many`,
   rewritten. The one change to a prompt is that each chip is put back as
   the reference you pasted. Two things from Scribe reach Claude: what you
   send after pressing `Tell Claude`, and, once after a compaction, the
-  block of the session's records (see "Across a compaction").
+  block of the session's records (see "Across a compaction"). One reaches
+  an agent of the session: the records you send it with `Tell agent`.
 - It never delays a prompt. Putting the references back needs no network,
   and taking down an offer you typed past needs none either. If either
   fails, the prompt is sent as typed. The lookup for a message's chip is
@@ -1283,11 +1319,14 @@ desktop app. Elsewhere nothing is drawn, and Scribe does not run.
   at each step and end of a turn for as long as no answer has come.
   Nothing is sent with the question.
 - **Sent to Fylgja, by Scribe:** the repository as `owner/name` and the
-  paths of the files Claude touched, to look up what is recorded about
+  paths of the files Claude touched, or a command, a search or an agent's
+  brief named, to look up what is recorded about
   them (the session's own repository and each one it changed a file in
   is asked about its own files; to name a
   repository the plugin reads the `config` git keeps for it, on this
-  machine, and takes the owner and name from its `origin`); at most three lookups a turn that the model asks for, one of them a
+  machine, and takes the owner and name from its `origin`); in a turn
+  with no such file, the words of your latest prompt that carry meaning,
+  200 characters at most, once a prompt; at most three lookups a turn that the model asks for, one of them a
   search; for a new decision, its sentence (300 characters at most), to
   find what is already recorded on its subject; the records it writes, each with its sentence, reason,
   alternatives, file anchors, your session's id, and `author: scribe`; your
@@ -1632,3 +1671,12 @@ see in ordinary work, and last what needs your setup changed.
     a background agent's and a teammate's too, that the Agent call in
     the main conversation carries the agent's id, and that the `/config`
     menu's change reaches `config.set`.)
+30. Lookups by what a step names: have Claude run `sed -n 1,40p` on a
+    file with a record anchored to it, and the record is told; have it
+    start an agent whose brief names that file in another session, and the
+    band says `1 record on files this agent's brief names`. Press `Tell
+    agent` while the agent works: the agent's transcript shows the note as
+    a message from the plugin, and the prompt box stays empty. (Read from
+    the engine's types, not yet seen live: that `agent.spawn` answers
+    the agent's id with the Agent call's `tool_use_id` as it starts, and
+    that `$.session.send` to it is delivered while it runs.)

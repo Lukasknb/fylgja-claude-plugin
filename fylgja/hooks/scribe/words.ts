@@ -17,6 +17,32 @@ export function wordsOf(text: string): string[] {
     .map(word => word.replace(/(?:ing|ed|es|s)$/, ''))
 }
 
+/** A word longer than this is no word of a sentence: an id, a hash, a key. */
+const MAX_WORD = 30
+
+/**
+ * The words of a text that carry meaning, as they are written but in lower
+ * case, each once and in their order, to look the text up by: no more of
+ * them than fit in `max` characters. Empty for a text with none.
+ */
+export function queryOf(text: string, max: number): string {
+  const kept: string[] = []
+
+  for (const word of text.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []) {
+    if (SMALL.has(word) || word.length > MAX_WORD || /^\d+$/.test(word) || kept.includes(word)) {
+      continue
+    }
+
+    if ([...kept, word].join(' ').length > max) {
+      break
+    }
+
+    kept.push(word)
+  }
+
+  return kept.join(' ')
+}
+
 /** The share of the words of `text` that stand in `source` too; 0 for a text with none. */
 export function shareIn(text: string, source: string): number {
   const words = wordsOf(text)

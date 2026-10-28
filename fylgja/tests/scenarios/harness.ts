@@ -141,6 +141,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     exists: path => Promise.resolve(path === `${ROOT}/.git`),
     // The files git keeps are not read: every tree but the session's own is named by its folder.
     read: () => Promise.reject(new Error('not read')),
+    // A scenario has no agent to tell anything to.
+    send: () => Promise.resolve(false),
     // No project configuration is read here: the stand-in is the only server there is.
     vouched: () => Promise.resolve(true),
     surfaces: () => Promise.resolve(['terminal']),
@@ -363,7 +365,7 @@ export function register(on: On): void {
             })),
             seen: {
               lines: seen.lines,
-              touched: seen.touched,
+              files: seen.files,
               commits: seen.commits,
               plans: seen.plans.map(plan => Object.keys(plan)),
             },

@@ -165,6 +165,7 @@ function scribeHostOf($: EngineInterface, session: Session.Session, report: Repo
         () => false,
       ),
     read: path => $.fs.read(path),
+    send: (agentId, text) => $.session.send({ to: { agentId }, text }).then(sent => sent.isDelivered),
     vouched: root => isLeftToPlugin(hostOf($, session, live), root),
     surfaces: () => $.session.surfaces(),
     run: (argv, timeoutMs) => $.process.run(argv, { timeoutMs }),
@@ -1190,6 +1191,20 @@ export function register(on: On, options: PluginOptions = {}): void {
     }
   })
 
+  // An agent the main conversation's Agent tool starts: which call started
+  // it, and its id, so that the records on the files its brief names can be
+  // told to it on the developer's key. Only watched: the spawn goes on as it
+  // was asked, its brief untouched.
+  on('agent.spawn', async ($, e, next) => {
+    const done = await next(e)
+
+    if (e.parentAgentId === undefined && e.workflow === undefined && e.resume === undefined && done.agentId !== undefined) {
+      Scribe.spawned(scribe, e.tool_use_id, e.prompt, done.agentId)
+    }
+
+    return done
+  })
+
   // A row of the plugin's own changed in the `/config` menu: Scribe takes it
   // at once, for its next step, look or key, with no reload.
   on('config.set', { key: /^fylgja(?:@[^.]*)?\./ }, async ($, e, next) => {
@@ -1233,6 +1248,8 @@ export function register(on: On, options: PluginOptions = {}): void {
         // Claude answered: the window's reading now is what a later one is told from.
         await watchWindow($, held, report, 'end')
       } else {
+        // However it ended, the agent is at work no longer: nothing is sent to it from here, which would start it again.
+        Scribe.agentEnded(scribe, e.agentId)
         Scribe.reported(scribe, e.agentId, e.answer, e.isAborted ? 'aborted' : e.reason)
       }
     } catch (error) {

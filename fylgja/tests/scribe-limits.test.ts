@@ -248,7 +248,7 @@ describe('whether Scribe’s calls get through is settled before a model is aske
     expect(set.asked[0]?.prompt, 'with what the first turn held').toMatch('make the mailer retry')
   })
 
-  test('a turn that touched no file still asks Fylgja once before it asks a model', async ($, on) => {
+  test('a turn that touched no file still asks Fylgja once before it asks a model: by the words of the prompt', async ($, on) => {
     const set = stage(on)
 
     await $.session.start(START)
@@ -259,7 +259,7 @@ describe('whether Scribe’s calls get through is settled before a model is aske
       claude('Postgres, because the jobs table is there.'),
     )
 
-    expect(set.calls.map(call => call.tool)).toEqual(['recall'])
+    expect(set.calls).toEqual([{ tool: 'recall', args: { repo: 'acme/web', query: 'redis postgres lock think' } }])
     expect(set.asked.length).toBe(1)
   })
 

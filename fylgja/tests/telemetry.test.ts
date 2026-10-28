@@ -12,15 +12,21 @@ import {
   dev,
   edit,
   fact,
+  finish,
   NOTHING,
   press,
   pressTwice,
   REPO,
+  ROOT,
+  send,
   SESSION_ID,
   shown,
   stage,
   START,
+  step,
+  stepping,
   turn,
+  use,
   verdict,
 } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
@@ -191,6 +197,30 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
     expect(set.asked).toEqual([])
     expect(propsOf(set, 'look')).toMatchObject([{ trigger: 'turn_end', ending: 'skipped_gate', steps: 0, drafts_proposed: 0 }])
+  })
+
+  test('each lookup says what it looked up by, and nothing of what it looked up', async ($, on) => {
+    const RETRY = 'src/queue/retry.ts'
+    const POLICY = 'src/queue/policy.ts'
+    const set = stage(on, { files: { [`${ROOT}/${RETRY}`]: '', [`${ROOT}/${POLICY}`]: '' } })
+    const stepped = async (prompt: string, uses: { name: string; input: unknown }[]): Promise<void> => {
+      stepping(on, () => uses)
+      await send($, prompt)
+      await step($, 0, uses)
+      await finish($, set, dev(prompt), claude('Done.', ...uses.map(one => use(one.name, one.input as Record<string, unknown>))))
+    }
+
+    await $.session.start(START)
+    await turn($, set, ...QUIET)
+    await turn($, set, dev('Postgres or redis for the lock?'), claude('Postgres.'))
+    await turn($, set, ...TALK)
+    await stepped('read the retry', [{ name: 'Bash', input: { command: `sed -n 1,40p ${RETRY}` } }])
+    await stepped('have an agent do the policy', [{ name: 'Agent', input: { description: 'Policy', prompt: `Rewrite ${POLICY}.` } }])
+
+    // The agent's turn has no file of its own left to look up by at its end: its prompt's words are.
+    expect(propsOf(set, 'call').map(call => call.lookup)).toEqual(['probe', 'query', 'path', 'named', 'brief', 'query'])
+    nothingPrivateIn(set)
+    expect(JSON.stringify(set.reports)).not.toMatch(/retry\.ts|policy\.ts|sed -n/)
   })
 
   test('a model that answered nothing readable ends the look as that', async ($, on) => {

@@ -20,10 +20,27 @@ import type { Draft, Fact, Written } from './types'
 /** A recorded decision or gotcha about the code in hand, offered to the developer. */
 export type Tell = {
   kind: 'tell'
+  /** The record; for the records on an agent's brief, the first of them. */
   fact: Fact
-  /** Whether its reason, alternatives and anchors are shown. */
+  /** Set when it holds the records on files an agent's brief names, to be told to that agent. */
+  brief?: Brief
+  /** Whether its reason, alternatives and anchors are shown; for a brief's records, each of them. */
   isOpen: boolean
   isTouched: boolean
+}
+
+/**
+ * The records on files the briefs of agents of the session name, offered
+ * as the agents start: told to them, by the developer's key, while they work.
+ */
+export type Brief = {
+  facts: Fact[]
+  /**
+   * Each brief, as the call of the Agent tool gave it (what finds its agent),
+   * with the files it named, as paths from their repository's root: each
+   * agent is told the records on its own files.
+   */
+  briefs: { prompt: string; paths: string[] }[]
 }
 
 /** Why a decision was taken, asked of the developer about a record just written without a reason. */
@@ -213,13 +230,43 @@ function enqueue(band: Band, item: Item): void {
  * in this session, the developer knows it, or this turn has had its tell.
  */
 export function offerTell(band: Band, fact: Fact): boolean {
-  if (band.told.has(fact.id) || band.kept.known.includes(fact.id) || band.tellsThisTurn >= MAX_TELLS_PER_TURN) {
+  if (
+    band.told.has(fact.id) ||
+    band.kept.known.includes(fact.id) ||
+    band.tellsThisTurn >= MAX_TELLS_PER_TURN ||
+    [band.current, ...band.queue].some(item => item !== null && subjectOf(item) === fact.id)
+  ) {
     return false
   }
 
   band.told.add(fact.id)
   band.tellsThisTurn += 1
   enqueue(band, { kind: 'tell', fact, isOpen: false, isTouched: false })
+
+  return true
+}
+
+/**
+ * Puts the records on files an agent's brief names in line, as one tell,
+ * unless a rule says no: each record was offered in this session or the
+ * developer knows it, or this turn has had its tell.
+ */
+export function offerBrief(band: Band, facts: readonly Fact[], briefs: Brief['briefs']): boolean {
+  const fresh = facts.filter(
+    (fact, at) => !band.told.has(fact.id) && !band.kept.known.includes(fact.id) && facts.findIndex(one => one.id === fact.id) === at,
+  )
+  const first = fresh[0]
+
+  if (first === undefined || band.tellsThisTurn >= MAX_TELLS_PER_TURN) {
+    return false
+  }
+
+  for (const fact of fresh) {
+    band.told.add(fact.id)
+  }
+
+  band.tellsThisTurn += 1
+  enqueue(band, { kind: 'tell', fact: first, brief: { facts: fresh, briefs: [...briefs] }, isOpen: false, isTouched: false })
 
   return true
 }
@@ -243,7 +290,27 @@ export function offerQuestion(band: Band, question: Question, about: string): bo
   band.hasAskedThisTurn = true
   enqueue(band, question)
 
+  // A record the question is about is not told beside it as well: the question shows it.
+  const subject = subjectOf(question)
+
+  if (subject !== undefined) {
+    band.queue = band.queue.filter(item => item.kind !== 'tell' || item.brief !== undefined || item.fact.id !== subject)
+
+    if (band.current?.kind === 'tell' && band.current.brief === undefined && !band.current.isTouched && band.current.fact.id === subject) {
+      clear(band)
+    }
+  }
+
   return true
+}
+
+/** The id of the recorded record a question is about, or a tell tells; undefined for a question about a new one. */
+function subjectOf(item: Item): string | undefined {
+  if (item.kind === 'tell') {
+    return item.brief === undefined ? item.fact.id : undefined
+  }
+
+  return item.form === 'reversal' ? item.prior.id : item.form === 'holds' ? item.fact.id : undefined
 }
 
 /**

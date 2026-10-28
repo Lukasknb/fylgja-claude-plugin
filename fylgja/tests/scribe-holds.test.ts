@@ -553,7 +553,9 @@ function marking(on: Parameters<typeof stage>[0], options: StageOptions = {}) {
     kept: { 'scribe.known': [idOf(5)] },
     ...options,
     tools: {
-      recall: () => answer({ repo: REPO, facts: [isMarked ? MARKED : OLD] }),
+      // Found by its files and by a decision's own words; the words of a prompt, in lower case and without a stop, find nothing.
+      recall: args =>
+        answer({ repo: REPO, facts: typeof args.query === 'string' && !/[A-Z.]/.test(args.query) ? [] : [isMarked ? MARKED : OLD] }),
       attach_commit: () => {
         isMarked = true
 

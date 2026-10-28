@@ -51,6 +51,7 @@ export const SCHEMA = {
       refusal_code: { oneOf: ['alternatives_too_many', 'anchor_cap', 'anchor_invalid', 'anchors_too_many', 'atom_content_removed', 'atom_content_taken', 'atom_ids_too_many', 'burst', 'commit_invalid', 'detail_too_long', 'edit_conflict', 'guardrail_refused', 'invalid_arguments', 'kind_retired', 'leans_on_conversation', 'no_trigger', 'not_a_decision', 'not_found', 'not_imperative', 'not_one_sentence', 'pass_unavailable', 'paths_too_many', 'project_state_error', 'rate_limited', 'reason_contradiction', 'reason_missing', 'recalled_gone', 'repo_mismatch', 'search_index_unavailable', 'server_validation', 'status_not_memory', 'structure_conflict', 'suggestion_state_error', 'supersedes_removed', 'too_long', 'validation_error', 'other', 'none'] },
       duration_ms: { whole: [0, 3600000] },
       is_retry: { flag: true },
+      lookup: { oneOf: ['path', 'named', 'query', 'probe', 'brief', 'none'] },
     },
     question: {
       stage: { oneOf: ['held_back', 'shown', 'answered'] },

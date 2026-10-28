@@ -321,6 +321,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
         path.endsWith('/.git') &&
           (path.slice(0, -5) === world.session.repo?.root || Object.hasOwn(world.session.trees, path.slice(0, -5))),
       ),
+    // A replay has no agent to tell anything to.
+    send: () => Promise.resolve(false),
     // What git keeps about a tree, as far as Scribe reads it: the address of its origin.
     read: path => {
       const root = path.endsWith('/.git/config') ? path.slice(0, -12) : undefined

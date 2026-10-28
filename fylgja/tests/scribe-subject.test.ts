@@ -28,8 +28,13 @@ const OLD = fact(5, {
   content: 'Product analytics is a self-hosted PostHog on the prod box, not PostHog Cloud.',
   anchors: { paths: [{ path: 'src/analytics.ts' }] },
 })
-/** A server that holds `OLD` and gives it only to a lookup by words: no file of it has been touched. */
-const holding = { recall: (args: Record<string, unknown>) => answer({ facts: typeof args.query === 'string' ? [OLD] : [] }) }
+/**
+ * A server that holds `OLD` and gives it only to a lookup by a decision's own words: no file of it has been touched.
+ * The words of the developer's prompt, looked up in lower case and without a stop, find nothing here.
+ */
+const holding = {
+  recall: (args: Record<string, unknown>) => answer({ facts: typeof args.query === 'string' && /[A-Z.]/.test(args.query) ? [OLD] : [] }),
+}
 const relation = (relation: string) => () => JSON.stringify({ relation, id: idOf(5) })
 const steer = [dev(`go with the cloud for analytics ${TALK}`), claude('Agreed, the cloud it is.')]
 
@@ -62,6 +67,24 @@ describe('a new decision is held against what is already recorded on its subject
     await press($, 'replaces')
 
     expect(set.of('remember')[0]).toMatchObject({ content: NEW.content, supersedes: idOf(5) })
+  })
+
+  test('the recorded decision the prompt’s words found is asked about, and not also told beside the question', async ($, on) => {
+    const set = stage(on, {
+      tools: { recall: args => answer({ facts: typeof args.query === 'string' ? [OLD] : [] }) },
+      replies: [verdict({ records: [NEW] })],
+      relate: relation('contradicts'),
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...steer)
+
+    expect(set.of('recall')[0], 'the prompt’s words found it first').toEqual({ repo: 'acme/web', query: 'cloud analytics' })
+    expect(await shown($)).toMatch('[1 Yes, it replaces it]')
+
+    await press($, 'skip')
+
+    expect(await shown($), 'no tell of it comes up after').not.toMatch('Product analytics is a self-hosted PostHog')
   })
 
   test('one that refines a recorded decision is written with no question', async ($, on) => {

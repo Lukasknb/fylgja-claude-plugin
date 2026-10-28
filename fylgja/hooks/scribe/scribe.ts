@@ -35,7 +35,7 @@ import type { Scope } from './scope'
 import { gitIn } from './git'
 import type { Run } from './git'
 import { carried } from './carry'
-import { changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, plain } from './delta'
+import { AGENT_TOOLS, changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, pathsIn, plain } from './delta'
 import type { Landed, Offer, Row } from './delta'
 import { changedLine, factsOf, isAnchoredTo, knownReposIn } from './facts'
 import { REFUSED } from './grant'
@@ -60,6 +60,7 @@ import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReaso
 import { stateKey } from './verdict'
 import type { Seen } from './verdict'
 import { NO_STRONG_REASON, NOT_STATED, provenanceOf, viewOf } from './view'
+import { queryOf } from './words'
 import type { View } from './view'
 
 /** The engine calls Scribe makes, bound from one hook's `$`. */
@@ -105,6 +106,12 @@ export type ScribeHost = LoopHost & {
   /** Whether a file or folder is at `path` (`$.fs.stat`). */
   exists: (path: string) => Promise<boolean>
   /**
+   * `$.session.send` to an agent of the session: whether the text reached
+   * it. Used for one thing: the notes the developer asked, with a key, to
+   * have told to an agent at work.
+   */
+  send: (agentId: string, text: string) => Promise<boolean>
+  /**
    * `$.fs.read`: a file's text; rejects when it cannot be read. Used for one
    * thing: the files git keeps about a repository, to read its name.
    */
@@ -137,6 +144,9 @@ export type ScribeHost = LoopHost & {
  * it records is filed under the repositories its files lie in.
  */
 type Identity = { sessionId: string; repo: string | null; root: string }
+
+/** A file waiting to be looked up, in its repository; `isNamed` when it was only named, by a command, a search or a brief. */
+type Wanted = Place & { isNamed?: boolean }
 
 /** A working tree on this machine: where it begins, and the repository it is a checkout of, as `owner/name`. */
 type Tree = { root: string; repo: string }
@@ -292,7 +302,7 @@ export type Scribe = {
   /** The sentences asked about. */
   asked: string[]
   /** Files waiting to be looked up, each with the repository it lies in. */
-  paths: Place[]
+  paths: Wanted[]
   /** Every file the session touched, as its repository and its path there: looked up once. */
   lookedUp: Set<string>
   /**
@@ -447,6 +457,14 @@ export type Scribe = {
   isGranted: boolean
   /** Whether Fylgja has been asked at all in this session, got through or not. */
   hasAsked: boolean
+  /**
+   * The words of the developer's latest prompt that carry meaning: what is
+   * looked up when a look has no file to look up by. Held in the running
+   * plugin only.
+   */
+  query: string
+  /** Whether those words were looked up: once a prompt. */
+  isQueried: boolean
   /** Things said once: in the debug log, or on the status line. */
   said: Set<string>
   /** Counts the times the session started over; an answer from before is dropped. */
@@ -508,6 +526,14 @@ export type Scribe = {
   reportCount: number
   /** The agents whose report was taken: one report each. */
   reporters: Set<string>
+  /**
+   * The agents the main conversation started, by the id of the Agent tool's
+   * call: the brief each was given, and its id. What finds the agent a brief's
+   * records are told to.
+   */
+  agents: Map<string, { prompt: string; agentId: string }>
+  /** The agents whose turn has ended, however it ended: none of them is sent anything, which would start it again. */
+  finished: Set<string>
   /**
    * Gotchas a look took out of a report that the main conversation has not
    * confirmed yet, each with its agent and the report: written once it is
@@ -663,6 +689,12 @@ const MAX_PROMPTS = 100
 const FLUSH_BUDGET_MS = 20_000
 const PROBE = 'README.md'
 
+/** No more of the developer's prompt is looked up than this many characters of its words. */
+const MAX_QUERY_CHARS = 200
+
+/** No more files a step's commands, searches or agent's brief name are checked on the disk than this. */
+const MAX_NAMED = 20
+
 export function create(options: Options): Scribe {
   return {
     options,
@@ -747,6 +779,8 @@ export function create(options: Options): Scribe {
     own: new Set(),
     isGranted: false,
     hasAsked: false,
+    query: '',
+    isQueried: false,
     said: new Set(),
     epoch: 0,
     turn: 0,
@@ -770,6 +804,8 @@ export function create(options: Options): Scribe {
     reports: [],
     reportCount: 0,
     reporters: new Set(),
+    agents: new Map(),
+    finished: new Set(),
     unconfirmed: [],
     handled: new Set(),
     unsettled: [],
@@ -861,6 +897,8 @@ export function startOver(scribe: Scribe): void {
   scribe.deferred = []
   scribe.reports = []
   scribe.reporters.clear()
+  scribe.agents.clear()
+  scribe.finished.clear()
   scribe.unconfirmed = []
   scribe.handled.clear()
   lapse(scribe)
@@ -892,6 +930,8 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   scribe.carry = undefined
   scribe.isGranted = false
   scribe.hasAsked = false
+  scribe.query = ''
+  scribe.isQueried = false
   scribe.takesPaths = true
   scribe.takesBase = true
   scribe.takesScope = true
@@ -1961,7 +2001,13 @@ type Tried = { answer: Record<string, unknown> | undefined; refusal: string | un
  * itself turned down is no failure of the call: its words come back as the
  * refusal, to be read here and shown to nobody.
  */
-async function tried(host: ScribeHost, scribe: Scribe, tool: string, args: Record<string, unknown>): Promise<Tried> {
+async function tried(
+  host: ScribeHost,
+  scribe: Scribe,
+  tool: string,
+  args: Record<string, unknown>,
+  lookup: Lookup = 'none',
+): Promise<Tried> {
   const began = performance.now()
   // What came of the call, in one word of a fixed list; none of what was sent or answered.
   const came = (outcome: Word<'call', 'outcome'>, refusal?: string): void => {
@@ -1973,6 +2019,7 @@ async function tried(host: ScribeHost, scribe: Scribe, tool: string, args: Recor
         outcome,
         duration_ms: performance.now() - began,
         is_retry: scribe.isRetrying,
+        lookup,
         ...(outcome === 'refused' ? { refusal_code: refusalCodeOf(refusal) } : {}),
       })
     }
@@ -2054,14 +2101,24 @@ function refusalCodeOf(refusal: string | undefined): Word<'call', 'refusal_code'
   return code === undefined ? 'none' : wordOf(SCHEMA.events.call.refusal_code.oneOf, code, 'other')
 }
 
+/**
+ * What a lookup of Scribe's own looked up by, as it is reported: files
+ * Claude read or changed, files a command or a search named, the words of
+ * the developer's prompt, the file every repository has (asked only to know
+ * whether a call gets through), files an agent's brief named; `none` for
+ * any other call.
+ */
+type Lookup = Word<'call', 'lookup'>
+
 /** One tool call on Fylgja, for its answer alone; see `tried`. */
 async function call(
   host: ScribeHost,
   scribe: Scribe,
   tool: string,
   args: Record<string, unknown>,
+  lookup: Lookup = 'none',
 ): Promise<Record<string, unknown> | undefined> {
-  return (await tried(host, scribe, tool, args)).answer
+  return (await tried(host, scribe, tool, args, lookup)).answer
 }
 
 const LINES: Readonly<Record<string, string>> = {
@@ -3378,6 +3435,32 @@ async function apply(
   }
 }
 
+/** No more agents are kept by the call that started them than this; the oldest go first. */
+const MAX_AGENTS = 50
+
+/**
+ * The main conversation's call `toolUseId` of the Agent tool started an
+ * agent with `prompt` (`agent.spawn`, once it started): kept, to find the
+ * agent a brief's records are told to.
+ */
+export function spawned(scribe: Scribe, toolUseId: string, prompt: string, agentId: string): void {
+  scribe.agents.delete(toolUseId)
+  scribe.agents.set(toolUseId, { prompt, agentId })
+
+  for (const old of [...scribe.agents.keys()].slice(0, -MAX_AGENTS)) {
+    scribe.agents.delete(old)
+  }
+}
+
+/** An agent's turn ended, with a report or without (stopped, failed, nothing said): it is at work no longer. */
+export function agentEnded(scribe: Scribe, agentId: string): void {
+  scribe.finished.add(agentId)
+
+  for (const old of [...scribe.finished].slice(0, -MAX_AGENTS * 4)) {
+    scribe.finished.delete(old)
+  }
+}
+
 /**
  * An agent handed its final report back (`turn.complete` of its run). The
  * report is held for the next look, and nothing else of the agent is read:
@@ -3536,17 +3619,26 @@ function lapse(scribe: Scribe): void {
  * record anchored to one of those very files is offered to the developer;
  * one anchored to a folder above is kept for the next wake to judge.
  *
- * @param isProbe with no file waiting, ask all the same, about a file every
- *   repository has: whether the call gets through is what is asked
+ * With no file waiting, the session's own repository is asked about the
+ * words of the developer's latest prompt, once a prompt (`queried`): by a
+ * look at a turn's end, or by the first look of a session, whose call
+ * decides whether Scribe runs at all. A look inside a turn does not wait on
+ * it: it looks now because a compaction is near or the developer just
+ * answered, and the lookup's call would be served only by a later step.
+ *
+ * @param isProbe with no file waiting and no words to ask about, ask all
+ *   the same, about a file every repository has: whether the call gets
+ *   through is what is asked
+ * @param isInside the look is one inside a turn
  */
-async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe = false): Promise<void> {
+async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe = false, isInside = false): Promise<void> {
   const waiting = scribe.paths.slice(0, MAX_LOOKUP_PATHS)
   // Each repository is asked about its own files, from its own root.
-  const byRepo = new Map<string, string[]>()
+  const byRepo = new Map<string, Wanted[]>()
 
   for (const place of waiting) {
     if (byRepo.has(place.repo) || byRepo.size < MAX_LOOKUP_REPOS) {
-      byRepo.set(place.repo, [...(byRepo.get(place.repo) ?? []), place.path])
+      byRepo.set(place.repo, [...(byRepo.get(place.repo) ?? []), place])
     }
   }
 
@@ -3554,20 +3646,70 @@ async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe =
 
   if (byRepo.size === 0) {
     // With no repository of its own and no file of one touched yet, there is nothing to ask about.
-    if (!isProbe || who.repo === null) {
+    if (who.repo === null) {
+      return
+    }
+
+    if (scribe.query !== '' && !scribe.isQueried && (isProbe || !isInside)) {
+      if (await queried(host, scribe, who.repo)) {
+        settle(host, scribe)
+      }
+
+      return
+    }
+
+    if (!isProbe) {
       return
     }
 
     byRepo.set(who.repo, [])
   }
 
-  for (const [repo, files] of byRepo) {
-    if ((await recalled(host, scribe, repo, files)) === undefined) {
+  for (const [repo, places] of byRepo) {
+    const files = places.map(place => place.path)
+    // Files only named, by a command, a search or a brief, are looked up as named; with one the session opened among them, by path.
+    const how: Lookup = files.length === 0 ? 'probe' : places.every(place => place.isNamed === true) ? 'named' : 'path'
+
+    if ((await recalled(host, scribe, repo, files, false, how)) === undefined) {
       return
     }
   }
 
   settle(host, scribe)
+}
+
+/**
+ * Asks Fylgja what is recorded on what the developer's latest prompt is
+ * about, by its words. The record it ranks first, unless it is the
+ * session's own, is offered to the developer as a record about the code in
+ * hand is; Fylgja returns only what clears its own bar of relevance, so
+ * nothing at all may come. The rest are kept for the next wake to judge.
+ *
+ * @returns whether the conversation is still the one that asked
+ */
+async function queried(host: ScribeHost, scribe: Scribe, repo: string): Promise<boolean> {
+  const { epoch } = scribe
+
+  scribe.isQueried = true
+
+  const facts = factsOf(await call(host, scribe, 'recall', { repo, query: scribe.query }, 'query'))
+
+  if (epoch !== scribe.epoch) {
+    return false
+  }
+
+  const others = facts.filter(fact => !scribe.written.some(own => own.id === fact.id))
+  const top = others.find(fact => !scribe.own.has(fact.id))
+
+  for (const fact of others) {
+    scribe.anchored.set(fact.id, fact)
+  }
+
+  if (top !== undefined) {
+    Band.offerTell(scribe.band, top)
+  }
+
+  return true
 }
 
 /**
@@ -3590,16 +3732,23 @@ async function recalled(
   repo: string,
   files: readonly string[],
   isAgain = false,
+  how: Lookup = 'path',
 ): Promise<string[] | undefined> {
   const { epoch } = scribe
   // Asked again for particular records, it is asked for as many as Fylgja
   // gives of one lookup: a marked record past that number is not found here.
   const facts = factsOf(
-    await call(host, scribe, 'recall', {
-      repo,
-      paths: files.length === 0 ? [PROBE] : files,
-      ...(isAgain ? { limit: MOST_RECALLED } : {}),
-    }),
+    await call(
+      host,
+      scribe,
+      'recall',
+      {
+        repo,
+        paths: files.length === 0 ? [PROBE] : files,
+        ...(isAgain ? { limit: MOST_RECALLED } : {}),
+      },
+      how,
+    ),
   )
 
   if (epoch !== scribe.epoch) {
@@ -3698,22 +3847,76 @@ function placed(host: ScribeHost, scribe: Scribe, who: Identity, files: readonly
     : limited(host.after, placesOf(host, scribe, who, files), PLACE_WAIT_MS).catch(() => undefined)
 }
 
-/** Notes files the session touched, each in its repository: to be looked up once. */
-function wanted(scribe: Scribe, who: Identity, places: readonly Place[]): void {
-  for (const place of places) {
+/**
+ * Notes files the session touched, or only named, each in its repository:
+ * to be looked up once.
+ *
+ * @param isNamed the files were only named, by a command, a search or a brief
+ */
+function wanted(scribe: Scribe, who: Identity, places: readonly Place[], isNamed = false): void {
+  for (const place of toLookUp(scribe, who, places)) {
+    scribe.paths.push(isNamed ? { ...place, isNamed } : place)
+  }
+}
+
+/**
+ * Those of `places` that are still to be looked up, each noted as looked
+ * up from here on. A repository the session only reads in (a clone of
+ * somebody's plugin, another checkout it looks something up in) is not
+ * asked about.
+ */
+function toLookUp(scribe: Scribe, who: Identity, places: readonly Place[]): Place[] {
+  return places.filter(place => {
     const key = `${place.repo}\u0000${place.path}`
 
-    // A repository the session only reads in (a clone of somebody's plugin,
-    // another checkout it looks something up in) is not asked about.
-    if (place.repo !== who.repo && !scribe.editedRepos.has(place.repo)) {
-      continue
+    if ((place.repo !== who.repo && !scribe.editedRepos.has(place.repo)) || scribe.lookedUp.has(key)) {
+      return false
     }
 
-    if (!scribe.lookedUp.has(key)) {
-      scribe.lookedUp.add(key)
-      scribe.paths.push(place)
+    scribe.lookedUp.add(key)
+
+    return true
+  })
+}
+
+/**
+ * Where each of `files`, only named and not opened, lies: its repository
+ * and its path there. Only a file that is there, inside a working tree
+ * Scribe already knows (the session's own, or one found for a file it
+ * opened), is taken. Nothing of it is kept as a place a record may be
+ * anchored to: a record points only at files the session opened.
+ *
+ * @param files absolute paths
+ */
+async function namedPlaces(host: ScribeHost, scribe: Scribe, who: Identity, files: readonly string[]): Promise<Named[]> {
+  const roots = [
+    ...(who.repo === null ? [] : [who.root]),
+    ...[...scribe.trees.values()].flatMap(tree => (tree === null ? [] : [tree.root])),
+  ].map(root => root.replace(/\/+$/, ''))
+  const inside = files.filter(file => roots.some(root => file.startsWith(`${root}/`))).slice(0, MAX_NAMED)
+  const there = await Promise.all(inside.map(file => host.exists(file).catch(() => false)))
+  const places: Named[] = []
+
+  for (const [at, file] of inside.entries()) {
+    const tree = there[at] === true ? await treeAt(host, scribe, who, file.slice(0, file.lastIndexOf('/'))) : null
+    const path = tree === null ? undefined : relativeTo(tree.root, file)
+
+    if (tree !== null && path !== undefined && !places.some(place => place.repo === tree.repo && place.path === path)) {
+      places.push({ repo: tree.repo, path, file })
     }
   }
+
+  return places
+}
+
+/** A place of a file only named, with the file's absolute path. */
+type Named = Place & { file: string }
+
+/** `namedPlaces`, waited for no longer than `PLACE_WAIT_MS`; none when it took longer. */
+function namedPlaced(host: ScribeHost, scribe: Scribe, who: Identity, files: readonly string[]): Promise<Named[]> {
+  return files.length === 0
+    ? Promise.resolve([])
+    : limited(host.after, namedPlaces(host, scribe, who, files), PLACE_WAIT_MS).catch(() => [])
 }
 
 /**
@@ -3740,8 +3943,9 @@ export async function stepped(
     return
   }
 
+  const opened = filesOf(uses, who.root)
   // Bounded: the disk is read here, and the turn is not held by it.
-  const places = (await placed(host, scribe, who, filesOf(uses, who.root))) ?? []
+  const places = (await placed(host, scribe, who, opened)) ?? []
 
   // A file the step writes or changes makes its repository one the session works in.
   for (const file of changesOf(uses, who.root).files) {
@@ -3754,6 +3958,29 @@ export async function stepped(
 
   wanted(scribe, who, places)
 
+  // The files the step's commands and searches only name are looked up as
+  // the files it opens are, those that are there: bounded the same way.
+  const cwd = await host.cwd().catch(() => who.root)
+  const named = uses
+    .filter(use => !AGENT_TOOLS.has(use.name))
+    .flatMap(use => pathsIn(use, who.root, cwd).flatMap(one => (one.how === 'named' && !opened.includes(one.path) ? [one.path] : [])))
+
+  wanted(
+    scribe,
+    who,
+    (await namedPlaced(host, scribe, who, [...new Set(named)])).map(({ repo, path }) => ({ repo, path })),
+    true,
+  )
+
+  // Agents about to start: what is recorded about the files their briefs name is looked up now, while they can still be told.
+  await briefed(
+    host,
+    scribe,
+    who,
+    uses.filter(one => AGENT_TOOLS.has(one.name)),
+    cwd,
+  )
+
   if ((index + 1) % LOOKUP_EVERY !== 0 || scribe.paths.length === 0 || (await connected(host)) === undefined) {
     return
   }
@@ -3763,6 +3990,85 @@ export async function stepped(
     lookUp(host, scribe, who).catch(() => undefined),
     LOOKUP_WAIT_MS,
   )
+}
+
+/**
+ * Agents are about to start with `uses`, the main conversation's calls of
+ * the Agent tool in one step. What is recorded about the files their briefs
+ * name, those that are there in a repository the session is asked about,
+ * is looked up at once, in one lookup for all of them, waited for no longer
+ * than any lookup of a step; the records anchored to those very files are
+ * offered as one tell, for the developer to have them told to the agents.
+ * A turn that has had its tell looks nothing up. Each file is looked up
+ * once in a session, by a brief or otherwise.
+ */
+async function briefed(
+  host: ScribeHost,
+  scribe: Scribe,
+  who: Identity,
+  uses: readonly { name: string; input: unknown }[],
+  cwd: string,
+): Promise<void> {
+  const briefs = uses.flatMap(use => {
+    const input = isRecord(use.input) ? use.input : {}
+    const prompt = typeof input.prompt === 'string' ? input.prompt : ''
+    const files = pathsIn(use, who.root, cwd).map(one => one.path)
+
+    return prompt === '' || files.length === 0 ? [] : [{ prompt, files }]
+  })
+
+  if (briefs.length === 0 || scribe.band.tellsThisTurn >= Band.MAX_TELLS_PER_TURN || (await connected(host)) === undefined) {
+    return
+  }
+
+  const placed = await namedPlaced(host, scribe, who, [...new Set(briefs.flatMap(one => one.files))])
+  const asked = new Set(toLookUp(scribe, who, placed))
+  const places = placed.filter(place => asked.has(place)).slice(0, MAX_LOOKUP_PATHS)
+  const byRepo = new Map<string, string[]>()
+
+  for (const place of places) {
+    if (byRepo.has(place.repo) || byRepo.size < MAX_LOOKUP_REPOS) {
+      byRepo.set(place.repo, [...(byRepo.get(place.repo) ?? []), place.path])
+    }
+  }
+
+  const look = async (): Promise<void> => {
+    const { epoch } = scribe
+    const found: Fact[] = []
+
+    for (const [repo, paths] of byRepo) {
+      const facts = factsOf(await call(host, scribe, 'recall', { repo, paths }, 'brief'))
+
+      if (epoch !== scribe.epoch) {
+        return
+      }
+
+      for (const fact of facts) {
+        if (scribe.written.some(own => own.id === fact.id)) {
+          continue
+        }
+
+        scribe.anchored.set(fact.id, fact)
+
+        if (isAnchoredTo(fact, paths) && !scribe.own.has(fact.id)) {
+          found.push(fact)
+        }
+      }
+    }
+
+    const told = briefs.map(one => ({
+      prompt: one.prompt,
+      paths: places.filter(place => one.files.includes(place.file)).map(place => place.path),
+    }))
+
+    if (Band.offerBrief(scribe.band, found, told)) {
+      settle(host, scribe)
+    }
+  }
+
+  if (byRepo.size > 0) {
+    await within(host, look().catch(() => undefined), LOOKUP_WAIT_MS)
+  }
 }
 
 /**
@@ -4993,7 +5299,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
       cut,
       within(
         host,
-        lookUp(host, scribe, who).catch(() => undefined),
+        lookUp(host, scribe, who, false, isInside).catch(() => undefined),
         LOOKUP_WAIT_MS,
       ),
     )
@@ -5354,6 +5660,9 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
   // The developer's own words are kept for the session: a reason they gave
   // is looked for here before they are asked for it.
   spoke(scribe, plain(text))
+  // What the prompt is about, for a look that has no file to look up by.
+  scribe.query = queryOf(plain(text), MAX_QUERY_CHARS)
+  scribe.isQueried = false
 
   for (const old of scribe.prompts) {
     if (scribe.prompts.size <= MAX_PROMPTS) {
@@ -5402,6 +5711,11 @@ function quoted(text: string, max: number): string {
 
 /** A record as a note for the prompt box: quoted, every line made safe, and said to be information. */
 function noteOf(lead: string, fact: Fact): string {
+  return `${lead}\n\n${quoteOf(fact)}\n\n`
+}
+
+/** A record quoted for a note: its sentence, its reason, what was rejected, whether its code changed, and which record it is. */
+function quoteOf(fact: Fact): string {
   const quote = [
     `${fact.kind === 'gotcha' ? 'Gotcha' : fact.kind === 'decision' ? 'Decision' : 'Record'}: ${quoted(fact.content, MAX_CONTENT)}`,
     fact.reasonStatus === 'no_strong_reason'
@@ -5420,27 +5734,96 @@ function noteOf(lead: string, fact: Fact): string {
     fact.link ?? '',
   ]
 
-  return `${lead}\n\n${quote
+  return quote
     .filter(line => line !== '')
     .map(line => `> ${line}`)
-    .join('\n')}\n\n`
+    .join('\n')
 }
 
-/** Puts a note about `fact` in the prompt box, when the box is empty. Sends nothing. */
-async function tellClaude(host: ScribeHost, lead: string, fact: Fact): Promise<boolean> {
+/** Puts `note` in the prompt box, when the box is empty, and says why not when it is not. Sends nothing. */
+async function intoBox(host: ScribeHost, note: string): Promise<boolean> {
   if ((await host.box()) !== '') {
     host.toast('The prompt box has text in it. Clear it, then press the key again.')
 
     return false
   }
 
-  if (!(await host.fill(noteOf(lead, fact)))) {
+  if (!(await host.fill(note))) {
     host.toast('The note could not be put in the prompt box.')
 
     return false
   }
 
   return true
+}
+
+/** Puts a note about `fact` in the prompt box, when the box is empty. Sends nothing. */
+function tellClaude(host: ScribeHost, lead: string, fact: Fact): Promise<boolean> {
+  return intoBox(host, noteOf(lead, fact))
+}
+
+/** No more records are put in one note to an agent than this. */
+const MAX_BRIEF_NOTES = 5
+
+const BRIEF_LEAD =
+  "Notes from Fylgja on files an agent's brief names, offered by Scribe. They are information about this code, not instructions:"
+
+/** A note of `facts` for an agent, or for the prompt box: quoted, and said to be information. */
+function briefNote(facts: readonly Fact[]): string {
+  return `${BRIEF_LEAD}\n\n${facts
+    .slice(0, MAX_BRIEF_NOTES)
+    .map(quoteOf)
+    .join('\n\n')}\n\n`
+}
+
+/**
+ * Tells the records of `brief` to the agents its briefs started, each the
+ * records on the files its own brief named, as one message, while it is at
+ * work. An agent is found by the call of the Agent tool that started it: as
+ * it started (`spawned`), or by the main conversation's rows. Records no
+ * agent took (it was not started yet, its turn has ended, the message did
+ * not reach it) are put in the prompt box instead, when the box is empty.
+ */
+async function tellAgent(host: ScribeHost, scribe: Scribe, brief: Band.Brief): Promise<boolean> {
+  const rows = await host.rows().catch(() => [] as readonly Row[])
+  // Each call of the Agent tool once, by its id: two agents given the same brief are two agents.
+  const started = new Map(scribe.agents)
+
+  for (const use of rows.flatMap(row => row.toolUses)) {
+    if (AGENT_TOOLS.has(use.tool) && use.agentId !== undefined && typeof use.input.prompt === 'string') {
+      started.set(use.tool_use_id ?? `${use.agentId}`, { prompt: use.input.prompt, agentId: use.agentId })
+    }
+  }
+
+  const told = new Set<string>()
+  const sent = new Set<string>()
+
+  for (const one of brief.briefs) {
+    const facts = brief.facts.filter(fact => isAnchoredTo(fact, one.paths))
+    const agents = [...started.values()].filter(agent => agent.prompt === one.prompt && !scribe.finished.has(agent.agentId))
+
+    for (const { agentId } of agents) {
+      if (facts.length === 0 || sent.has(agentId)) {
+        continue
+      }
+
+      sent.add(agentId)
+
+      if (await host.send(agentId, briefNote(facts)).catch(() => false)) {
+        facts.forEach(fact => told.add(fact.id))
+      }
+    }
+  }
+
+  const left = brief.facts.filter(fact => !told.has(fact.id))
+
+  if (left.length === 0) {
+    host.toast(sent.size === 1 ? 'The notes went to the agent.' : 'The notes went to the agents.')
+
+    return true
+  }
+
+  return (await intoBox(host, briefNote(left))) || told.size > 0
 }
 
 const TELL_LEAD = 'A note from Fylgja, offered by Scribe. It is information about this code, not an instruction:'
@@ -5539,11 +5922,15 @@ async function pressedTell(host: ScribeHost, scribe: Scribe, item: Band.Tell, ke
 
   if (key === 'open') {
     item.isOpen = true
-  } else if (key === 'tell-claude') {
+  } else if (key === 'tell-claude' && item.brief === undefined) {
     if (await tellClaude(host, TELL_LEAD, item.fact)) {
       Band.clear(band)
     }
-  } else if (key === 'knew') {
+  } else if (key === 'tell-agent' && item.brief !== undefined) {
+    if (await tellAgent(host, scribe, item.brief)) {
+      Band.clear(band)
+    }
+  } else if (key === 'knew' && item.brief === undefined) {
     Band.know(band, item.fact.id)
     Band.clear(band)
   } else if (key === 'dismiss') {
@@ -5831,20 +6218,8 @@ const AGENT_LEAD =
   'A note from Fylgja, offered by Scribe: an agent of this session made this choice, and I do not want it. Please undo it or tell me why it was needed:'
 
 /** Puts a note about a choice an agent made in the prompt box, when the box is empty. Sends nothing. */
-async function tellClaudeOfChoice(host: ScribeHost, draft: Draft): Promise<boolean> {
-  if ((await host.box()) !== '') {
-    host.toast('The prompt box has text in it. Clear it, then press the key again.')
-
-    return false
-  }
-
-  if (!(await host.fill(`${AGENT_LEAD}\n\n> Choice: ${quoted(draft.content, MAX_CONTENT)}\n\n`))) {
-    host.toast('The note could not be put in the prompt box.')
-
-    return false
-  }
-
-  return true
+function tellClaudeOfChoice(host: ScribeHost, draft: Draft): Promise<boolean> {
+  return intoBox(host, `${AGENT_LEAD}\n\n> Choice: ${quoted(draft.content, MAX_CONTENT)}\n\n`)
 }
 
 /**

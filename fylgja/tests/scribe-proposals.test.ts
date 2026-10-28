@@ -11,8 +11,13 @@ const FLOATED = decision({ content: STATE, detail: '', reason_status: 'not_state
 /** The same decision once the developer committed to it, settling the one held. */
 const AGREED = decision({ content: STATE, detail: 'One field cannot disagree with itself.', anchors: [], settles: 'p1' })
 const OLD = fact(5, { content: 'Each invoice line keeps a separate void flag beside its state.', anchors: { paths: [{ path: 'src/invoice.ts' }] } })
-/** A server that holds `OLD` and gives it to any lookup by words. */
-const holding = { recall: (args: Record<string, unknown>) => answer({ facts: typeof args.query === 'string' ? [OLD] : [] }) }
+/**
+ * A server that holds `OLD` and gives it to a lookup by a decision's own words. The words of the developer's prompt,
+ * looked up in lower case and without a stop, find nothing here: what this file is about is the decision's subject.
+ */
+const holding = {
+  recall: (args: Record<string, unknown>) => answer({ facts: typeof args.query === 'string' && /[A-Z.]/.test(args.query) ? [OLD] : [] }),
+}
 const contradicts = () => JSON.stringify({ relation: 'contradicts', id: idOf(5) })
 const floating = [dev(`what if each invoice line had one state field instead of the void flags? ${TALK}`), claude('That could work; it would replace the flags.')]
 const agreeing = [dev(`yes, let's do that ${TALK}`), claude('Going with the one state field.')]

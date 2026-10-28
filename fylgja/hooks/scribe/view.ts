@@ -184,8 +184,55 @@ function holds(names: readonly string[] | undefined): Row[] {
     : [{ parts: [{ text: drawn(forLine(names ?? []), MAX_CONTENT), tone: 'dim' }] }]
 }
 
+/** What the band says of the records on files the briefs of `agents` agents name. */
+export function briefLine(count: number, agents = 1): string {
+  return `${count} ${count === 1 ? 'record' : 'records'} on files ${agents === 1 ? "this agent's brief names" : "these agents' briefs name"}`
+}
+
+/**
+ * The records on files an agent's brief names, as one card: how many, and
+ * opened, each record with the line that says its code changed and who
+ * wrote it down.
+ */
+function brief(band: Band, item: Item & { kind: 'tell' }, facts: readonly Fact[], agents: number): View {
+  const tellAgent: Key = { key: 'tell-agent', hotkey: '1', label: 'Tell agent' }
+  const dismiss: Key = { key: 'dismiss', hotkey: '0', label: 'Dismiss' }
+  const count: Row = { parts: [mark(glyphOf('decision')), { text: briefLine(facts.length, agents), tone: 'strong' }] }
+
+  if (!item.isOpen) {
+    return {
+      register: 'tells',
+      head: 'has notes on the code an agent is given',
+      note: NOTES.told,
+      rows: [count],
+      keys: withAbout(band, [tellAgent, { key: 'open', hotkey: '2', label: 'Open' }, dismiss]),
+    }
+  }
+
+  return {
+    register: 'tells',
+    head: 'has notes on the code an agent is given',
+    note: NOTES.told,
+    rows: [
+      count,
+      ...facts.flatMap(fact => [
+        { parts: headline(fact) },
+        ...holds(fact.appliesTo),
+        ...changed(fact),
+        { parts: [{ text: provenanceOf(fact), tone: 'dim' } as const] },
+      ]),
+    ],
+    keys: [tellAgent, dismiss],
+  }
+}
+
 function tell(band: Band, item: Item & { kind: 'tell' }): View {
   const { fact } = item
+
+  if (item.brief !== undefined) {
+    return brief(band, item, item.brief.facts, new Set(item.brief.briefs.map(one => one.prompt)).size)
+  }
+
   const rest: Key[] = [
     { key: 'tell-claude', hotkey: '2', label: 'Tell Claude' },
     twice(band, 'knew', '3', 'Knew this'),

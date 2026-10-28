@@ -9,9 +9,10 @@
  */
 
 import { isRecord } from '../payload'
+import { withoutLine } from './gate'
 import { isPlanDocument, PLAN_MODE } from './plans'
 import { relativeTo } from './repo'
-import { cleared, countIn, namedAfter } from './staged'
+import { cleared, countIn, folderAfter, isSeparator, isUnsure, namedAfter, shellWords } from './staged'
 import type { Away, Index, Step, Whole } from './staged'
 
 /** A row of the conversation, as much of it as is read here. */
@@ -68,8 +69,6 @@ export type Seen = {
   lines: string[]
   /** How many lines the cut left out. */
   dropped: number
-  /** Files of the working tree Claude read or changed, each once, as paths from its root. */
-  touched: string[]
   /**
    * Every file Claude read or changed, wherever it lies, each once, as an
    * absolute path: which repository each belongs to is found out from these.
@@ -501,7 +500,6 @@ export function isPrompt(row: Row, prompts: ReadonlySet<string>): boolean {
  */
 export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet<string>, index: Index = cleared(false)): Seen {
   const lines: string[] = []
-  const touched = new Set<string>()
   const files = new Set<string>()
   const changed = new Set<string>()
   const commits: string[] = []
@@ -601,27 +599,21 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
         lines.push(line)
       }
 
-      const file = FILE_TOOLS.has(use.tool) ? fileOf(input) : undefined
-      const path = file === undefined ? undefined : relativeTo(root, file)
-
-      if (file !== undefined) {
-        files.add(absolute(root, file))
+      // Only the files the call opens: one a command or a search only names is no file of the turn's.
+      for (const { path, how } of pathsIn({ name: use.tool, input }, root)) {
+        files.add(path)
         // A change counts wherever the file lies: the session may be working in another repository.
-        hasChange ||= CHANGING.has(use.tool) && !isError
+        hasChange ||= how === 'changed' && !isError
 
-        if (CHANGING.has(use.tool) && !isError) {
-          changed.add(absolute(root, file))
-          since.add(absolute(root, file))
+        if (how === 'changed' && !isError) {
+          changed.add(path)
+          since.add(path)
 
           // The tool says when it wrote a file that was not there; any other wording counts as a file that was.
           if (use.tool === 'Write' && /^File created\b/.test(use.text ?? '')) {
-            created.add(absolute(root, file))
+            created.add(path)
           }
         }
-      }
-
-      if (path !== undefined) {
-        touched.add(path)
       }
 
       const sha = use.tool === 'Bash' && typeof input.command === 'string' ? commitOf(input.command, use.text, root) : undefined
@@ -693,7 +685,6 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
   return {
     lines,
     dropped,
-    touched: [...touched],
     files: [...files],
     changed: [...changed],
     acts,
@@ -716,6 +707,173 @@ export function observe(rows: readonly Row[], root: string, prompts: ReadonlySet
 // A line of files read that worked, to which the next file read is added.
 const READS = /^\[tool\] Read .* ok$/
 
+/** A file one tool call names, as an absolute path, and how: read, written or changed, or only named. */
+export type Named = { path: string; how: 'read' | 'changed' | 'named' }
+
+/** No more files of one tool call are taken than this. */
+const MAX_NAMED_IN_CALL = 50
+
+/** The tools whose call starts an agent: what they name lies in the brief they hand it. */
+export const AGENT_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task'])
+
+/**
+ * A path as it is written, without a line or a range at its end, a `./`
+ * before it or a `/` after it; undefined where it cannot be taken at its
+ * word: a flag, a setting, a pattern, a variable, a substitution, a quote,
+ * or a `..`, which leads out of wherever it was said.
+ */
+function bareOf(word: string): string | undefined {
+  const path = withoutLine(word).replace(/^(?:\.\/)+/, '')
+  const bare = path.length > 1 ? path.replace(/\/+$/, '') : path
+
+  return bare === '' || bare === '.' || bare.startsWith('-') || bare.includes('=') || isUnsure(bare) || bare.split('/').includes('..')
+    ? undefined
+    : bare
+}
+
+/** A word that names a file or a folder (it holds a `/`, or ends in a file's extension), as `bareOf` leaves it; undefined for any other. */
+function pathWord(word: string): string | undefined {
+  const bare = bareOf(word)
+
+  return bare !== undefined && (bare.includes('/') || /\.[A-Za-z0-9]{1,10}$/.test(bare)) ? bare : undefined
+}
+
+/** `path` made absolute from `folder`; undefined for a path from a folder that is not known. */
+function from(folder: string | undefined, path: string): string | undefined {
+  return path.startsWith('/') ? path : folder === undefined ? undefined : `${folder.replace(/\/+$/, '')}/${path}`
+}
+
+/** No more words of one command or one brief are read for paths than this. */
+const MAX_WORDS = 2000
+
+/**
+ * The paths a shell command names, each made absolute from the folder its
+ * words are read in: `cwd`, then wherever each `cd` before it left the
+ * shell, or for one git command the folder its `-C` names. The bodies of
+ * here-documents are text and name nothing; past a `cd` that cannot be
+ * followed, a path not written in full is not taken.
+ */
+function namedBy(command: string, cwd: string): string[] {
+  const named: string[] = []
+  // Where the shell is, and where the words of the command in hand are read from.
+  let folder: string | undefined = cwd
+  let here: string | undefined = cwd
+  let first: string | undefined
+  // The word before: one whose value is a folder (`cd`'s, git's `-C`) is no path to look up.
+  let takes: 'cd' | 'git-c' | undefined
+
+  for (const word of (shellWords(command) ?? []).slice(0, MAX_WORDS)) {
+    if (isSeparator(word)) {
+      first = undefined
+      here = folder
+      continue
+    }
+
+    // Settings given to one command stand before it.
+    if (first === undefined && /^[A-Za-z_]\w*=/.test(word)) {
+      continue
+    }
+
+    if (first === undefined) {
+      first = word
+      // A folder changed in a way not followed here: only paths written in full are taken after it.
+      folder = /^\(|^(?:pushd|popd)$/.test(word) ? undefined : folder
+      here = folder
+      takes = word === 'cd' ? 'cd' : undefined
+
+      if (takes !== undefined) {
+        continue
+      }
+    } else if (takes === 'cd') {
+      folder = folderAfter(folder, word)
+      here = folder
+      takes = undefined
+      continue
+    } else if (takes === 'git-c') {
+      here = folderAfter(here, word)
+      takes = undefined
+      continue
+    } else if (first === 'git' && word === '-C') {
+      takes = 'git-c'
+      continue
+    }
+
+    const path = pathWord(word)
+    const full = path === undefined ? undefined : from(here, path)
+
+    if (full !== undefined) {
+      named.push(full)
+    }
+  }
+
+  return named
+}
+
+/**
+ * The paths prose names, an agent's brief: each word with the marks that
+ * stand around a path in text (backticks, quotes, brackets, a sentence's
+ * stops) taken off, made absolute from `cwd`.
+ */
+function namedIn(text: string, cwd: string): string[] {
+  return text
+    .split(/\s+/)
+    .slice(0, MAX_WORDS)
+    .flatMap(word => {
+    const path = pathWord(word.replace(/^[`"'(<[{]+/, '').replace(/[`"')>\]},.;!?]+$/, '').replace(/:$/, ''))
+
+    const full = path === undefined ? undefined : from(cwd, path)
+
+    return full === undefined ? [] : [full]
+  })
+}
+
+/**
+ * The files one tool call names, each once, as absolute paths, and how:
+ * read, or written or changed, by a tool that works on a file (made
+ * absolute from the working tree's root, as the tool's own line names it);
+ * or only named, by a shell command, by the folder a search looks in, or by
+ * the brief an agent is handed (made absolute from `cwd`). Whether a named
+ * one is there at all is not known here. No more than `MAX_NAMED_IN_CALL`.
+ *
+ * @param root the working tree's root
+ * @param cwd the folder the session is in; without it, only the files the call opens are read
+ */
+export function pathsIn(use: { name: string; input: unknown }, root: string, cwd?: string): Named[] {
+  const input = isRecord(use.input) ? use.input : {}
+  const found = new Map<string, Named>()
+  const add = (path: string, how: Named['how']): void => {
+    if (!found.has(path) && found.size < MAX_NAMED_IN_CALL) {
+      found.set(path, { path, how })
+    }
+  }
+
+  if (FILE_TOOLS.has(use.name)) {
+    const file = fileOf(input)
+
+    if (file !== undefined) {
+      add(absolute(root, file), CHANGING.has(use.name) ? 'changed' : 'read')
+    }
+  } else if (cwd === undefined) {
+    // Only the files the call opens are asked for.
+  } else if (use.name === 'Bash' && typeof input.command === 'string') {
+    namedBy(input.command, cwd).forEach(path => add(path, 'named'))
+  } else if ((use.name === 'Grep' || use.name === 'Glob') && typeof input.path === 'string') {
+    // Given as a path, it is one, whatever it looks like.
+    const path = bareOf(input.path)
+    const full = path === undefined ? undefined : from(cwd, path)
+
+    if (full !== undefined) {
+      add(full, 'named')
+    }
+  } else if (AGENT_TOOLS.has(use.name)) {
+    const brief = [input.description, input.prompt].filter((one): one is string => typeof one === 'string').join('\n')
+
+    namedIn(brief, cwd).forEach(path => add(path, 'named'))
+  }
+
+  return [...found.values()]
+}
+
 /** The files one step's tool calls write or change, as absolute paths, and whether one of them is a git commit. */
 export function changesOf(
   uses: readonly { name: string; input: unknown }[],
@@ -726,10 +884,11 @@ export function changesOf(
 
   for (const use of uses) {
     const input = isRecord(use.input) ? use.input : {}
-    const file = CHANGING.has(use.name) ? fileOf(input) : undefined
 
-    if (file !== undefined && !files.includes(absolute(root, file))) {
-      files.push(absolute(root, file))
+    for (const { path, how } of pathsIn(use, root)) {
+      if (how === 'changed' && !files.includes(path)) {
+        files.push(path)
+      }
     }
 
     hasCommit ||= use.name === 'Bash' && typeof input.command === 'string' && /\bgit\b[^\n]*\bcommit\b/.test(input.command)
@@ -738,37 +897,7 @@ export function changesOf(
   return { files, hasCommit }
 }
 
-/** The files one step's tool calls name, wherever they lie, as absolute paths: what Claude is about to read or change. */
+/** The files one step's tool calls read, write or change, wherever they lie, as absolute paths: what Claude is about to work on. */
 export function filesOf(uses: readonly { name: string; input: unknown }[], root: string): string[] {
-  const files: string[] = []
-
-  for (const use of uses) {
-    const file = FILE_TOOLS.has(use.name) && isRecord(use.input) ? fileOf(use.input) : undefined
-    const path = file === undefined ? undefined : absolute(root, file)
-
-    if (path !== undefined && !files.includes(path)) {
-      files.push(path)
-    }
-  }
-
-  return files
-}
-
-/**
- * The files of the working tree one step's tool calls name, as paths from
- * its root: what Claude is about to read or change.
- */
-export function pathsOf(uses: readonly { name: string; input: unknown }[], root: string): string[] {
-  const paths: string[] = []
-
-  for (const use of uses) {
-    const file = FILE_TOOLS.has(use.name) && isRecord(use.input) ? fileOf(use.input) : undefined
-    const path = file === undefined ? undefined : relativeTo(root, file)
-
-    if (path !== undefined && !paths.includes(path)) {
-      paths.push(path)
-    }
-  }
-
-  return paths
+  return [...new Set(uses.flatMap(use => pathsIn(use, root).map(one => one.path)))]
 }
