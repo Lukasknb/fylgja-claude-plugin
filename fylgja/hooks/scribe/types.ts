@@ -154,6 +154,11 @@ export type Fact = {
   changed: string[] | null
   /** Its path anchors with what Fylgja holds of their code; only on a lookup by paths. */
   printed?: Printed[]
+  /**
+   * The files a lookup by paths asked about that the record is anchored to
+   * itself, as Fylgja names them; none on any other lookup.
+   */
+  matchedPaths: string[]
   /** The organizations it holds for alone, by Fylgja's names for them; none when it holds generally. */
   appliesTo?: string[]
 }

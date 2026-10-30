@@ -3,6 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { LOOKUP_WAIT_MS, PLACE_WAIT_MS } from '../hooks/scribe/scribe'
+import { NOTES } from '../hooks/scribe/view'
 import { answer, idOf } from './fixtures'
 import {
   claude,
@@ -214,7 +215,8 @@ describe('the files an agent’s brief names are looked up as it starts, for the
 
     expect(set.of('recall'), 'at once, by the brief’s files').toEqual([{ repo: REPO, paths: [A, B] }])
     expect(await shown($, true)).toMatch(`${BRIEF_LINE}`)
-    expect(await shown($, true)).toMatch('[1 Tell agent] [2 Open]')
+    expect(await shown($, true)).toMatch(`${BRIEF_LINE}  On files an agent was given${NOTES.told} [1 Tell agent] [2 Open]`)
+    expect(await shown($, true), 'a brief has no Not relevant').not.toMatch('Not relevant')
 
     await press($, 'tell-agent')
 
@@ -235,6 +237,8 @@ describe('the files an agent’s brief names are looked up as it starts, for the
 
     const card = await shown($, true)
 
+    expect(card, 'said once for the whole brief').toMatch(`${BRIEF_LINE}  On files an agent was given◆ Decision`)
+    expect(card).not.toMatch('Not relevant')
     expect(card).toMatch('Parse dates in UTC, never in local time.')
     expect(card).toMatch('Keep the retry count at three.')
   })
@@ -393,7 +397,11 @@ describe('the files an agent’s brief names are looked up as it starts, for the
 })
 
 describe('a turn with no file to look up by is looked up by the words of the prompt', () => {
-  test('its words are asked about once, and the record Fylgja ranks first is told', async ($, on) => {
+  // Long enough for the turn's end to be worth a look of the model.
+  const ANSWER =
+    'Postgres. The jobs table already lives there, an advisory lock needs no second service, and the lock goes with the transaction that takes the job, so a crashed worker never leaves a stale lock behind.'
+
+  test('its words are asked about once; what matches is told to nobody, and the next look is shown it apart from the anchored records', async ($, on) => {
     const set = stage(on, {
       tools: {
         recall: () =>
@@ -402,23 +410,65 @@ describe('a turn with no file to look up by is looked up by the words of the pro
             facts: [
               fact(1, {
                 content: 'Use Postgres advisory locks for the job queue.',
+                anchors: [{ path: 'api/routes/agent_configuration.py' }],
               }),
-              fact(2, { content: 'Keep Redis.' }),
             ],
           }),
       },
     })
 
     await $.session.start(START)
-    await turn($, set, dev('Redis or Postgres for the job lock?'), claude('Postgres.'))
+    await turn($, set, dev('Redis or Postgres for the job lock?'), claude(ANSWER))
 
     expect(set.of('recall')).toEqual([{ repo: REPO, query: 'redis postgres lock' }])
-    expect(await shown($)).toMatch('Use Postgres advisory locks for the job queue.')
-    expect(await shown($)).not.toMatch('Keep Redis.')
+    expect(await shown($), 'a match by meaning alone is no reason to tell it').toBe(QUIET)
 
     await finish($, set, claude('And more on it, without a new prompt.'))
 
     expect(set.of('recall'), 'once a prompt').toHaveLength(1)
+
+    const asked = set.asked[0]?.prompt ?? ''
+
+    expect(asked).toMatch('Records anchored to the files of this turn: none.')
+    expect(asked).toMatch(
+      "Records that matched the developer's prompt by meaning, attached to no file of this turn:\n<<< record id=" + idOf(1),
+    )
+  })
+
+  test('a record found both by the prompt’s words and by a file of the turn is shown to the look once, as anchored', async ($, on) => {
+    const both = fact(1, { content: 'Use Postgres advisory locks for the job queue.', anchors: [{ path: 'src/queue/lock.ts' }] })
+    const set = stage(on, { tools: { recall: () => answer({ repo: REPO, facts: [both] }) } })
+
+    await $.session.start(START)
+    // Too short a turn for a look: what its prompt's words found waits for the next.
+    await turn($, set, dev('Redis or Postgres for the job lock?'), claude('Postgres.'))
+    await $.prompt.submit({ text: 'do it', wait: false, origin: { kind: 'composer' } })
+    await turn($, set, dev('do it'), claude(ANSWER, edit('src/queue/lock.ts')))
+
+    expect(set.of('recall')).toEqual([
+      { repo: REPO, query: 'redis postgres lock' },
+      { repo: REPO, paths: ['src/queue/lock.ts'] },
+    ])
+
+    const asked = set.asked[0]?.prompt ?? ''
+
+    expect(asked).toMatch(`Records anchored to the files of this turn:\n<<< record id=${idOf(1)}`)
+    expect(asked).not.toMatch("matched the developer's prompt")
+    expect(asked.split(`record id=${idOf(1)}`)).toHaveLength(2)
+  })
+
+  test('a record that matched the prompt is told when the look picks it for the turn’s work, and says so', async ($, on) => {
+    const set = stage(on, {
+      replies: [verdict({ tells: [idOf(1)] })],
+      tools: {
+        recall: () => answer({ repo: REPO, facts: [fact(1, { content: 'Use Postgres advisory locks for the job queue.' })] }),
+      },
+    })
+
+    await $.session.start(START)
+    await turn($, set, dev('Redis or Postgres for the job lock?'), claude(ANSWER))
+
+    expect(await shown($)).toMatch(`Use Postgres advisory locks for the job queue. · 2026-09-12  Scribe picked it for this turn's work`)
   })
 
   test('a prompt with no word that carries meaning asks about the file every repository has, as before', async ($, on) => {
@@ -428,29 +478,5 @@ describe('a turn with no file to look up by is looked up by the words of the pro
     await turn($, set, dev('ok go'), claude('Going.'))
 
     expect(set.of('recall')).toEqual([{ repo: REPO, paths: ['README.md'] }])
-  })
-
-  test('a record of the session’s own is not told', async ($, on) => {
-    const set = stage(on, {
-      replies: [verdict({ records: [decision()] }), '{"outcome":"nothing"}'],
-      tools: {
-        recall: args =>
-          answer({
-            repo: REPO,
-            facts: typeof args.query === 'string' && !/[A-Z.]/.test(args.query) ? [fact(101)] : [],
-          }),
-      },
-    })
-
-    await $.session.start(START)
-    await turn($, set, dev('Use Postgres for the queue lock.'), claude('Done.', edit('src/queue/lock.ts')))
-    await press($, 'ok')
-    await turn($, set, dev('what about the postgres lock now?'), claude('It stands.'))
-
-    expect(
-      set.of('recall').some(args => args.query === 'postgres lock'),
-      'asked',
-    ).toBe(true)
-    expect(await shown($)).not.toMatch('Use the queue for outbound mail')
   })
 })

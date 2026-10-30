@@ -773,7 +773,7 @@ describe('where a record came from', () => {
 
     const opened = await shown($)
 
-    expect(opened).toMatch(`  In: src/queue/lock.ts  Fylgja record ab12cd34, written down by Claude${NOTES.told} [2 Tell Claude]`)
+    expect(opened).toMatch(`  In: src/queue/lock.ts  Shown because you opened src/queue/lock.ts  Fylgja record ab12cd34, written down by Claude${NOTES.told} [2 Tell Claude]`)
     expect(opened).not.toMatch('Open where it came from')
 
     await press($, 'tell-claude')

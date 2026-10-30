@@ -541,6 +541,33 @@ function marking(on: Parameters<typeof stage>[0], options: StageOptions = {}) {
 }
 
 describe('Scribe asks whether a recorded decision still holds', () => {
+  for (const [key, isAsked] of [
+    ['dismiss', true],
+    ['not-relevant', false],
+  ] as const) {
+    test(`a record told and then ${key === 'dismiss' ? 'dismissed is' : 'said not to be relevant is not'} asked about when a commit marks it`, async ($, on) => {
+      const set = marking(on, { kept: {} })
+
+      await $.session.start(START)
+      await turn($, set, ...TALK)
+
+      expect(await shown($)).toMatch('◆ Decision · Use Redis with Redlock for the job queue.')
+
+      await (key === 'dismiss' ? press($, key) : pressTwice($, key))
+      await set.clock.advance(60_000)
+      await $.prompt.submit({ text: 'commit it', wait: false, origin: { kind: 'composer' } })
+      await turn($, set, dev('commit it'), commit())
+
+      expect(set.of('recall').at(-1), 'its file is asked about again').toEqual({ repo: REPO, paths: [FILE], limit: 25 })
+      if (isAsked) {
+        expect(await shown($)).toMatch('? Still true: Use Redis with Redlock for the job queue.')
+      } else {
+        expect(await shown($)).toBe(QUIET)
+      }
+      expect(set.events('tell').map(event => event.props.action)).toEqual(['shown', key === 'dismiss' ? 'dismissed' : 'not_relevant'])
+    })
+  }
+
   test('a decision the commit marked is asked about once the turn is over: its sentence, the file that changed, and three keys', async ($, on) => {
     const set = marking(on)
 
@@ -838,8 +865,8 @@ describe('Scribe asks whether a recorded decision still holds', () => {
     expect(await shown($)).toBe(
       carded(
         '◆ Decision · Retry a failed job three times before it is parked. · 2026-09-12' +
-          `  Its code changed since it was last confirmed: ${FILE}` +
-          ' [1 Open] [2 Tell Claude] [3 Knew this] [0 Dismiss]',
+          `  Shown because its code changed since it was last confirmed: ${FILE}` +
+          ' [1 Open] [2 Tell Claude] [3 Knew this] [4 Not relevant] [0 Dismiss]',
       ),
     )
   })
@@ -888,7 +915,10 @@ describe('a record whose code changed says so wherever it is shown', () => {
     const line = `Its code changed since it was last confirmed: ${FILE} and 1 more`
 
     expect(await shown($)).toBe(
-      carded(`◆ Gotcha · Run the seed before the queue tests. · 2026-09-12  ${line} [1 Open] [2 Tell Claude] [3 Knew this] [9 What is this] [0 Dismiss]`),
+      carded(
+        `◆ Gotcha · Run the seed before the queue tests. · 2026-09-12  ${line}  Shown because you opened ${FILE}` +
+          ' [1 Open] [2 Tell Claude] [3 Knew this] [4 Not relevant] [9 What is this] [0 Dismiss]',
+      ),
     )
 
     await press($, 'open')
@@ -1004,6 +1034,7 @@ describe('which marked records are asked about, and when', () => {
     await turn($, set, dev('go on'), claude('Going on.'))
 
     expect(await shown($), 'told, not asked about').toMatch('◆ Decision · Park a job after an hour.')
-    expect(await shown($)).toMatch(`Its code changed since it was last confirmed: ${FILE}`)
+    expect(await shown($), 'said once, as why it is shown').toMatch(`  Shown because its code changed since it was last confirmed: ${FILE}`)
+    expect(await shown($)).not.toMatch('Its code changed')
   })
 })

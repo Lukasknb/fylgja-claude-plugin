@@ -2,6 +2,7 @@ import type { On } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
+import { isRecord } from '../hooks/payload'
 import type { Ran } from '../hooks/scribe/git'
 import type { Row } from '../hooks/scribe/delta'
 import { HEADLINES, NOTES } from '../hooks/scribe/view'
@@ -318,7 +319,9 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     const own = options.tools?.[e.tool]
 
     if (own !== undefined) {
-      return { value: (await own(e.args, clock)) as never }
+      const value = await own(e.args, clock)
+
+      return { value: (e.tool === 'recall' ? matchedIn(e.args, value) : value) as never }
     }
 
     if (e.tool === 'remember') {
@@ -727,6 +730,51 @@ export async function press($: Engine, key: string): Promise<void> {
 
   await ui.press(key)
   await ui.unmount()
+}
+
+/**
+ * A `recall` answer by paths as Fylgja gives it: each record names the asked
+ * paths it answers (`matched_paths`), those it is anchored to or that lie
+ * under a folder it is anchored to. A record a test gave its own keeps it.
+ */
+function matchedIn(args: Record<string, unknown>, value: unknown): unknown {
+  const asked = Array.isArray(args.paths) ? args.paths.filter((one): one is string => typeof one === 'string') : []
+  const content = isRecord(value) && Array.isArray(value.content) ? value.content : []
+  const first: unknown = content[0]
+
+  if (!isRecord(value) || asked.length === 0 || !isRecord(first) || typeof first.text !== 'string') {
+    return value
+  }
+
+  let payload: unknown
+
+  try {
+    payload = JSON.parse(first.text)
+  } catch {
+    return value
+  }
+
+  if (!isRecord(payload) || !Array.isArray(payload.facts)) {
+    return value
+  }
+
+  const facts = payload.facts.map((one: unknown) => {
+    if (!isRecord(one) || 'matched_paths' in one) {
+      return one
+    }
+
+    // Anchors come as a list of paths, or as the paths of a list that holds commits too.
+    const list: unknown = isRecord(one.anchors) ? one.anchors.paths : one.anchors
+    const anchors = (Array.isArray(list) ? list : []).flatMap((anchor: unknown) => {
+      const path = isRecord(anchor) ? (anchor.path ?? anchor.ref) : anchor
+
+      return typeof path === 'string' ? [path] : []
+    })
+
+    return { ...one, matched_paths: asked.filter(path => anchors.some(anchor => path === anchor || path.startsWith(`${anchor}/`))) }
+  })
+
+  return { ...value, content: [{ ...first, text: JSON.stringify({ ...payload, facts }) }, ...content.slice(1)] }
 }
 
 /** A record as `recall` returns it. */

@@ -145,7 +145,7 @@ function groupsOf(more: Partial<Groups> = {}): Groups {
     recorded: [],
     asked: [],
     gone: [],
-    band: { pending: [], told: [], asked: [], questions: 0, unanswered: 0, doubted: [] },
+    band: { pending: [], told: [], rejected: [], asked: [], questions: 0, unanswered: 0, doubted: [] },
     deferred: [],
     cursor: { consumed: 2, mark: null, seam: null, hasPrompt: false, hasActed: false, compactions: 0, hasCompacted: false, isOwed: false, prompts: [] },
     work: {

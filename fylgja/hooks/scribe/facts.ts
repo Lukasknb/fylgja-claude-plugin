@@ -98,8 +98,26 @@ function factOf(value: unknown): Fact | undefined {
     link: pageOf(value.link),
     changed: changedOf(value),
     printed: printedOf(value.anchors),
+    matchedPaths: matchedOf(value),
     ...(namesOf(value.applies_to).length === 0 ? {} : { appliesTo: namesOf(value.applies_to) }),
   }
+}
+
+/** No more of the asked files are kept as the ones a record answers than a lookup asks about. */
+export const MAX_MATCHED = 30
+
+/**
+ * The asked files a record is anchored to itself, as the server names them
+ * (`matched_paths`). The server names a file the record answers by a folder
+ * above it as well; such a one is left out, since the record says nothing
+ * of that file in particular. None on a lookup that was not by paths.
+ */
+function matchedOf(value: Record<string, unknown>): string[] {
+  const own = new Set(
+    paths(value.anchors).flatMap(anchor => (isRecord(anchor) && typeof anchor.path === 'string' ? [anchor.path] : [])),
+  )
+
+  return strings(value.matched_paths, MAX_MATCHED).filter(path => own.has(path))
 }
 
 /** No more files a commit touched are kept of one record than this. */
@@ -126,8 +144,13 @@ const MAX_PATH = 120
  * for every other record.
  *
  * @param safe makes a path fit to stand where the line is put
+ * @param lead how the line begins; a card that is shown for this very reason says so
  */
-export function changedLine(fact: Pick<Fact, 'changed'>, safe: (path: string, max: number) => string): string | undefined {
+export function changedLine(
+  fact: Pick<Fact, 'changed'>,
+  safe: (path: string, max: number) => string,
+  lead = 'Its code changed',
+): string | undefined {
   if (fact.changed === null) {
     return undefined
   }
@@ -136,8 +159,8 @@ export function changedLine(fact: Pick<Fact, 'changed'>, safe: (path: string, ma
   const [first, ...rest] = fact.changed.map(path => safe(path.replace(/\s+/g, ' ').trim(), MAX_PATH)).filter(path => path !== '')
 
   return first === undefined
-    ? 'Its code changed since it was last confirmed.'
-    : `Its code changed since it was last confirmed: ${first}${rest.length === 0 ? '' : ` and ${rest.length} more`}`
+    ? `${lead} since it was last confirmed.`
+    : `${lead} since it was last confirmed: ${first}${rest.length === 0 ? '' : ` and ${rest.length} more`}`
 }
 
 /** The records a lookup answered with, each once, in the order given. */
@@ -154,11 +177,6 @@ export function factsOf(payload: Record<string, unknown> | undefined): Fact[] {
   }
 
   return [...facts.values()]
-}
-
-/** Whether `fact` is anchored to one of `files` itself, not to a folder above it. */
-export function isAnchoredTo(fact: Fact, files: readonly string[]): boolean {
-  return fact.anchors.some(anchor => files.includes(anchor.path))
 }
 
 /**

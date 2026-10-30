@@ -121,7 +121,7 @@ Never how the work of THIS session's task is organised, however carefully it was
 When plan documents are given, look there first for the reason and the rejected alternatives of a decision. A decision whose reason is in a plan is "stated" and is never asked about. A decision in the session that departs from a plan is exactly what is worth recording. When the session carries out a choice that a plan made between alternatives, record that choice once, with the plan's reason and what the plan rejected: the plan may be gone for a later reader, the record will not be.
 
 ## Looking something up
-The records anchored to the files of this turn are given to you. Only when you must know whether a decision is already recorded, or goes against a recorded one, and they do not tell you, answer with ONE lookup in place of the verdict:
+The records anchored to the files of this turn are given to you, and apart from them the records that matched the developer's prompt by meaning: those are attached to no file of this turn, and may be about code it never touches. Only when you must know whether a decision is already recorded, or goes against a recorded one, and they do not tell you, answer with ONE lookup in place of the verdict:
 {"tool":"recall","args":{"query":"..."}}   the recorded decisions and gotchas of this repository
 {"tool":"search","args":{"query":"..."}}   the whole knowledge base; slow, at most once
 {"tool":"open","args":{"id":"<an id shown to you>"}}
@@ -157,7 +157,7 @@ A block headed "agent report r<n>" is the final report an agent handed back: a h
 These do not count against the three records of a turn. Never put "from_report" on a record that comes from the session itself.
 
 ## Telling the developer (rare)
-"tells": at most 2 ids of records shown to you that the developer should see now, because this turn's work touches what they say, above all when it goes against one. Not when the session shows the developer already knows it, and not anything listed as already told. Usually [].
+"tells": at most 2 ids of records shown to you that the developer should see now, because this turn's work touches what they say, above all when it goes against one. A record that only matched the developer's prompt is told only when the files and code this turn actually works on are what it is about; a prompt on a near subject is not enough. Not when the session shows the developer already knows it, and not anything listed as already told. Usually [].
 
 ## Your answer
 One JSON object, nothing before or after it, no code fence. Either
@@ -299,8 +299,16 @@ export type Done = {
  * @param lines the conversation since the last wake
  * @param dropped how many of its oldest lines were left out for length
  * @param anchored the records anchored to the files of this turn
+ * @param matched the records that matched the developer's prompt by meaning and are anchored to no file of this turn
  */
-export function wakeText(repo: string, lines: readonly string[], dropped: number, anchored: readonly Fact[], done: Done): string {
+export function wakeText(
+  repo: string,
+  lines: readonly string[],
+  dropped: number,
+  anchored: readonly Fact[],
+  matched: readonly Fact[],
+  done: Done,
+): string {
   const head = dropped === 0 ? '' : `(${dropped} earlier lines of this turn were left out for length)\n`
   const list = (items: readonly string[]): string =>
     items.length === 0 ? '(nothing yet)' : items.map(item => `- ${inert(item)}`).join('\n')
@@ -326,6 +334,14 @@ export function wakeText(repo: string, lines: readonly string[], dropped: number
           .slice(0, MAX_SHOWN)
           .map(fact => recordText(fact, done.denied?.includes(fact.id)))
           .join('\n')}`,
+    ...(matched.length === 0
+      ? []
+      : [
+          `Records that matched the developer's prompt by meaning, attached to no file of this turn:\n${matched
+            .slice(0, MAX_SHOWN)
+            .map(fact => recordText(fact, done.denied?.includes(fact.id)))
+            .join('\n')}`,
+        ]),
     ...commit,
     ...(done.reports === undefined || done.reports.length === 0
       ? []

@@ -59,6 +59,7 @@ import { isRecord } from '../payload'
 import { SCHEMA } from '../telemetry-schema'
 import type { Question } from './band'
 import type { Row } from './delta'
+import { MAX_MATCHED } from './facts'
 import { namesOf } from './scope'
 import type { Away, Index, Whole } from './staged'
 import type { Anchor, Commit, Deferred, Doubted, Draft, Fact, Place, ReasonStatus, RecordKind, Written } from './types'
@@ -130,6 +131,8 @@ export type Asking = {
   pending: Question[]
   /** Records offered in the session; none is offered twice. */
   told: string[]
+  /** Records the developer said were not relevant: never told again in the session, nor asked about. */
+  rejected: string[]
   /** Decisions asked about, by their sentence in lower case. */
   asked: string[]
   questions: number
@@ -543,6 +546,7 @@ function factOf(value: unknown): Fact | undefined {
     origin,
     link,
     changed,
+    matchedPaths: texts(value.matchedPaths, 1000).slice(0, MAX_MATCHED),
     ...(namesOf(value.appliesTo).length === 0 ? {} : { appliesTo: namesOf(value.appliesTo) }),
   }
 }
@@ -690,6 +694,7 @@ const GROUPS: { [K in keyof Groups]: (value: unknown) => Groups[K] | undefined }
       ? {
           pending: each(value.pending, questionOf, 8),
           told: texts(value.told, 120),
+          rejected: texts(value.rejected, 120),
           asked: texts(value.asked),
           questions: count(value.questions),
           unanswered: count(value.unanswered),

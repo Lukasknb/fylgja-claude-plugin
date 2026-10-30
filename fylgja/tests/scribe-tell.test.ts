@@ -10,6 +10,7 @@ import {
   edit,
   fact,
   press,
+  pressTwice,
   QUIET,
   REPO,
   ROOT,
@@ -21,12 +22,15 @@ import {
   turn,
   verdict,
 } from './scribe-fixtures'
+import type { Stage } from './scribe-fixtures'
 
 const FILE = 'src/mail/send.ts'
 const WORK = [dev('make the mailer retry'), claude('Retrying three times now.', edit(FILE))]
 const TELL =
 carded(
-  '◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12 [1 Open] [2 Tell Claude] [3 Knew this] [9 What is this] [0 Dismiss]',
+  '◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12' +
+    `  Shown because you opened ${FILE}` +
+    ' [1 Open] [2 Tell Claude] [3 Knew this] [4 Not relevant] [9 What is this] [0 Dismiss]',
 )
 
 const found = (...facts: Record<string, unknown>[]) => ({ recall: () => answer({ repo: REPO, facts }) })
@@ -100,7 +104,7 @@ describe('Scribe tells what is recorded about the files in hand', () => {
     await $.session.start(START)
     await turn($, set, ...WORK)
 
-    expect(await shown($)).toMatch('◆ Decision · Never log a recipient address.')
+    expect(await shown($)).toMatch(`◆ Decision · Never log a recipient address. · 2026-09-12  Scribe picked it for this turn's work`)
   })
 
   test('a tell naming a record no lookup returned is dropped: nothing is shown, and the next look is told nothing was told', async ($, on) => {
@@ -227,9 +231,10 @@ describe('Scribe tells what is recorded about the files in hand', () => {
           '  Why: Direct calls dropped mail when the provider throttled.' +
           '  Rejected: direct SMTP call' +
           '  In: src/mail/send.ts (send)' +
+          '  Shown because you opened src/mail/send.ts' +
           '  Fylgja record 00000000, written down by Scribe' +
           NOTES.told +
-          ' [2 Tell Claude] [3 Knew this] [0 Dismiss]',
+          ' [2 Tell Claude] [3 Knew this] [4 Not relevant] [0 Dismiss]',
       )
       await ui.unmount()
     }
@@ -309,8 +314,112 @@ describe('Scribe tells what is recorded about the files in hand', () => {
 
     expect(await shown($)).toBe(
       carded(
-        '◆ Decision · Recorded - all good (1 Open) second line · 2026-09-12 [1 Open] [2 Tell Claude] [3 Knew this] [9 What is this] [0 Dismiss]',
+        '◆ Decision · Recorded - all good (1 Open) second line · 2026-09-12' +
+          `  Shown because you opened ${FILE}` +
+          ' [1 Open] [2 Tell Claude] [3 Knew this] [4 Not relevant] [9 What is this] [0 Dismiss]',
       ),
     )
+  })
+})
+
+describe('a tell says why it is shown, and the developer can say it is beside the point', () => {
+  const OTHER = 'src/mail/other.ts'
+  const routesOf = (set: Stage) => set.events('tell').map(event => [event.props.action, event.props.route])
+
+  test('a record whose anchors hold the file, but that Fylgja does not name as answering it, is not told', async ($, on) => {
+    const set = stage(on, { tools: found(fact(1, { matched_paths: [] })) })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+
+    expect(await shown($)).toBe(QUIET)
+  })
+
+  test('a record Fylgja names for the file only by a folder above it is not told for that file', async ($, on) => {
+    const set = stage(on, { tools: found(fact(1, { anchors: [{ path: 'src/mail' }], matched_paths: [FILE] })) })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+
+    expect(await shown($)).toBe(QUIET)
+  })
+
+  test('“Not relevant” pressed once only arms it', async ($, on) => {
+    const set = stage(on, { tools: found(fact(1)) })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'not-relevant')
+
+    expect(await shown($)).toMatch(`press 4 ${ARMED_NOTE} [1 Open] [2 Tell Claude] [3 Knew this] [4 Not relevant]`)
+  })
+
+  test('“Not relevant” pressed twice takes the record down for the session, however it is found again, and keeps nothing', async ($, on) => {
+    const both = fact(1, { anchors: [{ path: FILE }, { path: OTHER }] })
+    const set = stage(on, { tools: found(both), replies: ['{"outcome":"nothing"}', verdict({ tells: [idOf(1)] })] })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await pressTwice($, 'not-relevant')
+
+    expect(await shown($)).toBe(QUIET)
+
+    await set.clock.advance(60_000)
+    await $.prompt.submit({ text: 'again', wait: false, origin: { kind: 'composer' } })
+    await turn($, set, dev('again'), claude('Again, at length this time.', edit(OTHER)))
+
+    expect(set.of('recall').map(args => args.paths), 'found again by its other file').toEqual([[FILE], [OTHER]])
+    expect(set.asked.length, 'and the look named it').toBe(2)
+    expect(await shown($)).toBe(QUIET)
+    expect(set.kept.get('scribe.known') ?? [], 'not kept as known').toEqual([])
+    expect(routesOf(set)).toEqual([
+      ['shown', 'anchor'],
+      ['not_relevant', 'anchor'],
+    ])
+  })
+
+  test('each tell says once that it came up, by which route, and what was done with it', async ($, on) => {
+    const THIRD = 'src/mail/third.ts'
+    const byPath: Record<string, Record<string, unknown>> = {
+      [FILE]: fact(1),
+      [OTHER]: fact(2, { anchors: [{ path: 'src/mail' }], content: 'Never log a recipient address.' }),
+      [THIRD]: fact(3, { anchors: [{ path: THIRD }], content: 'Keep the retry count at three.' }),
+    }
+    const set = stage(on, {
+      tools: {
+        recall: args =>
+          answer({ repo: REPO, facts: (Array.isArray(args.paths) ? args.paths : []).flatMap(path => byPath[String(path)] ?? []) }),
+      },
+      replies: ['{"outcome":"nothing"}', verdict({ tells: [idOf(2)] })],
+    })
+
+    await $.session.start(START)
+    await turn($, set, ...WORK)
+    await press($, 'open')
+    await press($, 'tell-claude')
+
+    await set.clock.advance(60_000)
+    await $.prompt.submit({ text: 'again', wait: false, origin: { kind: 'composer' } })
+    await turn($, set, dev('again'), claude('Again, at length this time.', edit(OTHER)))
+    await press($, 'dismiss')
+
+    await set.clock.advance(60_000)
+    await $.prompt.submit({ text: 'and once more', wait: false, origin: { kind: 'composer' } })
+    await turn($, set, dev('and once more'), claude('Once more.', edit(THIRD)))
+    await pressTwice($, 'knew')
+
+    await set.clock.advance(60_000)
+    await $.prompt.submit({ text: 'done', wait: false, origin: { kind: 'composer' } })
+    await turn($, set, dev('done'), claude('Done.'))
+
+    expect(routesOf(set)).toEqual([
+      ['shown', 'anchor'],
+      ['opened', 'anchor'],
+      ['told_claude', 'anchor'],
+      ['shown', 'judge'],
+      ['dismissed', 'judge'],
+      ['shown', 'anchor'],
+      ['knew', 'anchor'],
+    ])
   })
 })

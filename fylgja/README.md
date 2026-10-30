@@ -422,7 +422,15 @@ card around them.
   Claude's names one (`sed -n 1,40p src/mail/send.ts`, `cat`, `grep`,
   `git diff` on it, a search's folder):
 
-  `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12   1 Open  2 Tell Claude  3 Knew this  0 Dismiss`
+  `◆ Decision · Use the queue for outbound mail, never a direct SMTP call. · 2026-09-12`
+  `Shown because you opened src/mail/send.ts`
+  `1 Open  2 Tell Claude  3 Knew this  4 Not relevant  0 Dismiss`
+
+  The dim row under the sentence says why the record is shown: the file
+  you (or Claude) opened that it is anchored to, `Scribe picked it for
+  this turn's work` for one Scribe's model chose, or, for a decision whose
+  code changed, `Shown because its code changed since it was last
+  confirmed` with the file.
 
   Open opens the record inside the band and goes nowhere else: the
   reason, what was rejected, where (a place another member than the
@@ -436,7 +444,10 @@ card around them.
   reason, and `Fylgja record 1a2b3c4d` with who wrote it down, so Claude
   can open it by that id; the link follows only where the record has one.
   It sends nothing, and leaves a box with text in it alone. Knew this
-  keeps that record away on this machine for good. A record whose code
+  keeps that record away on this machine for good. Not relevant takes it
+  down: in this session it is not told again, however it is found, nor
+  asked about when its code changes;
+  nothing of it is kept, on this machine or in Fylgja. A record whose code
   changed after it was last confirmed (a commit touched it, or the file
   no longer reads as it did) says so under its sentence,
   with the file, and so does the note for Claude; Scribe's model is told
@@ -453,8 +464,11 @@ card around them.
   A turn with no file to look up by is looked up by what your prompt is
   about: its words that carry meaning (lower case, four letters or more,
   without the small words, 200 characters at most), once a prompt, in the
-  session's own repository. The record Fylgja ranks first, if it returns
-  any, is told the same way. A prompt with no such word asks about the
+  session's own repository. What it returns is not told for that alone: a
+  record near a prompt in meaning may be about code the turn never
+  touches. Scribe's model is shown those records apart from the ones
+  anchored to the turn's files, and tells one only when the turn's work is
+  what it is about. A prompt with no such word asks about the
   file every repository has, `README.md`, as the first lookup of a session
   always did: whether that call gets through decides whether Scribe runs.
 - **It tells an agent, on your key.** When Claude starts an agent whose
@@ -621,15 +635,16 @@ Staying out of the way is the point, and the limits are in the code:
   for the session.
 - At most one tell per turn, never the same record twice in a session;
   the records on an agent's brief are that one tell. From the lookup by
-  path alone, only a record anchored to the very file in hand; from the
-  lookup by a prompt's words, only the record Fylgja ranks first. A record anchored to a folder above it is shown only when
+  path alone, only a record Fylgja names as anchored to the very file in
+  hand; from the lookup by a prompt's words, none. A record anchored to a
+  folder above it, or found by a prompt's words, is shown only when
   Scribe's model, reading the turn, judged that it bears on the work; it
   still counts as the turn's one tell.
 - Nothing new comes up while you are typing: not a tell, not a question,
   not a receipt. Nothing takes the keyboard by itself.
 - Every key that writes to Fylgja or settles something for good acts on
   the second press of the same key within five seconds: Remove, Knew this,
-  Turn Scribe off, "Yes, it replaces it", "Still holds", Put back, a proposed reason and
+  Not relevant, Turn Scribe off, "Yes, it replaces it", "Still holds", Put back, a proposed reason and
   "No particular reason". The first press only fills the key where it stands, and a line
   above the keys says so. A digit
   typed alone into an empty prompt box presses a key of the band, and a
@@ -1208,6 +1223,7 @@ The events, each with every key it may carry. Any key may be left out.
 | `look` | Scribe has looked at what happened, at a turn's end, after you answered a question of Claude's, or after so many steps (that look carries no `trigger`) | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `drafts_dropped`, `calls_missed`; `first_refusal_code` (a refusal code, below); `first_drop_reason` (about_work, label_stayed; a record let go for an agent's report counts in `drafts_dropped` and is not named) |
 | `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no); `lookup`, what a lookup of Scribe's own looked up by (path, named, query, probe, brief; none for any other call) |
 | `question` | a question of Scribe's was held back by a rule, came up, or was answered; one about an agent's report is not reported | `stage` (held_back, shown, answered); `form` (reason, reversal, holds); `held_back_by` (turn_asked, asked_before, session_share, unanswered); `key` (option, own_words, no_reason, skip, still_holds, no_longer_holds, replaces, different, told_claude, expired, withdrawn); `ms_until_answered` (number) |
+| `tell` | a record Scribe told came up, or a key of its card was pressed; Tell agent on an agent's brief is not reported | `action` (shown, opened, told_claude, knew, not_relevant, dismissed); `route` (anchor, prompt, judge, doubted, brief) |
 | `window` | you asked for the window, with the mark or a command | `view` (kept, search); `opened_by` (click, command); `outcome` (opened, not_placed, failed); `records_listed` (number) |
 | `window_action` | a key of the window did something to a record | `view` (kept, search); `action` (reword, remove, put_back, open_record, cite); `outcome` (done, trouble) |
 | `search` | a search you made in the window was answered, or failed | `asked_by` (command, field, again); `outcome` (found, failed, signed_out); `results` (none, 1_3, 4_10, over_10); `duration_ms` (number) |

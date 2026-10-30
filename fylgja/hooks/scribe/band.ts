@@ -17,11 +17,21 @@
 
 import type { Draft, Fact, Written } from './types'
 
+/**
+ * How a record came to be told: anchored to a file the session opened (and
+ * which one), picked by the model for the turn's work, a decision whose code
+ * changed since it was last confirmed, or on files an agent was given. A
+ * record that only matched the words of a prompt is never told for that
+ * alone; `prompt` names that way in what is reported.
+ */
+export type Route = { by: 'anchor'; path: string } | { by: 'judge' } | { by: 'doubted' } | { by: 'brief' }
+
 /** A recorded decision or gotcha about the code in hand, offered to the developer. */
 export type Tell = {
   kind: 'tell'
   /** The record; for the records on an agent's brief, the first of them. */
   fact: Fact
+  route: Route
   /** Set when it holds the records on files an agent's brief names, to be told to that agent. */
   brief?: Brief
   /** Whether its reason, alternatives and anchors are shown; for a brief's records, each of them. */
@@ -143,6 +153,12 @@ export type Band = {
   offersAbout: boolean
   /** Records offered in this session; none is offered twice. */
   told: Set<string>
+  /**
+   * Records the developer said were not relevant in this session: none is
+   * told again, nor asked about whether it still holds. Kept apart from
+   * `told`, which holds every record merely offered.
+   */
+  rejected: Set<string>
   /** Decisions asked about in this session, by their sentence; none is asked about twice. */
   asked: Set<string>
   questions: number
@@ -197,6 +213,7 @@ export function create(): Band {
     isAboutOpen: false,
     offersAbout: false,
     told: new Set(),
+    rejected: new Set(),
     asked: new Set(),
     questions: 0,
     unanswered: 0,
@@ -229,9 +246,10 @@ function enqueue(band: Band, item: Item): void {
  * Puts a record in line to be told, unless a rule says no: it was offered
  * in this session, the developer knows it, or this turn has had its tell.
  */
-export function offerTell(band: Band, fact: Fact): boolean {
+export function offerTell(band: Band, fact: Fact, route: Route): boolean {
   if (
     band.told.has(fact.id) ||
+    band.rejected.has(fact.id) ||
     band.kept.known.includes(fact.id) ||
     band.tellsThisTurn >= MAX_TELLS_PER_TURN ||
     [band.current, ...band.queue].some(item => item !== null && subjectOf(item) === fact.id)
@@ -241,7 +259,7 @@ export function offerTell(band: Band, fact: Fact): boolean {
 
   band.told.add(fact.id)
   band.tellsThisTurn += 1
-  enqueue(band, { kind: 'tell', fact, isOpen: false, isTouched: false })
+  enqueue(band, { kind: 'tell', fact, route, isOpen: false, isTouched: false })
 
   return true
 }
@@ -253,7 +271,11 @@ export function offerTell(band: Band, fact: Fact): boolean {
  */
 export function offerBrief(band: Band, facts: readonly Fact[], briefs: Brief['briefs']): boolean {
   const fresh = facts.filter(
-    (fact, at) => !band.told.has(fact.id) && !band.kept.known.includes(fact.id) && facts.findIndex(one => one.id === fact.id) === at,
+    (fact, at) =>
+      !band.told.has(fact.id) &&
+      !band.rejected.has(fact.id) &&
+      !band.kept.known.includes(fact.id) &&
+      facts.findIndex(one => one.id === fact.id) === at,
   )
   const first = fresh[0]
 
@@ -266,7 +288,14 @@ export function offerBrief(band: Band, facts: readonly Fact[], briefs: Brief['br
   }
 
   band.tellsThisTurn += 1
-  enqueue(band, { kind: 'tell', fact: first, brief: { facts: fresh, briefs: [...briefs] }, isOpen: false, isTouched: false })
+  enqueue(band, {
+    kind: 'tell',
+    fact: first,
+    route: { by: 'brief' },
+    brief: { facts: fresh, briefs: [...briefs] },
+    isOpen: false,
+    isTouched: false,
+  })
 
   return true
 }
@@ -398,10 +427,16 @@ export function confirmed(band: Band, key: string, now: number): boolean {
   return confirmedIn(band, armOf(band, key), now)
 }
 
-export type Tally = Pick<Band, 'told' | 'asked' | 'questions' | 'unanswered'>
+export type Tally = Pick<Band, 'told' | 'rejected' | 'asked' | 'questions' | 'unanswered'>
 
 export function tallyOf(band: Band): Tally {
-  return { told: band.told, asked: band.asked, questions: band.questions, unanswered: band.unanswered }
+  return { told: band.told, rejected: band.rejected, asked: band.asked, questions: band.questions, unanswered: band.unanswered }
+}
+
+/** The developer said the record told is not relevant: it is neither told again in this session nor asked about. */
+export function reject(band: Band, id: string): void {
+  band.rejected.add(id)
+  band.told.add(id)
 }
 
 /** What `settle` did, for the caller to carry out what follows from it. */

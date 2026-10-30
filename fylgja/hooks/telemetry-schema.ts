@@ -60,6 +60,10 @@ export const SCHEMA = {
       key: { oneOf: ['option', 'own_words', 'no_reason', 'skip', 'still_holds', 'no_longer_holds', 'replaces', 'different', 'told_claude', 'expired', 'withdrawn'] },
       ms_until_answered: { whole: [0, 3600000] },
     },
+    tell: {
+      action: { oneOf: ['shown', 'opened', 'told_claude', 'knew', 'not_relevant', 'dismissed'] },
+      route: { oneOf: ['anchor', 'prompt', 'judge', 'doubted', 'brief'] },
+    },
     window: {
       view: { oneOf: ['kept', 'search'] },
       opened_by: { oneOf: ['click', 'command'] },

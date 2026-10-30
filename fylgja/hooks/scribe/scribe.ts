@@ -37,7 +37,7 @@ import type { Run } from './git'
 import { carried } from './carry'
 import { AGENT_TOOLS, changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, pathsIn, plain } from './delta'
 import type { Landed, Offer, Row } from './delta'
-import { changedLine, factsOf, isAnchoredTo, knownReposIn } from './facts'
+import { changedLine, factsOf, knownReposIn } from './facts'
 import { REFUSED } from './grant'
 import { leaningOf, leaningRefusal } from './labels'
 import type { Leaning } from './labels'
@@ -402,8 +402,10 @@ export type Scribe = {
   /** How many times a decision without a reason was checked against what the developer wrote, and how often a reason was there. */
   checked: number
   found: number
-  /** The records the lookups found since the last wake. */
+  /** The records the lookups by files found since the last wake. */
   anchored: Map<string, Fact>
+  /** The records a lookup by the words of the developer's prompt found since the last wake: attached to no file of the turn. */
+  matched: Map<string, Fact>
   deferred: Deferred[]
   /** Commits already seen in the rows: each is attached once. */
   commits: Set<string>
@@ -754,6 +756,7 @@ export function create(options: Options): Scribe {
     checked: 0,
     found: 0,
     anchored: new Map(),
+    matched: new Map(),
     deferred: [],
     commits: new Set(),
     toAttach: [],
@@ -875,6 +878,7 @@ export function startOver(scribe: Scribe): void {
   scribe.proposals = []
   scribe.earlier = []
   scribe.anchored.clear()
+  scribe.matched.clear()
   scribe.doubted = []
   // The developer cleared the conversation on purpose: what they said of a record in it goes with it.
   scribe.denied.clear()
@@ -1020,6 +1024,7 @@ function nowOf(scribe: Scribe): Journal.Now {
       band: {
         pending,
         told: [...band.told],
+        rejected: [...band.rejected],
         asked: [...band.asked],
         questions: band.questions,
         unanswered: band.unanswered,
@@ -1518,6 +1523,7 @@ function restoreBand(scribe: Scribe, asking: Journal.Asking): void {
   const waiting = asking.pending.filter(item => item.form !== 'reason' || ids.has(item.id))
 
   band.told = new Set([...asking.told, ...band.told])
+  band.rejected = new Set([...asking.rejected, ...band.rejected])
   band.asked = new Set([...asking.asked, ...band.asked])
   band.questions = Math.max(band.questions, asking.questions)
   band.unanswered = Math.max(band.unanswered, asking.unanswered)
@@ -2529,9 +2535,17 @@ async function flush(host: ScribeHost, scribe: Scribe, who: Identity): Promise<v
 // When each question came up, by this process's own clock: how long its answer took is counted from then.
 const SHOWN = new WeakMap<Band.Question, number>()
 
-/** Notes the question now on show, once: that it came up, and which kind it is. */
+// The tells that came up, each noted once.
+const TOLD = new WeakSet<Band.Tell>()
+
+/** Notes the question or tell now on show, once: that it came up, and which kind it is or how it was found. */
 function shownNow(host: ScribeHost, scribe: Scribe): void {
   const item = scribe.band.current
+
+  if (item?.kind === 'tell' && !TOLD.has(item)) {
+    TOLD.add(item)
+    host.report('tell', { action: 'shown', route: item.route.by })
+  }
 
   // A question about an agent's report has no word of its own on Fylgja's list yet, and is not reported.
   if (item?.kind === 'question' && item.form !== 'report' && !SHOWN.has(item)) {
@@ -3403,7 +3417,7 @@ async function apply(
     const fact = facts.get(id)
 
     if (fact !== undefined && !scribe.written.some(own => own.id === id)) {
-      Band.offerTell(band, fact)
+      Band.offerTell(band, fact, { by: 'judge' })
     }
   }
 }
@@ -3653,10 +3667,11 @@ async function lookUp(host: ScribeHost, scribe: Scribe, who: Identity, isProbe =
 
 /**
  * Asks Fylgja what is recorded on what the developer's latest prompt is
- * about, by its words. The record it ranks first, unless it is the
- * session's own, is offered to the developer as a record about the code in
- * hand is; Fylgja returns only what clears its own bar of relevance, so
- * nothing at all may come. The rest are kept for the next wake to judge.
+ * about, by its words. Nothing it answers is told for that alone: a record
+ * near a prompt in meaning may be about code the turn never touches. What
+ * it answers is kept for the next wake, apart from the records anchored to
+ * the files of the turn, and the model tells one only when the turn's work
+ * is what it is about.
  *
  * @returns whether the conversation is still the one that asked
  */
@@ -3671,15 +3686,10 @@ async function queried(host: ScribeHost, scribe: Scribe, repo: string): Promise<
     return false
   }
 
-  const others = facts.filter(fact => !scribe.written.some(own => own.id === fact.id))
-  const top = others.find(fact => !scribe.own.has(fact.id))
-
-  for (const fact of others) {
-    scribe.anchored.set(fact.id, fact)
-  }
-
-  if (top !== undefined) {
-    Band.offerTell(scribe.band, top)
+  for (const fact of facts) {
+    if (!scribe.written.some(own => own.id === fact.id)) {
+      scribe.matched.set(fact.id, fact)
+    }
   }
 
   return true
@@ -3747,14 +3757,17 @@ async function recalled(
 
     scribe.anchored.set(fact.id, fact)
 
-    if (!isAnchoredTo(fact, files)) {
+    // Fylgja names the asked files the record is anchored to; with none of them, it waits for the next wake to judge.
+    const opened = fact.matchedPaths.find(path => files.includes(path))
+
+    if (opened === undefined) {
       continue
     }
 
     if (fact.changed !== null && fact.kind === 'decision' && !isOwn) {
       scribe.doubted = [...scribe.doubted.filter(one => one.fact.id !== fact.id), { fact, repo, asks: true }].slice(-MAX_DOUBTED)
     } else {
-      Band.offerTell(scribe.band, fact)
+      Band.offerTell(scribe.band, fact, { by: 'anchor', path: opened })
     }
   }
 
@@ -3922,8 +3935,8 @@ function askHolds(host: ScribeHost, scribe: Scribe): void {
   for (const one of scribe.doubted) {
     const { fact, repo } = one
 
-    // Written by this session since it was looked up, or found to be the session's own: never asked about.
-    if (scribe.written.some(own => own.id === fact.id) || scribe.own.has(fact.id)) {
+    // Written by this session since it was looked up, found to be the session's own, or said not to be relevant: never asked about.
+    if (scribe.written.some(own => own.id === fact.id) || scribe.own.has(fact.id) || band.rejected.has(fact.id)) {
       continue
     }
 
@@ -3941,7 +3954,7 @@ function askHolds(host: ScribeHost, scribe: Scribe): void {
     }
 
     // Told once, or known for good: there is nothing left to say of it. Otherwise this turn's tell is taken.
-    if (!Band.offerTell(band, fact) && !band.told.has(fact.id) && !band.kept.known.includes(fact.id)) {
+    if (!Band.offerTell(band, fact, { by: 'doubted' }) && !band.told.has(fact.id) && !band.kept.known.includes(fact.id)) {
       waiting.push({ ...one, asks: false })
     }
   }
@@ -4172,7 +4185,7 @@ async function briefed(
 
         scribe.anchored.set(fact.id, fact)
 
-        if (isAnchoredTo(fact, paths) && !scribe.own.has(fact.id)) {
+        if (fact.matchedPaths.some(path => paths.includes(path)) && !scribe.own.has(fact.id)) {
           found.push(fact)
         }
       }
@@ -5079,6 +5092,7 @@ async function look(
     commitsToPair: scribe.commitsToPair,
     earlier: scribe.earlier,
     anchored: new Map(),
+    matched: new Map(),
     acts: [],
     taken: undefined,
   }
@@ -5167,6 +5181,10 @@ async function look(
         scribe.anchored.set(id, fact)
       }
 
+      for (const [id, fact] of found.matched) {
+        scribe.matched.set(id, fact)
+      }
+
       for (const act of found.acts) {
         const at = scribe.spoken.lastIndexOf(wordsOf(act))
 
@@ -5219,6 +5237,7 @@ function wordsOf(act: { words: string }): string {
 type Found = Pick<Scribe, 'consumed' | 'mark' | 'seam' | 'hasActed' | 'hasPrompt' | 'hasAnsweredInTurn' | 'commitsToPair' | 'earlier'> & {
   /** The records the lookups had found when the verdict came. */
   anchored: Map<string, Fact>
+  matched: Map<string, Fact>
   /** What the developer decided that this look was the first to see. */
   acts: { key: string; words: string }[]
   /** The rows this look read, once its verdict counted them as gone through. */
@@ -5501,9 +5520,16 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
             origin: '',
             link: null,
             changed: null,
+            matchedPaths: [],
           },
       )
-      const shown = [...denied, ...[...scribe.anchored.values()].filter(fact => !scribe.denied.has(fact.id))].slice(0, MAX_SHOWN)
+      const anchored = [...denied, ...[...scribe.anchored.values()].filter(fact => !scribe.denied.has(fact.id))].slice(0, MAX_SHOWN)
+      // What only matched the prompt's words is shown apart: the model is not to take it for a record of the files in hand.
+      // Together no more than the wake is shown at once, the anchored ones first.
+      const matched = [...scribe.matched.values()]
+        .filter(fact => !scribe.anchored.has(fact.id) && !scribe.denied.has(fact.id))
+        .slice(0, MAX_SHOWN - anchored.length)
+      const shown = [...anchored, ...matched]
       const plans = planBlock(scribe.plans.docs, scribe.wakes)
       const past = scribe.past.map((block, at) => (at === scribe.past.length - 1 ? { ...block, cache: true as const } : block))
       const allowed = new Set(scribe.places.keys())
@@ -5572,7 +5598,8 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
           who.repo ?? 'none: the session started in a folder that is no repository',
           seen.lines,
           seen.dropped,
-          shown,
+          anchored,
+          matched,
           {
             recorded: scribe.recorded.map(one => ({ ...one, hasPlace: one.id === null ? undefined : !unplaced.has(one.id) })),
             commit: pairing,
@@ -5618,6 +5645,10 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
           found.anchored.set(id, fact)
         }
 
+        for (const [id, fact] of scribe.matched) {
+          found.matched.set(id, fact)
+        }
+
         found.taken = unseen
 
         if (compactions === scribe.compactions) {
@@ -5638,6 +5669,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
         scribe.lateProposed += woken.verdict.proposed ?? 0
         scribe.earlier = replies.slice(-MAX_PROPOSALS)
         scribe.anchored.clear()
+        scribe.matched.clear()
         scribe.wakes += 1
         await apply(host, scribe, who, woken.verdict, woken.facts, {
           steps: MAX_STEPS - woken.steps,
@@ -5900,7 +5932,7 @@ async function tellAgent(host: ScribeHost, scribe: Scribe, brief: Band.Brief): P
   const sent = new Set<string>()
 
   for (const one of brief.briefs) {
-    const facts = brief.facts.filter(fact => isAnchoredTo(fact, one.paths))
+    const facts = brief.facts.filter(fact => fact.matchedPaths.some(path => one.paths.includes(path)))
     const agents = [...started.values()].filter(agent => agent.prompt === one.prompt && !scribe.finished.has(agent.agentId))
 
     for (const { agentId } of agents) {
@@ -6018,14 +6050,23 @@ async function putBack(host: ScribeHost, scribe: Scribe, gone: Written): Promise
   return back
 }
 
+/**
+ * A key of a tell was pressed. "Not relevant" takes the record down and it
+ * is not told again in this session, however it is found again; nothing is
+ * kept of it on this machine, unlike "Knew this", which says the developer
+ * knows the record, not that it was beside the point.
+ */
 async function pressedTell(host: ScribeHost, scribe: Scribe, item: Band.Tell, key: string): Promise<void> {
   const { band } = scribe
+  const done = (action: Word<'tell', 'action'>): void => host.report('tell', { action, route: item.route.by })
 
   if (key === 'open') {
     item.isOpen = true
+    done('opened')
   } else if (key === 'tell-claude' && item.brief === undefined) {
     if (await tellClaude(host, TELL_LEAD, item.fact)) {
       Band.clear(band)
+      done('told_claude')
     }
   } else if (key === 'tell-agent' && item.brief !== undefined) {
     if (await tellAgent(host, scribe, item.brief)) {
@@ -6034,8 +6075,14 @@ async function pressedTell(host: ScribeHost, scribe: Scribe, item: Band.Tell, ke
   } else if (key === 'knew' && item.brief === undefined) {
     Band.know(band, item.fact.id)
     Band.clear(band)
+    done('knew')
+  } else if (key === 'not-relevant' && item.brief === undefined) {
+    Band.reject(band, item.fact.id)
+    Band.clear(band)
+    done('not_relevant')
   } else if (key === 'dismiss') {
     Band.clear(band)
+    done('dismissed')
   }
 }
 
@@ -6345,6 +6392,7 @@ function needsSecondPress(key: string): boolean {
   return (
     key === 'keep' ||
     key === 'knew' ||
+    key === 'not-relevant' ||
     key === 'off' ||
     key === 'replaces' ||
     key === 'holds' ||

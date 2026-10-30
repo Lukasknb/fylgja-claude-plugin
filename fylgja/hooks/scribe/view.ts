@@ -7,7 +7,7 @@
 import { glyphOf } from '../glyphs'
 import { drawn } from '../plain'
 import { armOf } from './band'
-import type { Band, Item, Receipt } from './band'
+import type { Band, Item, Receipt, Route } from './band'
 import { changedLine } from './facts'
 import { forLine } from './scope'
 import type { Fact, Written } from './types'
@@ -126,11 +126,35 @@ function headline(fact: Fact): Part[] {
   ]
 }
 
-/** The row that says a record's code changed after it was last confirmed, and in which file; none for any other record. */
-function changed(fact: Fact): Row[] {
-  const line = changedLine(fact, drawn)
+/**
+ * The row that says a record's code changed after it was last confirmed, and
+ * in which file; none for any other record. Told for that very reason, the
+ * row says so, and is the only one on the card that says why it is shown.
+ */
+function changed(fact: Fact, isWhyShown = false): Row[] {
+  // A record told because its code changed and not marked so all the same is said to be shown for it, with no file named.
+  const line = isWhyShown
+    ? (changedLine(fact, drawn, 'Shown because its code changed') ?? 'Shown because its code changed since it was last confirmed.')
+    : changedLine(fact, drawn)
 
   return line === undefined ? [] : [{ parts: [{ text: line, tone: 'dim' }] }]
+}
+
+/** What the one dim row of a tell says of why it is shown; none for a decision whose code changed, which its changed row says. */
+const SHOWN_BECAUSE = {
+  judge: "Scribe picked it for this turn's work",
+  brief: 'On files an agent was given',
+} as const
+
+function shownBecause(route: Route): Row[] {
+  const text =
+    route.by === 'anchor'
+      ? `Shown because you opened ${drawn(route.path, MAX_CONTENT)}`
+      : route.by === 'doubted'
+        ? undefined
+        : SHOWN_BECAUSE[route.by]
+
+  return text === undefined ? [] : [{ parts: [{ text, tone: 'dim' }] }]
 }
 
 /** A record's reason as it is said where the record is opened: the reason, or that there is none and whether anybody was asked. */
@@ -204,7 +228,7 @@ function brief(band: Band, item: Item & { kind: 'tell' }, facts: readonly Fact[]
       register: 'tells',
       head: 'has notes on the code an agent is given',
       note: NOTES.told,
-      rows: [count],
+      rows: [count, ...shownBecause(item.route)],
       keys: withAbout(band, [tellAgent, { key: 'open', hotkey: '2', label: 'Open' }, dismiss]),
     }
   }
@@ -215,6 +239,7 @@ function brief(band: Band, item: Item & { kind: 'tell' }, facts: readonly Fact[]
     note: NOTES.told,
     rows: [
       count,
+      ...shownBecause(item.route),
       ...facts.flatMap(fact => [
         { parts: headline(fact) },
         ...holds(fact.appliesTo),
@@ -236,8 +261,10 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
   const rest: Key[] = [
     { key: 'tell-claude', hotkey: '2', label: 'Tell Claude' },
     twice(band, 'knew', '3', 'Knew this'),
+    twice(band, 'not-relevant', '4', 'Not relevant'),
     { key: 'dismiss', hotkey: '0', label: 'Dismiss' },
   ]
+  const isDoubted = item.route.by === 'doubted'
 
   if (!item.isOpen) {
     return {
@@ -246,7 +273,7 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
       note: NOTES.told,
       // A record whose code changed since says so before it is opened: it is not to be read as settled.
       // Nor is one that holds for some organizations alone to be read as general.
-      rows: [{ parts: headline(fact) }, ...holds(fact.appliesTo), ...changed(fact)],
+      rows: [{ parts: headline(fact) }, ...holds(fact.appliesTo), ...changed(fact, isDoubted), ...shownBecause(item.route)],
       keys: withAbout(band, [{ key: 'open', hotkey: '1', label: 'Open' }, ...rest]),
     }
   }
@@ -266,7 +293,7 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
     rows: [
       { parts: headline(fact) },
       ...holds(fact.appliesTo),
-      ...changed(fact),
+      ...changed(fact, isDoubted),
       ...why(fact),
       ...(rejected.length === 0
         ? []
@@ -282,6 +309,7 @@ function tell(band: Band, item: Item & { kind: 'tell' }): View {
               parts: [{ text: 'In: ', tone: 'dim' } as const, { text: where.join(', ') }],
             },
           ]),
+      ...shownBecause(item.route),
       { parts: [{ text: provenanceOf(fact), tone: 'dim' }] },
       // Only a record read out of a meeting or a session has a page to open.
       ...(fact.link === null ? [] : [{ parts: [{ link: fact.link, label: 'Open where it came from' }] }]),
