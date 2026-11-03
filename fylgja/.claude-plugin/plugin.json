@@ -37,6 +37,13 @@
       "required": false,
       "default": "Sonnet"
     },
+    "invisible": {
+      "type": "boolean",
+      "title": "Invisible",
+      "description": "Nothing of the plugin is drawn and nothing is asked of you: no chips, receipts, cards, mark, window, commands or lines under the prompt. Fylgja's tools stay with Claude, and Scribe still records, without asking why. A decision it would have asked about is kept without a reason, and one that may replace a recorded one is kept beside it. While another account is signed in than this machine is set up for, the plugin stays out.",
+      "required": false,
+      "default": false
+    },
     "telemetry": {
       "type": "boolean",
       "title": "Debugging events",

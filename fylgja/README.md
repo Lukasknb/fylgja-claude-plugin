@@ -95,8 +95,7 @@ Very little, on purpose.
   through the plugin and signed in as the account this machine is set up
   for. It reads `ᚠ· fylgja is reading` while Scribe looks at the turn that
   just ended, and `ᚠ fylgja · 2 kept` while records Scribe wrote in this
-  conversation still stand (it lists the last forty, and counts no
-  further). Whatever else the plugin shows above the prompt is drawn in
+  conversation still stand, however many. Whatever else the plugin shows above the prompt is drawn in
   its place, as a card (see Scribe): a heavy amber one when it waits for
   you, a thin dim one when it only tells you something. The mark comes
   up only over an empty prompt box, and no digit or letter presses it.
@@ -104,7 +103,12 @@ Very little, on purpose.
   for notices alone.
 - A window that lists what Scribe kept in this conversation, when you ask
   for it: click the mark, or type `/fylgja-kept` where the terminal reports
-  no clicks. It never opens by itself. One row a record, newest first; the
+  no clicks. It never opens by itself. One row a record, newest first,
+  twenty to a page: past twenty the title bar says which (`21–40 of 87
+  kept`), and `[ Newer ]` and `[ Older ]` under the rows turn the page
+  and select its first record. The arrows reach them after the last row;
+  a page key or an arrow that takes the selection past the page turns
+  the page with it. The
   selected one is opened to its reason, what was ruled out and the files
   it concerns. It takes keys only while it is open and has them, and none
   of its keys is a letter or a digit: what you type is a prompt and goes
@@ -776,7 +780,7 @@ line down and works as ever once the pinned account answers.
 
 ### Scribe's settings
 
-Two rows of `/config`, under this plugin. A change in the menu applies at
+Three rows of `/config`, under this plugin. A change in the menu applies at
 the next step, look or key, with no reload and no new session; `/config`
 is also read once a turn, by the fifth step or the turn's end, for a
 change made another way.
@@ -800,6 +804,20 @@ change made another way.
   reason. `Opus` costs more. Every request of Scribe's uses it: the
   look, the look for a reason, the comparison with recorded decisions,
   and putting a refused record right.
+- **Invisible** (off by default): nothing of the plugin is drawn and
+  nothing is asked of you. No chip in the prompt box or in your message,
+  no glyph on links, no receipt for a write, no mark, card or window
+  above the prompt, no line under it, no `/fylgja-kept` or
+  `/fylgja-search` (a session started invisible does not offer them, and
+  one that offered them before opens nothing). Fylgja's tools are
+  Claude's as ever, and Scribe still looks and records, without asking:
+  a decision it would have asked why about is kept without a reason, one
+  that may replace a recorded decision is kept beside it, and a choice
+  an agent made is let go as one that could not be put to you. Nothing
+  is told about the files in hand. While another account is signed in
+  than this machine is set up for, the plugin stays out, as it does
+  until you answer that question. Turned on in the menu, whatever is up
+  comes down at once.
 
 ### What an agent hands back
 

@@ -19,6 +19,7 @@ import { OWN_SERVER, REFUSED, REPORT_TOOL, verdictFor } from './scribe/grant'
 import * as Ledger from './scribe/ledger'
 import * as Scribe from './scribe/scribe'
 import type { ScribeHost } from './scribe/scribe'
+import { INVISIBLE_FIELD } from './scribe/settings'
 import * as Search from './search'
 import * as Session from './session'
 import * as Telemetry from './telemetry'
@@ -46,10 +47,11 @@ function hostOf($: EngineInterface, session: Session.Session, live?: Live): Host
     isLive: () => live?.isOpen === true,
     // The line under the prompt has one owner. Sign-in comes first; when it
     // has nothing to say, the line shows what the plugin left there, if anything.
+    // An invisible plugin says nothing there, and takes down what it said before.
     status: text => {
       const line = text ?? session.notice
 
-      $.ui.status(line === undefined ? undefined : drawn(line, MAX_LINE))
+      $.ui.status(line === undefined || session.isInvisible() ? undefined : drawn(line, MAX_LINE))
     },
     redraw: () => $.ui.invalidate('ui.render'),
     every: (ms, fn) => $.clock.every(ms, fn),
@@ -144,7 +146,11 @@ function scribeHostOf($: EngineInterface, session: Session.Session, report: Repo
     now: () => $.clock.now(),
     after: (ms, fn) => $.clock.after(ms, fn),
     redraw: () => $.ui.invalidate('ui.render'),
-    toast: text => $.ui.toast(drawn(text, MAX_LINE)),
+    toast: text => {
+      if (!session.isInvisible()) {
+        $.ui.toast(drawn(text, MAX_LINE))
+      }
+    },
     // Scribe's line goes where every line of the plugin's goes, behind the sign-in line.
     status: text => Session.say(hostOf($, session, live), session, text),
     mark: () => remark($, session),
@@ -767,6 +773,8 @@ export function register(on: On, options: PluginOptions = {}): void {
 
   // What the mark says of Scribe is read from Scribe when the line is written.
   session.doing = () => Scribe.doing(scribe)
+  // Whether anything of the plugin is drawn, as Scribe's settings say: one switch, read wherever something would be.
+  session.isInvisible = () => Scribe.isInvisible(scribe)
   // The keys pressed and the lines entered in the band, as its elements'
   // own handlers took them; the hook on the press does the work.
   const presses: string[] = []
@@ -843,6 +851,11 @@ export function register(on: On, options: PluginOptions = {}): void {
       })
     }
 
+    // An invisible plugin offers no command: each opens a window.
+    if (session.isInvisible()) {
+      return started
+    }
+
     // The way to the window of what was kept for a terminal that reports no clicks.
     try {
       await $.command.register({ name: 'fylgja-kept', description: 'Show what Fylgja kept in this session', immediate: true })
@@ -868,6 +881,11 @@ export function register(on: On, options: PluginOptions = {}): void {
   // Typed by the developer, so the window opens. It answers with no line of
   // its own: a command's line is read by Claude, and the window says it all.
   on('command.run', { command: 'fylgja-kept' }, async $ => {
+    // Registered before the plugin was made invisible: it opens nothing now.
+    if (session.isInvisible()) {
+      return {}
+    }
+
     if (await caughtUp($, held)) {
       await vouch($, held, noteSignIn)
     }
@@ -885,6 +903,10 @@ export function register(on: On, options: PluginOptions = {}): void {
   // in the field, and nothing is asked until Enter. It answers with no line
   // of its own either: what was found is the developer's to read, not Claude's.
   on('command.run', { command: 'fylgja-search' }, async ($, e) => {
+    if (session.isInvisible()) {
+      return {}
+    }
+
     const query = Search.queryOf(e.args)
 
     if (await caughtUp($, held)) {
@@ -979,6 +1001,11 @@ export function register(on: On, options: PluginOptions = {}): void {
       // The box is drawn all the same.
     }
 
+    // An invisible plugin makes no chips and paints nothing: the box is the editor's.
+    if (session.isInvisible()) {
+      return box
+    }
+
     try {
       const { text, start, end, inputText } = e
       const shown = Draft.edited(draft, { text, start, end, inputText, key: e.key?.key }, box)
@@ -1060,8 +1087,8 @@ export function register(on: On, options: PluginOptions = {}): void {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'UserMessage' }, ($, e, next) => {
-    // Expanded, the row shows the message exactly as it was sent.
-    if (e.props.isExpanded || !isOwnPrompt(e.props.origin)) {
+    // Expanded, the row shows the message exactly as it was sent; an invisible plugin draws no row.
+    if (e.props.isExpanded || !isOwnPrompt(e.props.origin) || session.isInvisible()) {
       return next(e)
     }
 
@@ -1078,7 +1105,7 @@ export function register(on: On, options: PluginOptions = {}): void {
   })
 
   on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
-    const text = withGlyphs(e.props.text)
+    const text = session.isInvisible() ? undefined : withGlyphs(e.props.text)
 
     return text === undefined ? next(e) : next({ ...e, props: { ...e.props, text } })
   })
@@ -1094,7 +1121,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       },
     },
     ($, e, next) => {
-      const receipt = e.props.isErrored ? undefined : receiptOf(e.props.tool, e.props.output)
+      const receipt = e.props.isErrored || session.isInvisible() ? undefined : receiptOf(e.props.tool, e.props.output)
 
       if (receipt === undefined) {
         return next(e)
@@ -1246,6 +1273,19 @@ export function register(on: On, options: PluginOptions = {}): void {
       Scribe.configured(scribe, field, done.value)
     }
 
+    // Made invisible: what is up comes down at once, the window and the line under the prompt with it.
+    if (field === INVISIBLE_FIELD && done.deny === undefined) {
+      if (session.isInvisible()) {
+        $.ui.status(undefined)
+
+        if (isUp(scribe, win)) {
+          await closeWindow($, scribe, win)
+        }
+      }
+
+      $.ui.invalidate('ui.render')
+    }
+
     return done
   }).catch(($, e, next) => next(e))
 
@@ -1304,7 +1344,8 @@ export function register(on: On, options: PluginOptions = {}): void {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // The band is the survey's while one is up, and an agent's transcript is not Scribe's.
     // The question of which account is signed in comes before anything of Scribe's.
-    const isOthers = e.props.hasSurvey || e.props.view?.agentId !== undefined
+    // So is it while the plugin is invisible: nothing of it is drawn, the account question included.
+    const isOthers = e.props.hasSurvey || e.props.view?.agentId !== undefined || session.isInvisible()
     const shown = isOthers
       ? undefined
       : (Session.accountView(session) ??

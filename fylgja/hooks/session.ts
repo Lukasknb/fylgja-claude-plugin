@@ -64,6 +64,8 @@ export type Session = {
   mark: string | undefined
   /** What Scribe is at, asked whenever the mark is worked out. Set once, by the plugin; without it the mark rests. */
   doing: (() => Doing | undefined) | undefined
+  /** Whether the plugin is set to be invisible (`settings.ts`): nothing of it is drawn, and nobody is asked anything. */
+  isInvisible: () => boolean
   /** The line last said about why the plugin stays out; said once, not at every answer. */
   offLine: string | undefined
   /** The account Fylgja answered for this connection, and whether it is the pinned one. */
@@ -116,6 +118,7 @@ export function create(): Session {
     isMarked: false,
     mark: undefined,
     doing: undefined,
+    isInvisible: () => false,
     offLine: undefined,
     account: { state: 'unknown', who: undefined },
     known: undefined,

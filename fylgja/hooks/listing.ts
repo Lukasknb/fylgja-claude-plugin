@@ -57,6 +57,8 @@ export type View = {
   quiet?: string
   /** The one key of a view that lists nothing and can do one thing about it, under that line. */
   action?: Action
+  /** The keys that turn to the next or the previous page of rows, under them; none while every row is on one page. */
+  pages?: Action[]
   /** One line under the rows, about what the view does not list. */
   closing?: string
   /** Whether a key of the selected record waits for its second press. */

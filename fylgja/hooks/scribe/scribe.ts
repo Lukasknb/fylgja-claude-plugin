@@ -53,7 +53,7 @@ import type { Block } from './prompt'
 import { relativeTo, repoNameOf } from './repo'
 import * as Journal from './journal'
 import { briefOf, isConfirmed, isStarted } from './reports'
-import { CADENCE_FIELD, CADENCE_STEP, cadenceOf, MODEL_FIELD, modelOf } from './settings'
+import { CADENCE_FIELD, CADENCE_STEP, cadenceOf, INVISIBLE_FIELD, isInvisibleOf, MODEL_FIELD, modelOf } from './settings'
 import { cleared } from './staged'
 import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
@@ -678,6 +678,10 @@ const HOUR_MS = 3_600_000
 const MAX_LOOKUP_PATHS = 30
 const MAX_DEFERRED = 10
 const MAX_LISTED = 40
+
+/** No more of Scribe's records without a place are handed the model to pair with a commit than the newest this many. */
+const MAX_PAIRED = 40
+
 const MAX_PROMPTS = 100
 const FLUSH_BUDGET_MS = 20_000
 const PROBE = 'README.md'
@@ -907,6 +911,15 @@ export function doing(scribe: Scribe): Doing | undefined {
 /** Whether Scribe is known not to run in this conversation: switched off, or its session not one it works in. */
 export function isOff(scribe: Scribe): boolean {
   return scribe.identity === null || !scribe.options.isOn
+}
+
+/**
+ * Whether the plugin is set to be invisible (`settings.ts`), as the settings
+ * in hand say: then Scribe puts no question to anybody, and nothing it holds
+ * is drawn.
+ */
+export function isInvisible(scribe: Scribe): boolean {
+  return isInvisibleOf(scribe.settings[INVISIBLE_FIELD])
 }
 
 /** A session began: whether a person is at it, and whether it draws where the band is. */
@@ -1428,7 +1441,7 @@ function restore(host: ScribeHost, scribe: Scribe, folded: Journal.Folded, rows:
   const standing = new Set(scribe.written.map(one => one.id))
   const back = folded.records.filter(one => !standing.has(one.id))
 
-  scribe.written = [...back.map(({ at: _at, since: _since, isMine: _isMine, ...record }) => record), ...scribe.written].slice(-MAX_LISTED)
+  scribe.written = [...back.map(({ at: _at, since: _since, isMine: _isMine, ...record }) => record), ...scribe.written]
 
   for (const one of back) {
     scribe.unverified.add(one.id)
@@ -2453,7 +2466,7 @@ async function send(
     return { written, code: undefined, refusal: undefined, isTaken: true }
   }
 
-  scribe.written = [...scribe.written, written].slice(-MAX_LISTED)
+  scribe.written = [...scribe.written, written]
 
   if (outcome === 'created') {
     scribe.mine.add(written.id)
@@ -2593,9 +2606,16 @@ function answerOf(item: Band.Question, key: string): Word<'question', 'key'> | u
 
 /**
  * Puts a question in line (`Band.offerQuestion`). When a rule holds it
- * back, which rule is noted: it is why nothing was asked.
+ * back, which rule is noted: it is why nothing was asked. While the plugin
+ * is invisible no question is put at all, and each caller goes on as it
+ * does when a question cannot be put: the decision is recorded without a
+ * reason, or beside the record it might replace.
  */
 function ask(host: ScribeHost, scribe: Scribe, question: Band.Question, about: string): boolean {
+  if (isInvisible(scribe)) {
+    return false
+  }
+
   const { band } = scribe
   const by: Word<'question', 'held_back_by'> | undefined = band.hasAskedThisTurn
     ? 'turn_asked'
@@ -3416,7 +3436,7 @@ async function apply(
   for (const id of verdict.tells) {
     const fact = facts.get(id)
 
-    if (fact !== undefined && !scribe.written.some(own => own.id === id)) {
+    if (fact !== undefined && !scribe.written.some(own => own.id === id) && !isInvisible(scribe)) {
       Band.offerTell(band, fact, { by: 'judge' })
     }
   }
@@ -3502,7 +3522,7 @@ function takeReports(host: ScribeHost, scribe: Scribe, shown: readonly AgentRepo
       scribe.unconfirmed = [...scribe.unconfirmed, { draft: one.draft, agentId: report.agentId, report: report.text }].slice(
         -MAX_UNCONFIRMED,
       )
-    } else if (Band.offerChoice(scribe.band, { kind: 'question', form: 'report', draft: one.draft, isTouched: false })) {
+    } else if (!isInvisible(scribe) && Band.offerChoice(scribe.band, { kind: 'question', form: 'report', draft: one.draft, isTouched: false })) {
       scribe.asked = [...scribe.asked, one.draft.content].slice(-MAX_LISTED)
     } else {
       letGo(scribe, 'report_choice')
@@ -3766,7 +3786,7 @@ async function recalled(
 
     if (fact.changed !== null && fact.kind === 'decision' && !isOwn) {
       scribe.doubted = [...scribe.doubted.filter(one => one.fact.id !== fact.id), { fact, repo, asks: true }].slice(-MAX_DOUBTED)
-    } else {
+    } else if (!isInvisible(scribe)) {
       Band.offerTell(scribe.band, fact, { by: 'anchor', path: opened })
     }
   }
@@ -3954,7 +3974,9 @@ function askHolds(host: ScribeHost, scribe: Scribe): void {
     }
 
     // Told once, or known for good: there is nothing left to say of it. Otherwise this turn's tell is taken.
-    if (!Band.offerTell(band, fact, { by: 'doubted' }) && !band.told.has(fact.id) && !band.kept.known.includes(fact.id)) {
+    const isOffered = !isInvisible(scribe) && Band.offerTell(band, fact, { by: 'doubted' })
+
+    if (!isOffered && !band.told.has(fact.id) && !band.kept.known.includes(fact.id)) {
       waiting.push({ ...one, asks: false })
     }
   }
@@ -4152,7 +4174,8 @@ async function briefed(
     return prompt === '' || files.length === 0 ? [] : [{ prompt, files }]
   })
 
-  if (briefs.length === 0 || scribe.band.tellsThisTurn >= Band.MAX_TELLS_PER_TURN || (await connected(host)) === undefined) {
+  // A brief is told to the developer, for a key of theirs to pass on: with nothing drawn, there is nobody to tell.
+  if (isInvisible(scribe) || briefs.length === 0 || scribe.band.tellsThisTurn >= Band.MAX_TELLS_PER_TURN || (await connected(host)) === undefined) {
     return
   }
 
@@ -5555,6 +5578,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
               files: due.files.slice(0, MAX_COMMIT_FILES),
               records: [...unplaced.values()]
                 .filter(one => one.repo === due.repo)
+                .slice(-MAX_PAIRED)
                 .map(one => ({ id: one.id, content: one.content })),
             }
       // Only the reports of agents the main conversation started, each to one look.
@@ -6621,6 +6645,15 @@ export async function ledgerPressed(host: ScribeHost, scribe: Scribe, key: strin
   const at = key.indexOf(':')
   const action = at === -1 ? key : key.slice(0, at)
   const id = at === -1 ? '' : key.slice(at + 1)
+
+  // A page of the list: the selection goes to its first row, and the ring with it.
+  if (key === Ledger.NEWER || key === Ledger.OLDER) {
+    if (Ledger.turn(ledgerEntries(scribe), ledger, key === Ledger.OLDER ? 1 : -1)) {
+      host.redraw()
+    }
+
+    return
+  }
 
   if (action === 'row' || action === 'cancel') {
     if (action === 'row') {

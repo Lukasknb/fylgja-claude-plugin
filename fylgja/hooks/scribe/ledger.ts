@@ -111,6 +111,38 @@ export function shelve(ledger: Ledger, gone: Written): void {
   ledger.gone = [...ledger.gone.filter(one => one.id !== gone.id), gone].slice(-MAX_GONE)
 }
 
+/** No more rows are drawn at once than this: the rest are on the pages before and after, a key away. */
+export const PAGE = 20
+
+/** The keys that turn to the page of newer records, and of older ones. */
+export const NEWER = 'page:newer'
+export const OLDER = 'page:older'
+
+/** The page the selected row is on, from 0 for the newest records. */
+export function pageOf(entries: readonly Entry[], ledger: Ledger): number {
+  const selected = selectedIn(entries, ledger)
+
+  return selected === undefined ? 0 : Math.floor(entries.indexOf(selected) / PAGE)
+}
+
+/**
+ * Turns to the page `by` pages away, stopping at either end, and selects
+ * its first row: the page is the one the selection is on. Whether it turned.
+ */
+export function turn(entries: readonly Entry[], ledger: Ledger, by: number): boolean {
+  const last = Math.max(0, Math.ceil(entries.length / PAGE) - 1)
+  const to = Math.min(last, Math.max(0, pageOf(entries, ledger) + by))
+  const first = entries[to * PAGE]
+
+  if (to === pageOf(entries, ledger) || first === undefined) {
+    return false
+  }
+
+  rest(ledger, first.record.id)
+
+  return true
+}
+
 /** The row that is selected: the one picked, or the first while that one is not listed. */
 export function selectedIn(entries: readonly Entry[], ledger: Ledger): Entry | undefined {
   return entries.find(entry => entry.record.id === ledger.selected) ?? entries[0]
@@ -340,7 +372,17 @@ export function viewOf(
 
   const entries = entriesOf(written, ledger)
   const selected = selectedIn(entries, ledger)
-  const lines = entries.map(({ record, isGone }): Line => {
+  // Only the page the selection is on is drawn; the keys under it turn to the others.
+  const page = pageOf(entries, ledger)
+  const isPaged = entries.length > PAGE
+  const onPage = entries.slice(page * PAGE, (page + 1) * PAGE)
+  const pages: Action[] = !isPaged
+    ? []
+    : [
+        ...(page > 0 ? [{ key: NEWER, label: 'Newer' }] : []),
+        ...((page + 1) * PAGE < entries.length ? [{ key: OLDER, label: 'Older' }] : []),
+      ]
+  const lines = onPage.map(({ record, isGone }): Line => {
     const id = record.id
     const isSelected = selected?.record.id === id
     const kind = `${glyphOf('decision')} ${kindName(record.kind)}`
@@ -398,12 +440,17 @@ export function viewOf(
 
   const isArmed = lines.some(line => line.actions.some(action => action.isArmed === true))
   const closing = notKept(lost)
-  const hasRule = fitted(lines, rows - 3 - (lines.length === 0 ? 1 : 0) - (isArmed ? 1 : 0) - (closing === undefined ? 0 : 1))
+  const hasRule = fitted(
+    lines,
+    rows - 3 - (lines.length === 0 ? 1 : 0) - (isArmed ? 1 : 0) - (closing === undefined ? 0 : 1) - (pages.length === 0 ? 0 : 1),
+  )
+  const range = `${page * PAGE + 1}–${page * PAGE + onPage.length} of `
 
   return {
     name: NAME,
-    count: written.length === 0 ? '' : `${written.length} kept`,
+    count: written.length === 0 ? '' : `${isPaged ? range : ''}${written.length} kept`,
     lines,
+    ...(pages.length === 0 ? {} : { pages }),
     ...(lines.length === 0 ? { quiet: QUIET.empty } : {}),
     ...(closing === undefined ? {} : { closing }),
     isArmed,

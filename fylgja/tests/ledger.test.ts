@@ -1059,3 +1059,87 @@ describe('the window where Scribe does not run', () => {
     expect(seen.closes).toEqual([PANE])
   })
 })
+
+describe('a session that kept more than one page', () => {
+  /** A session in which Scribe kept `count` records, three a turn, the first written first; the window is opened by its command. */
+  async function many($: Engine, on: On, count: number) {
+    const turns = Math.ceil(count / 3)
+    const replies = Array.from({ length: turns }, (_, at) =>
+      verdict({
+        records: Array.from({ length: Math.min(3, count - at * 3) }, (_, n) =>
+          decision({ content: `Keep rule ${at * 3 + n + 1} for the retry queue.`, anchors: [{ path: FILE }] }),
+        ),
+      }),
+    )
+    const seen = frame(on)
+    const set = stage(on, { replies })
+
+    await $.session.start(START)
+
+    for (let at = 0; at < turns; at += 1) {
+      await turn($, set, dev(`change ${at + 1}: settle the retry queue`), claude('Done.', edit(FILE)))
+    }
+
+    await press($, 'ok')
+    await $.command.run(COMMAND)
+
+    return { seen, set }
+  }
+
+  test('keeps every record, with no cap, and draws one page of them at a time', { timeoutMs: 60_000 }, async ($, on) => {
+    const { set } = await many($, on, 45)
+
+    expect(set.of('remember').length).toBe(45)
+
+    const first = await pane($, true, 100, 40)
+    const rows = await first.rows()
+
+    expect((await first.lines())[0]).toBe(' ᚠ fylgja  | kept in this session | 1–20 of 45 kept')
+    expect(rows.length).toBe(Ledger.PAGE)
+    expect(rows[0], 'newest first').toMatch('Keep rule 45 ')
+    expect(await first.actions(), 'the first page turns only to older ones').toEqual(['Older'])
+
+    await first.press(Ledger.OLDER)
+    await first.unmount()
+
+    const second = await pane($, true, 100, 40)
+
+    expect((await second.lines())[0]).toBe(' ᚠ fylgja  | kept in this session | 21–40 of 45 kept')
+    expect((await second.rows())[0], 'the first row of the page is the selected one').toMatch(/^▸ .*Keep rule 25 /)
+    expect(await second.actions()).toEqual(['Newer', 'Older'])
+
+    await second.press(Ledger.OLDER)
+    await second.unmount()
+
+    const last = await pane($, true, 100, 40)
+
+    expect((await last.lines())[0]).toBe(' ᚠ fylgja  | kept in this session | 41–45 of 45 kept')
+    expect((await last.rows()).length).toBe(5)
+    expect(await last.actions(), 'the last page turns only back').toEqual(['Newer'])
+
+    await last.unmount()
+  })
+
+  test('a page key moves the selection past the page, and the page follows it', { timeoutMs: 60_000 }, async ($, on) => {
+    await many($, on, 25)
+    await scrolled($, 40)
+
+    const ui = await pane($, true, 100, 40)
+
+    expect((await ui.lines())[0]).toBe(' ᚠ fylgja  | kept in this session | 21–25 of 25 kept')
+    expect((await ui.rows()).at(-1), 'at the end, the oldest is selected').toMatch(/^▸ .*Keep rule 1 /)
+
+    await ui.unmount()
+  })
+
+  test('a list of one page has no page keys and says its count as ever', async ($, on) => {
+    await opened($, on)
+
+    const ui = await pane($, true)
+
+    expect((await ui.lines())[0]).toBe(' ᚠ fylgja  | kept in this session | 2 kept')
+    expect(await ui.actions()).toEqual([])
+
+    await ui.unmount()
+  })
+})

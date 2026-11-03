@@ -1,5 +1,5 @@
 /**
- * Scribe's two settings in `/config`: how often it looks inside a turn, and
+ * Scribe's settings in `/config`: how often it looks inside a turn, and
  * which model it thinks with. Each is a picker over fixed words; the words
  * are what the developer sees, and what they stand for is read here.
  *
@@ -49,4 +49,16 @@ export function modelOf(value: unknown): string {
   const chosen = typeof value === 'string' && Object.hasOwn(MODELS, value) ? MODELS[value] : undefined
 
   return chosen ?? (MODELS[DEFAULT_MODEL] as string)
+}
+
+/**
+ * The `userConfig` field that makes the plugin invisible: nothing of it is
+ * drawn, and nobody is asked anything. Scribe still records; what it would
+ * have asked is settled as it is when a question is left unanswered.
+ */
+export const INVISIBLE_FIELD = 'invisible'
+
+/** Whether a value of the invisible switch turns it on; anything but `true` leaves the plugin as it is. */
+export function isInvisibleOf(value: unknown): boolean {
+  return value === true
 }
