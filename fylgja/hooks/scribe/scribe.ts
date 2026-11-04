@@ -2468,6 +2468,10 @@ async function send(
   const scope: Scope | undefined =
     recalled === undefined && scribe.takesScope && (draft.appliesTo ?? []).length > 0 ? { applies_to: draft.appliesTo ?? [] } : undefined
 
+  // The write again, as it now stands: where it holds only while Fylgja takes that, its stage and package as left.
+  const resent = (): Promise<Tried> =>
+    tried(host, scribe, 'remember', { ...args, ...base, ...(scribe.takesScope ? scope : undefined), ...filed, ...settled })
+
   try {
     ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope, ...filed, ...settled }))
 
@@ -2501,6 +2505,19 @@ async function send(
         ...filed,
         ...settled,
       }))
+    }
+
+    // The record is another member's (this is theirs again, or a confirmation of it): it is not filed under the plan by
+    // this write, and is sent again once without the package. The plan stays filed for the session's other records.
+    if (answer === undefined && filed.work_package_id !== undefined && codeOf(refusal) === 'filing_not_yours') {
+      filed = { ...(filed.stage === undefined ? {} : { stage: filed.stage }) }
+      ;({ answer, refusal } = await resent())
+    }
+
+    // Only its author declares a record anything but built: sent again once without the stage.
+    if (answer === undefined && filed.stage !== undefined && codeOf(refusal) === 'stage_not_yours') {
+      filed = { ...(filed.work_package_id === undefined ? {} : { work_package_id: filed.work_package_id }) }
+      ;({ answer, refusal } = await resent())
     }
 
   } catch {

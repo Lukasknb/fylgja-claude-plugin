@@ -311,6 +311,15 @@ function call(name, args) {
 
     if (existing !== undefined) {
       const isTheirs = existing.written_by !== WHO.user.id
+
+      // Another member's record is neither filed under the writer's plan nor declared planned by them.
+      if (isTheirs && args.work_package_id !== undefined) {
+        return failed("refused:filing_not_yours — this record is another member's: it is not filed under your work package")
+      }
+
+      if (isTheirs && args.stage !== undefined && args.stage !== 'built') {
+        return failed("refused:stage_not_yours — this record is another member's: you may only declare it built")
+      }
       const fresh = anchors.filter(
         anchor => !existing.anchors.some(had => had.path === anchor.path && (had.symbol ?? null) === (anchor.symbol ?? null)),
       )

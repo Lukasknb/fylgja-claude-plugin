@@ -127,6 +127,60 @@ describe('Scribe files a plan as a work package and the decisions under it as pl
     })
   }
 
+  const refusing = (code: string, when: (args: Record<string, unknown>) => boolean) => {
+    let written = 0
+
+    return (args: Record<string, unknown>) => {
+      if (when(args)) {
+        return { content: [{ type: 'text', text: `refused:${code} — this record is another member's` }], isError: true }
+      }
+
+      written += 1
+
+      return answer({ atom_id: idOf(300 + written), outcome: 'created', supersede: 'not_requested' })
+    }
+  }
+
+  test('a record another member holds is written again without the package alone, and the plan stays filed', async ($, on) => {
+    const SAME = 'Use Postgres advisory locks for the job queue, not Redis.'
+    const set = stage(on, {
+      tools: { ...filing, remember: refusing('filing_not_yours', args => args.content === SAME && 'work_package_id' in args) },
+      replies: [
+        act({ records: [UNDER_PLAN] }),
+        act({ records: [decision({ content: 'Claim export rows with SKIP LOCKED.', plan: { doc: 1, section: null }, stage: 'planned', anchors: [] })] }),
+      ],
+    })
+
+    await $.session.start(START)
+    await turn($, set, dev(`plan it ${TALK}`), approved())
+    await turn($, set, dev(`refine it ${TALK}`), claude('Refined.'))
+
+    const sent = set.of('remember')
+
+    expect(sent.length).toBe(3)
+    expect(sent[0]).toMatchObject({ content: SAME, stage: 'planned', work_package_id: WP })
+    expect(sent[1]).toMatchObject({ content: SAME, stage: 'planned', reason_status: 'stated' })
+    expect(sent[1]).not.toHaveProperty('work_package_id')
+    expect(sent[2], 'the next record is filed under the plan still').toMatchObject({ stage: 'planned', work_package_id: WP })
+  })
+
+  test('a stage only the author may declare is left off, once, and the record keeps its package', async ($, on) => {
+    const set = stage(on, {
+      tools: { ...filing, remember: refusing('stage_not_yours', args => args.stage === 'planned') },
+      replies: [act({ records: [UNDER_PLAN] })],
+    })
+
+    await $.session.start(START)
+    await turn($, set, dev(`plan it ${TALK}`), approved())
+
+    const sent = set.of('remember')
+
+    expect(sent.length).toBe(2)
+    expect(sent[0]).toMatchObject({ stage: 'planned', work_package_id: WP })
+    expect(sent[1]).toMatchObject({ work_package_id: WP, reason_status: 'stated' })
+    expect(sent[1]).not.toHaveProperty('stage')
+  })
+
   test('a server from before stages: the write is sent again without stage and package, and none is sent them again', async ($, on) => {
     let written = 0
     const set = stage(on, {
