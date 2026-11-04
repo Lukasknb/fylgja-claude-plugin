@@ -28,9 +28,25 @@ const WHO = {
 const held = new Map(scenarios.map(scenario => [scenario.repo, (scenario.records ?? []).map(asStored)]))
 // Records that were removed, each with the repository it was held under: one sent again as it was comes back.
 const removed = []
+// The plans filed as work packages, by repository and title.
+const packages = new Map()
 
 const loose = { type: 'object', additionalProperties: true }
-const TOOLS = ['whoami', 'recall', 'search', 'open', 'resolve', 'remember', 'amend_memory', 'attach_commit'].map(name => ({
+const TOOLS = [
+  'whoami',
+  'recall',
+  'search',
+  'open',
+  'resolve',
+  'remember',
+  'amend_memory',
+  'attach_commit',
+  'push_work_package',
+  'get_work_package',
+  'withdraw_work_package',
+  'withdraw_decisions',
+  'complete_work_package',
+].map(name => ({
   name,
   description: `Stand-in for Fylgja's ${name}.`,
   inputSchema: loose,
@@ -341,6 +357,8 @@ function call(name, args) {
     return json({
       atom_id: record.id,
       outcome: 'created',
+      // A decision's stage as declared, or derived from the work package it was filed under; none for any other kind.
+      stage: record.type !== 'decision' ? null : (args.stage ?? (args.work_package_id === undefined ? null : 'planned')),
       supersede: args.supersedes === undefined ? 'not_requested' : prior === undefined ? 'rejected' : 'applied',
       superseded_prior_id: prior?.id ?? null,
       supersede_rejected_reason: args.supersedes !== undefined && prior === undefined ? 'no such memory' : null,
@@ -437,6 +455,58 @@ function call(name, args) {
     })
 
     return json({ atom_id: record.id, outcome: isChanged ? 'fixed' : 'unchanged', restored_prior_id: null })
+  }
+
+  // A plan filed as a work package, by repository and title: the same plan again is the same package. No decision is
+  // filed under one here, so reading one back holds none, and withdrawing or completing one changes no record.
+  if (name === 'push_work_package') {
+    const key = `${args.repo}\u0000${args.title}`
+
+    if (!packages.has(key)) {
+      packages.set(key, randomUUID())
+    }
+
+    return json({ outcome: 'created', units_created: 0, units_kept: 0, units_removed: 0, units_orphaned: 0, work_package_id: packages.get(key) })
+  }
+
+  if (name === 'get_work_package') {
+    return [...packages.values()].includes(String(args.work_package))
+      ? json({
+          work_package_id: args.work_package,
+          decisions: [],
+          decisions_planned: 0,
+          decisions_built: 0,
+          completed_at: null,
+          withdrawn_at: null,
+          withdrawn_by_user_id: null,
+          withdrawn_reason: null,
+        })
+      : failed('refused:work_package_not_found — no work package of yours has this id')
+  }
+
+  if (name === 'withdraw_work_package') {
+    return json({
+      work_package_id: args.work_package_id,
+      outcome: 'withdrawn',
+      withdrawn_at: new Date().toISOString(),
+      reason: args.reason,
+      withdrawn: [],
+      kept_built: [],
+    })
+  }
+
+  if (name === 'withdraw_decisions') {
+    return json({ withdrawn: [], kept: [], already_withdrawn: [], not_found: Array.isArray(args.atom_ids) ? args.atom_ids : [] })
+  }
+
+  if (name === 'complete_work_package') {
+    return json({
+      work_package_id: args.work_package_id,
+      outcome: args.undo === true ? 'reopened' : 'completed',
+      completed_at: args.undo === true ? null : new Date().toISOString(),
+      decisions_planned: 0,
+      decisions_built: 0,
+    })
   }
 
   if (name === 'attach_commit') {

@@ -16,6 +16,12 @@ export const OWN_TOOLS: readonly string[] = [
   'remember',
   'amend_memory',
   'attach_commit',
+  // A plan filed as a work package, read back, and withdrawn or marked done on the developer's yes.
+  'push_work_package',
+  'get_work_package',
+  'withdraw_work_package',
+  'withdraw_decisions',
+  'complete_work_package',
   // The plugin's own events about itself (`telemetry.ts`); Scribe never calls it.
   'report_events',
 ]

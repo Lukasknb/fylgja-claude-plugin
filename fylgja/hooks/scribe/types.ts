@@ -13,6 +13,13 @@ export type ReasonStatus = 'stated' | 'not_stated' | 'no_strong_reason'
 export type RecordKind = 'decision' | 'gotcha' | 'correction'
 
 /**
+ * Where a decision stands to its code: decided while planning and not built
+ * yet, or how the code is (or was) built. A declaration, the writer's word;
+ * Fylgja derives the stage a reader sees from it and from the plan's work.
+ */
+export type Stage = 'planned' | 'built'
+
+/**
  * A place in the code a record concerns: a path relative to the tree's
  * root, and a symbol in it. `fingerprint` is the hash of that code as it is
  * now, set only just before it is sent (`fingerprint.ts`).
@@ -66,6 +73,10 @@ export type Draft = {
    * check it against the records like it again.
    */
   isSettled?: boolean
+  /** A decision's alone, and only one taken under a plan this session holds: whether its code is written yet. */
+  stage?: Stage
+  /** The work package in Fylgja of the plan it was taken under, when Fylgja filed that plan as one. */
+  workPackageId?: string
 }
 
 /** Where a file lies: its repository as `owner/name`, and its path from that repository's root. */
@@ -118,7 +129,21 @@ export type Verdict = {
   aboutWork?: number
   /** How many of the places the model named were left off a record, by why. */
   dropped?: Dropped
+  /** Ids of recorded planned decisions whose code this turn wrote: each is confirmed again as built. */
+  built?: string[]
+  /** A plan, or planned decisions, the developer settled against: put to them, and withdrawn only on their yes. */
+  planProposal?: PlanProposal
 }
+
+/**
+ * What a verdict proposes to do to a plan Fylgja holds: withdraw it, with
+ * its planned decisions, or mark its work done. Never done on the model's
+ * word: the developer is asked, once, and only their yes does it.
+ */
+export type PlanProposal =
+  | { action: 'withdraw'; workPackageId: string; title: string; reason: string }
+  | { action: 'withdraw'; atomIds: string[]; contents: string[]; reason: string }
+  | { action: 'complete'; workPackageId: string; title: string }
 
 /** Places a record was not given, by why: counts only. */
 export type Dropped = Record<'not_known' | 'working_file' | 'ignored' | 'untracked_doc' | 'other_repo' | 'plan_not_kept', number>
@@ -161,6 +186,10 @@ export type Fact = {
   matchedPaths: string[]
   /** The organizations it holds for alone, by Fylgja's names for them; none when it holds generally. */
   appliesTo?: string[]
+  /** A decision's stage as Fylgja derives it; unset when Fylgja does not say, which is every record from before stages. */
+  stage?: Stage
+  /** The repository it is filed under, as the lookup that returned it says; unset when it does not. */
+  repo?: string
 }
 
 /** A record Scribe wrote in this session. */
@@ -193,6 +222,9 @@ export type Written = {
   against?: string
   /** The organizations it holds for alone, as Fylgja answered: none when it holds generally. */
   appliesTo?: string[]
+  /** A decision's stage and the work package it was filed under, as sent: held so that a record put back goes back the same. */
+  stage?: Stage
+  workPackageId?: string
 }
 
 /** A commit made in the session's own repository: its sha, the files it holds as paths from that repository's root, and the rule they were reported by. */

@@ -15,7 +15,7 @@
  * of another.
  */
 
-import type { Draft, Fact, Written } from './types'
+import type { Draft, Fact, PlanProposal, Written } from './types'
 
 /**
  * How a record came to be told: anchored to a file the session opened (and
@@ -108,7 +108,28 @@ export type ReportQuestion = {
   isTouched: boolean
 }
 
-export type Question = ReasonQuestion | ReversalQuestion | HoldsQuestion | ReportQuestion
+/**
+ * Whether to withdraw a plan the developer settled against, with its planned
+ * decisions, or to mark a plan's work done. Nothing is done unless the
+ * developer says yes. Unanswered, it lapses, shown or still waiting: at the
+ * developer's next prompt, a compaction or the session's end. It has its
+ * own share, one a session for each plan, and takes nothing from the other
+ * questions' limits.
+ */
+export type PlanQuestion = {
+  kind: 'question'
+  form: 'plan'
+  proposal: PlanProposal
+  /** What the plan is called, or how many records it is, as the card says it. */
+  title: string
+  /** The planned decisions it would withdraw, as Fylgja holds them now; the first few are shown. */
+  planned: string[]
+  /** How many decisions of the plan are built, and are kept whatever is answered. */
+  built: number
+  isTouched: boolean
+}
+
+export type Question = ReasonQuestion | ReversalQuestion | HoldsQuestion | ReportQuestion | PlanQuestion
 export type Item = Tell | Question
 
 /** One line saying what Scribe just wrote. It waits for nobody and nothing waits for it. */
@@ -358,6 +379,37 @@ export function offerChoice(band: Band, question: ReportQuestion): boolean {
   return true
 }
 
+/** What a plan question is asked under: the package, or the records, it is about, and what it would do. */
+export function planKey(proposal: PlanProposal): string {
+  return `plan:${proposal.action}:${'workPackageId' in proposal ? proposal.workPackageId : [...proposal.atomIds].sort().join(',')}`
+}
+
+/**
+ * Puts the question what to do to a plan in line, unless the session asked
+ * it already. It is counted apart, like the question about an agent's choice.
+ */
+export function offerPlan(band: Band, question: PlanQuestion): boolean {
+  const key = planKey(question.proposal)
+
+  if (band.asked.has(key)) {
+    return false
+  }
+
+  band.asked.add(key)
+  enqueue(band, question)
+
+  return true
+}
+
+/** Lets go every plan question, on show or waiting: nobody answered it before the conversation moved past it. */
+export function lapsePlans(band: Band): void {
+  band.queue = band.queue.filter(item => !(item.kind === 'question' && item.form === 'plan'))
+
+  if (band.current?.kind === 'question' && band.current.form === 'plan') {
+    clear(band)
+  }
+}
+
 /**
  * Takes down the question about why the record `id` was decided: its reason
  * has turned up, or the record is gone. One that was never shown gives its
@@ -568,8 +620,8 @@ export function submitted(band: Band): Item | undefined {
     if (!item.isTouched) {
       band.kept.typedPast += 1
       band.kept.skip = skipsAfter(band.kept.typedPast)
-      // One about an agent's choice is counted apart, and not here.
-      band.unanswered += item.kind === 'question' && item.form !== 'report' ? 1 : 0
+      // One about an agent's choice, or about a plan, is counted apart, and not here.
+      band.unanswered += item.kind === 'question' && item.form !== 'report' && item.form !== 'plan' ? 1 : 0
     }
 
     clear(band)
@@ -578,6 +630,8 @@ export function submitted(band: Band): Item | undefined {
   band.receipt = null
   band.held = []
   band.armed = null
+  // What was asked about a plan lapses with the prompt, shown or still waiting: the developer moved on without a yes.
+  lapsePlans(band)
   band.tellsThisTurn = 0
   band.isTyping = false
   band.isWorking = true

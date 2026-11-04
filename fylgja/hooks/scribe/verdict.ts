@@ -12,11 +12,11 @@ import { MAX_ALTERNATIVE_CHARS, MAX_ALTERNATIVES, MAX_ANCHORS, MAX_CONTENT_CHARS
 import { stateFields } from './gate'
 import type { Part } from './gate'
 import { proseOf } from './labels'
-import { headingOf } from './plans'
+import { headingOf, titleOf } from './plans'
 import type { PlanDoc } from './plans'
 import { anchorsOf } from './repo'
 import { MAX_APPLIES_TO, MAX_ORGANIZATION } from './scope'
-import type { Anchor, Ask, Draft, Dropped, Fact, Place, ReasonStatus, RecordKind, Reported, Verdict } from './types'
+import type { Anchor, Ask, Draft, Dropped, Fact, Place, PlanProposal, ReasonStatus, RecordKind, Reported, Verdict } from './types'
 import { OFFERED_MARK, shareIn } from './words'
 
 /** No record's sentence is longer than this; a longer one is not written at all. */
@@ -104,6 +104,8 @@ export type Seen = {
   waiting?: ReadonlySet<string>
   /** The files the session wrote, changed or committed, by `stateKey`: the only ones a later anchor may be. */
   changed?: ReadonlySet<string>
+  /** The files this turn wrote or changed, by `stateKey`: the only ones a planned decision is built by. */
+  turnChanged?: ReadonlySet<string>
   /** The repository a record without anchors is about: the one most of the turn's files lie in. Null with none. */
   home?: string | null
   /** The ids of the records Scribe itself wrote in this session: the only ones it may rewrite or take back. */
@@ -405,7 +407,113 @@ export function draftOf(value: unknown, seen: Seen): Draft | undefined {
     // Only where the developer did answer a question in this turn.
     fromChoice: value.from_choice === true && (seen.choices ?? 0) > 0,
     ...(appliesTo.length === 0 ? {} : { appliesTo }),
+    ...(kind === 'decision' && plan !== undefined && plan.doc.isAuthored === true ? underPlan(value.stage, plan.doc) : {}),
   }
+}
+
+/**
+ * A decision taken under a plan of the session's own (approved, written or
+ * edited here; a document only read may describe what is built): filed under
+ * the plan's work package when Fylgja holds the plan as one, with the stage
+ * the model gave it, and none when it gave none. A decision under no plan
+ * carries neither.
+ */
+function underPlan(stage: unknown, doc: PlanDoc): Pick<Draft, 'stage' | 'workPackageId'> {
+  return {
+    ...(stage === 'planned' || stage === 'built' ? { stage } : {}),
+    ...(typeof doc.workPackage === 'string' ? { workPackageId: doc.workPackage } : {}),
+  }
+}
+
+/** No more planned decisions are confirmed as built by one verdict than this. */
+const MAX_BUILT = 3
+
+/** No more planned decisions are put to the developer to withdraw at once than this. */
+export const MAX_WITHDRAW_IDS = 20
+
+/** No longer a reason for withdrawing a plan is taken than this, the server's own limit. */
+export const MAX_WITHDRAW_REASON = 500
+
+/**
+ * Whether this turn wrote code where a recorded decision points: one of its
+ * code anchors, or a file under one, in the repository it is filed under.
+ * A decision that points at no code, or whose repository is not known, is
+ * never taken for carried out.
+ */
+function isCarriedOut(fact: Fact, seen: Seen): boolean {
+  const { repo } = fact
+  const code = fact.anchors.filter(anchor => isCode(anchor.path))
+
+  return (
+    repo !== undefined &&
+    [...(seen.turnChanged ?? [])].some(key => {
+      const at = key.slice(0, key.indexOf('\u0000'))
+      const path = key.slice(key.indexOf('\u0000') + 1)
+
+      return at === repo && code.some(anchor => path === anchor.path || path.startsWith(`${anchor.path.replace(/\/+$/, '')}/`))
+    })
+  )
+}
+
+/**
+ * The recorded planned decisions this turn built, by the model's word and
+ * the session's files: each one a lookup of this wake returned as planned,
+ * whose code the session wrote.
+ */
+function builtOf(value: unknown, seen: Seen): string[] {
+  const built: string[] = []
+
+  for (const entry of Array.isArray(value) ? value : []) {
+    const id = idOf(isRecord(entry) ? entry.id : entry)
+    const fact = id === null ? undefined : seen.facts.get(id)
+
+    if (id !== null && fact?.kind === 'decision' && fact.stage === 'planned' && isCarriedOut(fact, seen) && !built.includes(id) && built.length < MAX_BUILT) {
+      built.push(id)
+    }
+  }
+
+  return built
+}
+
+/**
+ * What the model proposes to do to a plan: withdraw one Fylgja holds as a
+ * work package, or recorded planned decisions by their ids, for the reason
+ * the developer settled on; or mark a plan's work done. Undefined for
+ * anything else: a plan Fylgja holds no package of, ids no lookup returned
+ * as planned, a withdrawal with no reason.
+ */
+function planProposalOf(withdraw: unknown, complete: unknown, seen: Seen): PlanProposal | undefined {
+  const docOf = (n: unknown): PlanDoc | undefined => {
+    const doc = typeof n === 'number' ? seen.plans.find(plan => plan.n === n) : undefined
+
+    return typeof doc?.workPackage === 'string' ? doc : undefined
+  }
+
+  if (isRecord(withdraw)) {
+    const reason = sentence(withdraw.reason).slice(0, MAX_WITHDRAW_REASON).trim()
+    const doc = docOf(withdraw.plan)
+    const facts = (Array.isArray(withdraw.ids) ? withdraw.ids : []).flatMap(entry => {
+      const id = idOf(entry)
+      const fact = id === null ? undefined : seen.facts.get(id)
+
+      return fact?.kind === 'decision' && fact.stage === 'planned' ? [fact] : []
+    })
+    const unique = facts.filter((fact, at) => facts.findIndex(one => one.id === fact.id) === at).slice(0, MAX_WITHDRAW_IDS)
+
+    if (reason !== '' && doc !== undefined && typeof doc.workPackage === 'string') {
+      return { action: 'withdraw', workPackageId: doc.workPackage, title: titleOf(doc), reason }
+    }
+
+    if (reason !== '' && unique.length > 0) {
+      return { action: 'withdraw', atomIds: unique.map(fact => fact.id), contents: unique.map(fact => fact.content), reason }
+    }
+  }
+
+  const done = docOf(isRecord(complete) ? complete.plan : complete)
+
+  return done === undefined || typeof done.workPackage !== 'string'
+    ? undefined
+    : { action: 'complete', workPackageId: done.workPackage, title: titleOf(done) }
 }
 
 function askOf(value: unknown, records: readonly (Draft | undefined)[], kept: readonly Draft[], seen: Seen): Ask | null {
@@ -606,6 +714,10 @@ export function verdictOf(value: Record<string, unknown>, asked: Seen): Verdict 
     }
   }
 
+  // A planned decision whose code this turn wrote, and what the model would do to a plan: checked against what this wake saw.
+  const built = builtOf(value.built, seen)
+  const planProposal = planProposalOf(value.withdraw_plan, value.complete_plan, seen)
+
   return {
     records,
     ...(reported.length === 0 ? {} : { reported }),
@@ -617,6 +729,8 @@ export function verdictOf(value: Record<string, unknown>, asked: Seen): Verdict 
     withdrawn,
     stated: sentences(value.stated, MAX_STATED, MAX_STATED_CHARS),
     anchored,
+    ...(built.length === 0 ? {} : { built }),
+    ...(planProposal === undefined ? {} : { planProposal }),
     proposed: Array.isArray(value.anchor) ? value.anchor.length : 0,
     aboutWork: own.slice(0, MAX_RECORDS + MAX_CHOICE_RECORDS).filter(isAboutTheWork).length,
     dropped,

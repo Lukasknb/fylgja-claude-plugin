@@ -499,6 +499,26 @@ card around them.
   repository keeps becomes one of the record's anchors; a plan of the
   work does not, it is named in the reason. A plan outside it will be gone for a later
   reader, so its reasoning is copied into the record.
+- **A plan is filed as a work package, and its decisions as planned.**
+  A plan of the session's own (one you approved, or one Claude wrote or
+  edited here) is sent to Fylgja once, by its top heading and the
+  repository it lies in (`push_work_package`), whatever Fylgja answers. A
+  document only read, an old ADR or spec, is not: it may describe what is
+  built already. A decision taken under a plan of the session's is filed
+  in its work package, and goes in as `planned` when it commits to work
+  not done yet, as `built` when it says how existing code works, and with
+  no stage when that is unclear, so a later reader does not take a plan for
+  how the code works. Where Fylgja files the plan as no package (the
+  repository is no project of the team's, the title is another member's
+  package, the package was archived or withdrawn) its decisions go in under
+  none, and can still be withdrawn by their ids. A planned decision whose
+  code anchors this turn writes is confirmed again as `built`. When you
+  settle on another direction that drops a plan ("stream it over the
+  webhook instead"), Scribe asks once, showing the plan, how many planned
+  decisions would be withdrawn and how many built ones kept; only a yes
+  (pressed twice) withdraws it. A no, or no answer before your next prompt
+  or a compaction, leaves everything as it is. Saying a plan's work is
+  finished is asked about the same way, to mark it done.
 - **It notes the commit the code was at.** A decision about files is
   written with the commit the working tree those files lie in is at
   (`git rev-parse HEAD`) and whether any of them had changes not yet
@@ -1292,10 +1312,12 @@ the start of its refusal and never the words after it: `alternatives_too_many`,
 - Text from the session, from a plan and from Fylgja is handed to the model
   fenced as data with the instruction that it is never to be followed. A
   record that says "ignore the above" is a record that says so.
-- It lets through, without asking you, exactly its own calls of nine
+- It lets through, without asking you, exactly its own calls of fourteen
   tools (`whoami`, `recall`, `search`, `open`, `resolve`, `remember`,
-  `amend_memory`, `attach_commit`, and `report_events` for the events
-  about itself) on the Fylgja server this plugin declares, where only your
+  `amend_memory`, `attach_commit`, `push_work_package`,
+  `get_work_package`, `withdraw_work_package`, `withdraw_decisions`,
+  `complete_work_package`, and `report_events` for the events about
+  itself) on the Fylgja server this plugin declares, where only your
   mode would have asked: never past a rule, hook, setting or ceiling of
   yours or your organization's that refuses them or asks. Claude's calls
   to the very same tools, and every other tool call, are decided as they

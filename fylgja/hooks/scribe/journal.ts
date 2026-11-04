@@ -446,6 +446,15 @@ export function writtenOf(value: unknown): Written | undefined {
     ...(Array.isArray(value.triggers) ? { triggers: texts(value.triggers) } : {}),
     ...(against === undefined ? {} : { against }),
     ...(namesOf(value.appliesTo).length === 0 ? {} : { appliesTo: namesOf(value.appliesTo) }),
+    ...filedOf(value),
+  }
+}
+
+/** A decision's stage and work package as kept, when they read as such; nothing otherwise. */
+function filedOf(value: Record<string, unknown>): Pick<Draft, 'stage' | 'workPackageId'> {
+  return {
+    ...(value.stage === 'planned' || value.stage === 'built' ? { stage: value.stage } : {}),
+    ...(typeof value.workPackageId === 'string' && ID.test(value.workPackageId) ? { workPackageId: value.workPackageId } : {}),
   }
 }
 
@@ -500,6 +509,7 @@ function draftOf(value: unknown): Draft | undefined {
     updates,
     ...(value.fromChoice === true ? { fromChoice: true } : {}),
     ...(namesOf(value.appliesTo).length === 0 ? {} : { appliesTo: namesOf(value.appliesTo) }),
+    ...filedOf(value),
   }
 }
 

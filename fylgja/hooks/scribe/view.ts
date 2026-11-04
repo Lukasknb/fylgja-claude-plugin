@@ -77,6 +77,7 @@ export const NOTES = {
   reversal: 'Leave it and it goes with your next prompt. The new decision is then recorded beside the old one.',
   holds: 'Leave it and it goes with your next prompt. The record stays as it is, marked as possibly out of date.',
   report: 'Leave it and it goes with your next prompt. Nothing is recorded.',
+  plan: 'Leave it and it goes with your next prompt. Nothing in Fylgja is changed.',
   field: 'Enter saves it. Cancel leaves everything as it is.',
 } as const
 
@@ -89,6 +90,8 @@ export const SAID = {
 } as const
 
 export const MAX_CONTENT = 220
+/** No more of a plan's planned decisions are listed on the card asking about it than this. */
+const MAX_PLANNED_SHOWN = 5
 const MAX_DETAIL = 600
 export const MAX_OPTION = 80
 
@@ -371,6 +374,42 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
         twice(band, 'keep', '1', 'Keep, record it'),
         { key: 'tell-claude', hotkey: '2', label: 'Not wanted, tell Claude' },
         { key: 'skip', hotkey: '0', label: 'Skip' },
+      ]),
+    }
+  }
+
+  if (item.form === 'plan') {
+    const isWithdraw = item.proposal.action === 'withdraw'
+    const listed = item.planned.slice(0, MAX_PLANNED_SHOWN)
+
+    // Withdrawing a plan, or marking its work done, is the developer's call: nothing is done unless they say yes, twice.
+    return {
+      register: 'asks',
+      head: isWithdraw ? 'withdraw this plan?' : 'mark this plan done?',
+      note: NOTES.plan,
+      rows: [
+        { parts: [mark('?'), { text: 'Plan: ', tone: 'strong' }, { text: drawn(item.title, MAX_CONTENT) }] },
+        ...(item.proposal.action === 'withdraw'
+          ? [{ parts: [{ text: 'Because: ', tone: 'dim' } as const, { text: drawn(item.proposal.reason, MAX_CONTENT) }] }]
+          : []),
+        {
+          parts: [
+            {
+              text: isWithdraw
+                ? `${item.planned.length} planned ${item.planned.length === 1 ? 'decision' : 'decisions'} withdrawn, ${item.built} built kept`
+                : `${item.planned.length} planned ${item.planned.length === 1 ? 'decision' : 'decisions'} recorded as built`,
+              tone: 'dim',
+            },
+          ],
+        },
+        ...listed.map(content => ({ parts: [{ text: '· ', tone: 'dim' } as const, { text: drawn(content, MAX_CONTENT) }] })),
+        ...(item.planned.length > listed.length
+          ? [{ parts: [{ text: `and ${item.planned.length - listed.length} more`, tone: 'dim' } as const] }]
+          : []),
+      ],
+      keys: withAbout(band, [
+        isWithdraw ? twice(band, 'withdraw-plan', '1', 'Yes, withdraw it') : twice(band, 'complete-plan', '1', 'Yes, it is done'),
+        { key: 'skip', hotkey: '0', label: 'No, keep it' },
       ]),
     }
   }

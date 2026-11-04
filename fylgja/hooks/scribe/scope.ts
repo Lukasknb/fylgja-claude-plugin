@@ -46,6 +46,20 @@ export function isUnknownScope(refusal: string): boolean {
   return isUntaken || OLD_WORDS.test(refusal)
 }
 
+const OLD_STAGE = /\b(?:stage|work_package_id)\b[\s\S]{0,200}?unexpected[ _]keyword[ _]argument|unexpected[ _]keyword[ _]argument[\s\S]{0,200}?\b(?:stage|work_package_id)\b/i
+
+/**
+ * Whether Fylgja turned a write down for a decision's stage or its work
+ * package: a server from before them. Today's servers name the arguments the
+ * tool does take, and one of the two is not among them; older servers name
+ * the argument they did not expect.
+ */
+export function isUnknownStage(refusal: string): boolean {
+  const takes = /an argument this tool does not take \(it takes: ([^)]*)\)/i.exec(refusal)?.[1]?.split(/,\s*/)
+
+  return (takes !== undefined && (!takes.includes('stage') || !takes.includes('work_package_id'))) || OLD_STAGE.test(refusal)
+}
+
 /**
  * Where a record holds, as `open` of it says: Fylgja's names for the
  * organizations, none for a record that holds generally; undefined when the

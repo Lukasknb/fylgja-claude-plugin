@@ -30,14 +30,14 @@ import type { GitState } from './anchoring'
 import * as Band from './band'
 import { baseOf, rootOf } from './base'
 import type { Base } from './base'
-import { isUnknownScope, namesOf, openedScope } from './scope'
+import { isUnknownScope, isUnknownStage, namesOf, openedScope } from './scope'
 import type { Scope } from './scope'
 import { gitIn } from './git'
 import type { Run } from './git'
 import { carried } from './carry'
 import { AGENT_TOOLS, changesOf, filesOf, hasOpenQuestion, isAnswer, isPrompt, observe, pathsIn, plain } from './delta'
 import type { Landed, Offer, Row } from './delta'
-import { changedLine, factsOf, knownReposIn } from './facts'
+import { changedLine, factsOf, idsIn, knownReposIn } from './facts'
 import { REFUSED } from './grant'
 import { leaningOf, leaningRefusal } from './labels'
 import type { Leaning } from './labels'
@@ -57,7 +57,7 @@ import { CADENCE_FIELD, CADENCE_STEP, cadenceOf, INVISIBLE_FIELD, isInvisibleOf,
 import { cleared } from './staged'
 import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
-import type { Anchor, Commit, Deferred, Doubted, Draft, Fact, Place, Reported, Verdict, Written } from './types'
+import type { Anchor, Commit, Deferred, Doubted, Draft, Fact, Place, PlanProposal, Reported, Verdict, Written } from './types'
 import { correctedOf, MAX_CONTENT, mentionsNoReason, saysNoReason, statesNoReason } from './verdict'
 import { stateKey } from './verdict'
 import type { Seen } from './verdict'
@@ -418,6 +418,8 @@ export type Scribe = {
   toAttach: Commit[]
   /** Whether Fylgja's server takes the organizations a record holds for: true until it turned a write down for them. */
   takesScope: boolean
+  /** Whether Fylgja takes a decision's stage and work package; false once a server from before them turned one down. */
+  takesStage: boolean
   /**
    * Recorded decisions whose code a commit changed after they were last
    * confirmed, not yet asked about: one of them is asked about when a look
@@ -765,6 +767,7 @@ export function create(options: Options): Scribe {
     commits: new Set(),
     toAttach: [],
     takesScope: true,
+    takesStage: true,
     doubted: [],
     denied: new Map(),
     index: cleared(false),
@@ -934,6 +937,7 @@ export function started(scribe: Scribe, isInteractive: boolean, surface: string 
   scribe.query = ''
   scribe.isQueried = false
   scribe.takesScope = true
+  scribe.takesStage = true
   scribe.index = cleared(false)
   scribe.created.clear()
   scribe.own.clear()
@@ -2339,6 +2343,69 @@ async function liveSessionId(host: ScribeHost, scribe: Scribe): Promise<string> 
   return read === scribe.identity?.sessionId ? (scribe.log.conv ?? read) : read
 }
 
+/** What Fylgja refuses a record filed under a work package with when that package takes no more records. */
+const UNFILED: ReadonlySet<string> = new Set(['plan_withdrawn', 'work_package_not_found'])
+
+/** The plans filed as `id` are held as filed under none from here: nothing more of the session is sent under it. */
+function unfile(scribe: Scribe, id: string): void {
+  for (const doc of scribe.plans.docs) {
+    if (doc.workPackage === id) {
+      doc.workPackage = null
+    }
+  }
+}
+
+/**
+ * Files each plan of the session's own (approved, written or edited here;
+ * never a document only read) in Fylgja as a work package, under the
+ * repository it lies in (or the session's own), by its title: once per
+ * plan in the session, whatever Fylgja answers. No units are sent: Scribe
+ * knows none, and a package sent again keeps the ones it has. A plan Fylgja
+ * files as none (the repository is no project of the team's, the title is
+ * another member's package, the package was archived or withdrawn) is noted
+ * once and left without one: its decisions are written all the same, and
+ * can be withdrawn by their ids.
+ */
+async function filePlans(host: ScribeHost, scribe: Scribe, who: Identity): Promise<void> {
+  const { plans } = scribe
+
+  for (const doc of plans.docs.filter(one => one.workPackage === undefined && one.isAuthored === true)) {
+    const repo = (doc.key.startsWith('/') ? scribe.places.get(doc.key)?.repo : undefined) ?? who.repo
+    const title = Plans.titleOf(doc)
+    const key = repo === null ? undefined : Plans.filedKey(repo, title)
+    // Every document that is this plan, as it stands once the answer is in: one kept again meanwhile is another object.
+    const mark = (id: string | null): void => {
+      for (const one of plans.docs) {
+        if (one.key === doc.key && (one.workPackage === undefined || one.workPackage === null) && Plans.titleOf(one) === title) {
+          one.workPackage = id
+        }
+      }
+    }
+
+    if (key === undefined || plans.filed.has(key)) {
+      mark(key === undefined ? null : (plans.filed.get(key) ?? null))
+      continue
+    }
+
+    // Sent once: a call that fails, or is refused, is not tried again for this plan.
+    plans.filed.set(key, null)
+    mark(null)
+
+    const done = await tried(host, scribe, 'push_work_package', { repo, title }).catch(() => undefined)
+    const answered = done?.answer
+    const filed = answered?.work_package_id
+    const id = typeof filed === 'string' && idsIn(filed)[0] === filed.toLowerCase() ? filed.toLowerCase() : undefined
+    const code = codeOf(done?.refusal)
+
+    if (id !== undefined) {
+      plans.filed.set(key, id)
+      mark(id)
+    } else if (code !== undefined) {
+      host.debug(`Scribe: Fylgja filed no work package for a plan (${code}); its decisions are written without one`)
+    }
+  }
+}
+
 /**
  * What sending one record came to: what was written, or the code Fylgja
  * refused it by and its words. `isTaken` says Fylgja took it, whether or not
@@ -2382,6 +2449,14 @@ async function send(
     ...(prior === undefined ? {} : { supersedes: prior.id }),
     ...(recalled === undefined ? {} : { recalled_atom_id: recalled }),
   }
+  // Its stage, and the plan's work package it is filed under while Fylgja holds the plan as one; neither to a server
+  // from before stages.
+  let filed: { stage?: string; work_package_id?: string } = !scribe.takesStage
+    ? {}
+    : {
+        ...(draft.kind === 'decision' && draft.stage !== undefined ? { stage: draft.stage } : {}),
+        ...(draft.workPackageId === undefined || recalled !== undefined ? {} : { work_package_id: draft.workPackageId }),
+      }
   // The developer already said how it stands to the record it may replace: Fylgja does not judge that again.
   const settled = draft.isSettled === true && recalled === undefined ? { check_relations: false } : {}
 
@@ -2394,7 +2469,16 @@ async function send(
     recalled === undefined && scribe.takesScope && (draft.appliesTo ?? []).length > 0 ? { applies_to: draft.appliesTo ?? [] } : undefined
 
   try {
-    ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope, ...settled }))
+    ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope, ...filed, ...settled }))
+
+    // A server from before stages turns the write down for them: sent again once without them, and never again sent them
+    // in this session. Checked before where a record holds, which the same server may well take.
+    if (answer === undefined && Object.keys(filed).length > 0 && isUnknownStage(refusal ?? '')) {
+      scribe.takesStage = false
+      filed = {}
+      host.debug('Scribe: Fylgja does not take a decision\'s stage here; records are written without it in this session')
+      ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...scope, ...settled }))
+    }
 
     // A server from before it took where a record holds turns the write down for it: sent again once, without it.
     const isOldScope = answer === undefined && scope !== undefined && isUnknownScope(refusal ?? '')
@@ -2402,7 +2486,21 @@ async function send(
     if (isOldScope) {
       scribe.takesScope = false
       host.debug('Scribe: Fylgja does not take where a record holds here; records are written without it in this session')
-      ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...settled }))
+      ;({ answer, refusal } = await tried(host, scribe, 'remember', { ...args, ...base, ...filed, ...settled }))
+    }
+
+    // The plan's work package was withdrawn, or is not to be found: the decision is written as planned, under no package,
+    // and no later one of this session is sent under it.
+    if (answer === undefined && filed.work_package_id !== undefined && UNFILED.has(codeOf(refusal) ?? '')) {
+      unfile(scribe, filed.work_package_id)
+      filed = { ...(filed.stage === undefined ? {} : { stage: filed.stage }) }
+      ;({ answer, refusal } = await tried(host, scribe, 'remember', {
+        ...args,
+        ...base,
+        ...(scribe.takesScope ? scope : undefined),
+        ...filed,
+        ...settled,
+      }))
     }
 
   } catch {
@@ -2460,6 +2558,8 @@ async function send(
     anchors: draft.anchors,
     // Where it holds as Fylgja answered: its names for the organizations, never the session's guess at them.
     ...(namesOf(answer.applies_to).length === 0 ? {} : { appliesTo: namesOf(answer.applies_to) }),
+    ...(filed.stage === 'planned' || filed.stage === 'built' ? { stage: filed.stage } : {}),
+    ...(filed.work_package_id === undefined ? {} : { workPackageId: filed.work_package_id }),
   }
 
   if (written.outcome === 'held') {
@@ -2561,7 +2661,7 @@ function shownNow(host: ScribeHost, scribe: Scribe): void {
   }
 
   // A question about an agent's report has no word of its own on Fylgja's list yet, and is not reported.
-  if (item?.kind === 'question' && item.form !== 'report' && !SHOWN.has(item)) {
+  if (item?.kind === 'question' && item.form !== 'report' && item.form !== 'plan' && !SHOWN.has(item)) {
     SHOWN.set(item, performance.now())
     host.report('question', { stage: 'shown', form: item.form })
   }
@@ -2571,7 +2671,7 @@ function shownNow(host: ScribeHost, scribe: Scribe): void {
 function answeredBy(host: ScribeHost, item: Band.Question, key: Word<'question', 'key'>): void {
   const since = SHOWN.get(item)
 
-  if (item.form === 'report') {
+  if (item.form === 'report' || item.form === 'plan') {
     return
   }
 
@@ -2597,7 +2697,7 @@ function answerOf(item: Band.Question, key: string): Word<'question', 'key'> | u
     return key === 'holds' ? 'still_holds' : key === 'no-longer' ? 'no_longer_holds' : undefined
   }
 
-  if (item.form === 'report') {
+  if (item.form === 'report' || item.form === 'plan') {
     return undefined
   }
 
@@ -2628,7 +2728,7 @@ function ask(host: ScribeHost, scribe: Scribe, question: Band.Question, about: s
           : undefined
   const isInLine = Band.offerQuestion(band, question, about)
 
-  if (!isInLine && by !== undefined && question.form !== 'report') {
+  if (!isInLine && by !== undefined && question.form !== 'report' && question.form !== 'plan') {
     host.report('question', { stage: 'held_back', form: question.form, held_back_by: by })
   }
 
@@ -3324,6 +3424,20 @@ async function apply(
 
   propose(scribe, verdict)
 
+  // A planned decision this turn carried out is recorded as built: confirmed again, with nothing else changed.
+  for (const id of verdict.built ?? []) {
+    const fact = facts.get(id)
+
+    if (fact !== undefined) {
+      await promote(host, scribe, who, fact, budget.seen.home ?? who.repo)
+    }
+  }
+
+  // What to do to a plan is put to the developer; nothing is done before they say yes.
+  if (verdict.planProposal !== undefined && !isInvisible(scribe)) {
+    await proposePlan(host, scribe, verdict.planProposal)
+  }
+
   for (const [index, draft] of verdict.records.entries()) {
     const isAskedOf = question?.record === index
     const prior = isAskedOf && question.form === 'reversal' ? facts.get(question.prior) : undefined
@@ -3439,6 +3553,168 @@ async function apply(
     if (fact !== undefined && !scribe.written.some(own => own.id === id) && !isInvisible(scribe)) {
       Band.offerTell(band, fact, { by: 'judge' })
     }
+  }
+}
+
+/**
+ * Records a planned decision as built: it is confirmed again as it stands,
+ * under the id Fylgja returned it by, declared built. Nothing else of it
+ * changes, and nothing is shown.
+ */
+async function promote(host: ScribeHost, scribe: Scribe, who: Identity, fact: Fact, repo: string | null): Promise<void> {
+  await send(
+    host,
+    scribe,
+    who,
+    {
+      kind: 'decision',
+      content: fact.content,
+      detail: fact.detail,
+      alternatives: fact.alternatives,
+      anchors: fact.anchors,
+      triggers: [],
+      reasonStatus: fact.reasonStatus,
+      supersedes: null,
+      repo,
+      updates: null,
+      stage: 'built',
+    },
+    undefined,
+    fact.id,
+  )
+}
+
+/**
+ * The decisions of a work package as `get_work_package` answers: the
+ * sentences of its planned ones (`decisions`, each `{id, content, stage}`),
+ * and how many are built (`decisions_built`).
+ */
+function decisionsOf(answer: Record<string, unknown>): { planned: string[]; built: number } {
+  const planned = (Array.isArray(answer.decisions) ? answer.decisions : []).flatMap(one =>
+    isRecord(one) && one.stage === 'planned' && typeof one.content === 'string' && one.content.trim() !== '' ? [one.content] : [],
+  )
+
+  return { planned, built: typeof answer.decisions_built === 'number' ? answer.decisions_built : 0 }
+}
+
+/**
+ * Puts to the developer what the model proposed to do to a plan, with what
+ * it would do: the plan's planned decisions as Fylgja holds them now, and
+ * how many are built and kept. A plan Fylgja could not be asked about is
+ * not put at all: the developer would be asked to approve what nobody can
+ * show them.
+ */
+async function proposePlan(host: ScribeHost, scribe: Scribe, proposal: PlanProposal): Promise<void> {
+  if ('atomIds' in proposal) {
+    const n = proposal.atomIds.length
+
+    Band.offerPlan(scribe.band, {
+      kind: 'question',
+      form: 'plan',
+      proposal,
+      title: `${n} planned ${n === 1 ? 'decision' : 'decisions'}`,
+      planned: proposal.contents,
+      built: 0,
+      isTouched: false,
+    })
+
+    return
+  }
+
+  if (scribe.band.asked.has(Band.planKey(proposal))) {
+    return
+  }
+
+  const read = await tried(host, scribe, 'get_work_package', { work_package: proposal.workPackageId }).catch(() => undefined)
+
+  if (read?.answer === undefined) {
+    return
+  }
+
+  const { planned, built } = decisionsOf(read.answer)
+
+  Band.offerPlan(scribe.band, { kind: 'question', form: 'plan', proposal, title: proposal.title, planned, built, isTouched: false })
+}
+
+/** How many entries a list in Fylgja's answer holds; 0 for anything else. */
+function countOf(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0
+}
+
+/**
+ * A key of the question what to do to a plan. Yes withdraws it, with its
+ * planned decisions, or marks its work done: one call, on the developer's
+ * word alone. No leaves everything as it is.
+ */
+async function pressedPlan(host: ScribeHost, scribe: Scribe, item: Band.PlanQuestion, key: string): Promise<void> {
+  const { proposal } = item
+
+  if (key === 'skip') {
+    Band.clear(scribe.band)
+
+    return
+  }
+
+  const isWithdraw = key === 'withdraw-plan' && proposal.action === 'withdraw'
+
+  if (!isWithdraw && !(key === 'complete-plan' && proposal.action === 'complete')) {
+    return
+  }
+
+  Band.clear(scribe.band)
+
+  const [tool, args]: [string, Record<string, unknown>] =
+    proposal.action === 'complete'
+      ? ['complete_work_package', { work_package_id: proposal.workPackageId }]
+      : 'workPackageId' in proposal
+        ? ['withdraw_work_package', { work_package_id: proposal.workPackageId, reason: proposal.reason }]
+        : ['withdraw_decisions', { atom_ids: proposal.atomIds, reason: proposal.reason }]
+  const done = await tried(host, scribe, tool, args).catch(() => undefined)
+  const answer = done?.answer
+
+  if (answer === undefined) {
+    host.toast(isWithdraw ? 'Fylgja did not withdraw the plan.' : 'Fylgja did not mark the plan done.')
+
+    return
+  }
+
+  // `completed` or `already_completed` is done; `not_completed` and `reopened` are not what was asked.
+  if (proposal.action === 'complete') {
+    host.toast(
+      answer.outcome === 'completed' || answer.outcome === 'already_completed'
+        ? 'Plan marked done: its decisions now read as built.'
+        : 'Fylgja did not mark the plan done.',
+    )
+
+    return
+  }
+
+  // Nothing more of this session is filed under a plan that is withdrawn.
+  if ('workPackageId' in proposal) {
+    unfile(scribe, proposal.workPackageId)
+  }
+
+  // A package answers `withdrawn` and `kept_built`, and `outcome` says whether it was withdrawn already; decisions by
+  // their ids answer `withdrawn`, `kept` (built, or of no known stage) and `already_withdrawn`.
+  const gone = countOf(answer.withdrawn)
+  const decisions = `${gone} planned ${gone === 1 ? 'decision' : 'decisions'}`
+
+  if ('workPackageId' in proposal) {
+    const kept = countOf(answer.kept_built)
+
+    host.toast(
+      answer.outcome === 'already_withdrawn'
+        ? 'That plan was withdrawn already.'
+        : `Withdrawn: ${decisions}${kept === 0 ? '' : `, ${kept} built kept`}.`,
+    )
+  } else {
+    const kept = countOf(answer.kept)
+
+    host.toast(
+      gone === 0 && countOf(answer.already_withdrawn) > 0
+        ? 'Those decisions were withdrawn already.'
+        : `Withdrawn: ${decisions}${kept === 0 ? '' : `, ${kept} kept`}.`,
+    )
   }
 }
 
@@ -3619,6 +3895,8 @@ function lapse(scribe: Scribe): void {
   }
 
   scribe.unsettled = []
+  // What was proposed for a plan goes the same way: nobody said yes to it.
+  Band.lapsePlans(scribe.band)
 }
 
 /**
@@ -4357,6 +4635,9 @@ const PAIRED_WITHIN_MS = 60_000
  * the two.
  */
 export function compactionSignalled(scribe: Scribe, at: number, signal: { by: 'event' } | { by: 'boundary'; id: string }): void {
+  // What was asked about a plan does not outlast the conversation it was asked in: it lapses now, unanswered.
+  Band.lapsePlans(scribe.band)
+
   if (!watchesWindow(scribe)) {
     return
   }
@@ -4495,7 +4776,9 @@ function summaryOf(verdict: Verdict, written: readonly Written[]): string {
       verdict.question === null &&
       verdict.tells.length === 0 &&
       verdict.withdrawn.length === 0 &&
-      (verdict.unsettled ?? []).length === 0
+      (verdict.unsettled ?? []).length === 0 &&
+      (verdict.built ?? []).length === 0 &&
+      verdict.planProposal === undefined
         ? 'nothing'
         : 'act',
     recorded: written.map(one => one.content),
@@ -5327,6 +5610,11 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
       Plans.edit(scribe.plans, plan.key, plan.before, plan.after)
     }
 
+    // Approved, written or edited here: the session's own plan. One only read is not.
+    if (!('text' in plan) || plan.isRead !== true) {
+      Plans.author(scribe.plans, plan.key)
+    }
+
     // Read or changed in this turn: sent whole for the wakes that follow.
     scribe.plans.docs = scribe.plans.docs.map(doc => (doc.key === plan.key ? { ...doc, touchedAt: scribe.wakes } : doc))
   }
@@ -5347,6 +5635,9 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
       scribe.plans.docs.flatMap(doc => (doc.key.startsWith('/') ? [doc.key] : [])),
     ),
   )
+
+  // A plan approved or kept is filed in Fylgja as a work package, once: the decisions taken under it go into it.
+  await unless(cut, filePlans(host, scribe, who))
 
   const changed = await unless(cut, placesOf(host, scribe, who, seen.changed))
 
@@ -5594,6 +5885,7 @@ async function looked(host: ScribeHost, scribe: Scribe, who: Identity, sight: Si
         gitStates: scribe.gitStates,
         waiting: new Set(unplaced.keys()),
         changed: scribe.changedPlaces,
+        turnChanged: new Set(changed.map(stateKey)),
         // A turn that touched no file itself (the developer steering, agents
         // doing the work) is about the repository the session has been
         // working in: the one most of its files so far lie in, or its own.
@@ -6051,6 +6343,8 @@ async function putBack(host: ScribeHost, scribe: Scribe, gone: Written): Promise
     supersedes: null,
     repo: gone.repo ?? who.repo,
     updates: null,
+    ...(gone.stage === undefined ? {} : { stage: gone.stage }),
+    ...(gone.workPackageId === undefined ? {} : { workPackageId: gone.workPackageId }),
   })
 
   if (sent.written === undefined) {
@@ -6288,6 +6582,12 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
     return
   }
 
+  if (item.form === 'plan') {
+    await pressedPlan(host, scribe, item, key)
+
+    return
+  }
+
   if (key === 'tell-claude') {
     // Nothing is written: the developer is taking it up with Claude.
     if (await tellClaude(host, REVERSAL_LEAD, item.prior)) {
@@ -6421,6 +6721,8 @@ function needsSecondPress(key: string): boolean {
     key === 'replaces' ||
     key === 'holds' ||
     key === 'no-reason' ||
+    key === 'withdraw-plan' ||
+    key === 'complete-plan' ||
     /^(?:remove|reason|putback):/.test(key)
   )
 }

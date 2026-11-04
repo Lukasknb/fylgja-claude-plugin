@@ -34,6 +34,19 @@ export type PlanDoc = {
   headings: string[]
   /** The wake count of the session when it was last read or changed; unset where that is not kept. */
   touchedAt?: number
+  /**
+   * The work package Fylgja filed it as, by id. Unset while it was never
+   * sent; null once it was sent and Fylgja filed it as none (the repository
+   * is no project of the team's): it is sent once, never again.
+   */
+  workPackage?: string | null
+  /**
+   * Whether it is a plan of this session's: the developer approved it, or
+   * Claude wrote or edited it here. Only such a plan is filed as a work
+   * package, and only decisions under it are planned; a document the session
+   * only read (an old ADR, a spec) may describe what is built already.
+   */
+  isAuthored?: boolean
 }
 
 export type Plans = {
@@ -42,10 +55,29 @@ export type Plans = {
   count: number
   /** Counts every change, so a reader can tell whether the documents moved. */
   version: number
+  /** The keys of the documents approved, written or edited in this session, kept or not. */
+  authored: Set<string>
+  /**
+   * What each plan sent to Fylgja was filed as, by its repository and title
+   * (`filedKey`): kept past a document let go and past plan mode's plan being
+   * called otherwise, so no plan is sent twice in a session.
+   */
+  filed: Map<string, string | null>
 }
 
 export function create(): Plans {
-  return { docs: [], count: 0, version: 0 }
+  return { docs: [], count: 0, version: 0, authored: new Set(), filed: new Map() }
+}
+
+/** What a plan sent to Fylgja is known by: its repository and its title. */
+export function filedKey(repo: string, title: string): string {
+  return `${repo}\u0000${title}`
+}
+
+/** The document under `key` was approved, written or edited in this session: it is a plan of the session's own from here. */
+export function author(plans: Plans, key: string): void {
+  plans.authored.add(key)
+  plans.docs = plans.docs.map(doc => (doc.key === key && doc.isAuthored !== true ? { ...doc, isAuthored: true } : doc))
 }
 
 const MARKDOWN = /\.(?:md|markdown|mdx)$/i
@@ -102,14 +134,20 @@ export function keep(plans: Plans, key: string, path: string | null, text: strin
     return
   }
 
+  const title = headingsOf(body)[0] ?? (key === PLAN_MODE ? 'Plan' : (key.split('/').at(-1) ?? 'Plan'))
+  // A file is the same plan whatever it says now; plan mode's plan is another
+  // one once it is called otherwise, and is filed as a work package of its own.
+  const filed = held?.workPackage !== undefined && (key !== PLAN_MODE || held.title === title) ? { workPackage: held.workPackage } : {}
   const doc: PlanDoc = {
     n: held?.n ?? plans.count + 1,
     key,
     path,
-    title: headingsOf(body)[0] ?? (key === PLAN_MODE ? 'Plan' : (key.split('/').at(-1) ?? 'Plan')),
+    title,
     text: body,
     clipped: text.length - body.length,
     headings: headingsOf(body),
+    ...filed,
+    ...(plans.authored.has(key) ? { isAuthored: true } : {}),
   }
 
   plans.count = Math.max(plans.count, doc.n)
@@ -133,6 +171,23 @@ export function edit(plans: Plans, key: string, before: string, after: string): 
       held.text.replace(before, () => after),
     )
   }
+}
+
+/** No longer a title than this is sent as a work package's. */
+export const MAX_TITLE = 120
+
+/**
+ * What a plan is called as Fylgja files it: its top heading; for plan mode's
+ * plan without one, its first line; else what the session calls it. Cut to
+ * `MAX_TITLE` characters.
+ */
+export function titleOf(doc: PlanDoc): string {
+  const lines = doc.text.split('\n')
+  const top = lines.map(line => /^#\s+(.+?)\s*#*\s*$/.exec(line)?.[1]).find(heading => heading !== undefined)
+  const first = doc.key === PLAN_MODE ? lines.map(line => line.replace(/^#+\s*/, '').trim()).find(line => line !== '') : undefined
+  const title = (top ?? first ?? doc.title).replace(/\s+/g, ' ').trim()
+
+  return title.length <= MAX_TITLE ? title : `${title.slice(0, MAX_TITLE - 1).trimEnd()}…`
 }
 
 /** The heading of `doc` that `section` names, as the document writes it; undefined when it has none such. */

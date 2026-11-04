@@ -100,6 +100,7 @@ function factOf(value: unknown): Fact | undefined {
     printed: printedOf(value.anchors),
     matchedPaths: matchedOf(value),
     ...(namesOf(value.applies_to).length === 0 ? {} : { appliesTo: namesOf(value.applies_to) }),
+    ...(value.stage === 'planned' || value.stage === 'built' ? { stage: value.stage } : {}),
   }
 }
 
@@ -168,11 +169,15 @@ export function factsOf(payload: Record<string, unknown> | undefined): Fact[] {
   const list = payload === undefined ? [] : [payload.facts, payload.matches, payload.records].find(Array.isArray)
   const facts = new Map<string, Fact>()
 
+  // The repository a record is filed under: its own word, or the one the lookup was answered for.
+  const asked = typeof payload?.repo === 'string' && payload.repo !== '' ? payload.repo : undefined
+
   for (const entry of (list as unknown[] | undefined) ?? []) {
     const fact = factOf(entry)
+    const repo = isRecord(entry) && typeof entry.repo === 'string' && entry.repo !== '' ? entry.repo : asked
 
     if (fact !== undefined && !facts.has(fact.id) && facts.size < MAX_FACTS) {
-      facts.set(fact.id, fact)
+      facts.set(fact.id, repo === undefined ? fact : { ...fact, repo })
     }
   }
 

@@ -34,7 +34,8 @@ export type Row = {
 }
 
 /** A plan document seen in a tool call: its whole text, or one edit to it. */
-export type PlanSighting = { key: string; path: string | null; text: string } | { key: string; before: string; after: string }
+/** A plan seen in the turn: its text, `isRead` when the session only read it; or an edit Claude made to it. */
+export type PlanSighting = { key: string; path: string | null; text: string; isRead?: true } | { key: string; before: string; after: string }
 
 /**
  * A commit made in this repository, and what the rows before it say of the
@@ -237,8 +238,9 @@ function planOf(
   printed: string | undefined,
   root: string,
 ): PlanSighting | undefined {
+  // Approved only once the call has its result: one still waiting for the developer is no plan yet.
   if (tool === 'ExitPlanMode') {
-    return typeof input.plan === 'string' && input.plan.trim() !== ''
+    return printed !== undefined && typeof input.plan === 'string' && input.plan.trim() !== ''
       ? { key: PLAN_MODE, path: null, text: input.plan }
       : undefined
   }
@@ -260,7 +262,7 @@ function planOf(
   if (tool === 'Read' && printed !== undefined && (input.offset === undefined || input.offset === 0 || input.offset === 1)) {
     const text = readText(printed)
 
-    return isPlanDocument(file, text) ? { key: file, path, text } : undefined
+    return isPlanDocument(file, text) ? { key: file, path, text, isRead: true } : undefined
   }
 
   if (tool === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string') {
