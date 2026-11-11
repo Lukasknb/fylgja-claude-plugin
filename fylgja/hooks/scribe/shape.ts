@@ -3,7 +3,7 @@
  * state to its model so that a record passes the first time it is sent.
  *
  * Written by tests/scenarios/shape-from-gate.mjs out of the server's own
- * rules as they stood at its commit f9ba9a06. Not edited by hand.
+ * rules as they stood at its commit 7d17db79. Not edited by hand.
  */
 
 /** Words that may open a sentence before its instruction: "Never run …". */
@@ -212,12 +212,16 @@ export const INSTRUCTION_EXAMPLES: readonly string[] = [
   'Never set EPHEMERAL in the runner compose file',
   'Run alembic upgrade head before starting the worker',
   'Use `just test-db` for the database tiers',
-  'Always rebase onto main before requesting review',
   'Never run terraform apply without -target on the GPU stack',
+  'Retry failed uploads with backoff',
 ]
 
 /** Statements they give as acceptable: how a decision is worded. */
-export const STATEMENT_EXAMPLES: readonly string[] = ['The live database is fylgja_rebuild']
+export const STATEMENT_EXAMPLES: readonly string[] = [
+  'Enabling the flag is gated on telemetry metrics',
+  'The live database is fylgja_rebuild',
+  'Reopening a closed thread goes behind the partial-sync flag',
+]
 
 /** The server's rule for a decision, in its own words, and the two rewrites its refusal offers. */
 export const DECISION_RULE =

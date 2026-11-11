@@ -1,5 +1,5 @@
 {
-  "commit": "f9ba9a06",
+  "commit": "7d17db79",
   "conditionals": [
     "after",
     "always",
@@ -333,33 +333,63 @@
     "rule": "a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done",
     "rewrites": "\"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\""
   },
+  "bar": {
+    "question": "would a later reader of the code or of the product ask \"why is it like this?\"",
+    "default": "Most work leaves nothing worth keeping: the default is not to write",
+    "work_organisation": "what goes in the backlog, an epic or a ticket and what to track or build next, which task comes first or what to do next, which branch, pull request or layer of a stack of pull requests a change goes in, how the work is split into pull requests or commits and in what order they land, and how a review or a merge is run",
+    "work_organisation_why": "a later reader of the code never asks which branch, pull request, ticket or epic a change went in: the code is the same either way",
+    "never": [
+      "doing what was asked when no alternative was weighed (\"cache it\", \"add an index\": a request carried out is not a decision)",
+      "naming",
+      "formatting",
+      "routine edits",
+      "a refactor with no choice in it",
+      "what the code plainly says",
+      "status (\"tests pass\", \"PR opened\")",
+      "a discussion that reached no conclusion"
+    ],
+    "standing_rule": "A standing rule of the team's about how every change of a kind ships IS a decision",
+    "standing_rule_examples": [
+      "Schema changes ship in a separate PR from the code that uses them so the expand migration deploys first",
+      "Hotfixes are cut from the release branch, not main",
+      "Each PR stack is merged with Graphite so reviewers see small diffs"
+    ],
+    "standing_rule_test": "The question is whether it holds for the next change too, or only for the one in hand",
+    "earns": [
+      "a choice between alternatives that were really weighed, with what was rejected",
+      "an approach that was tried or proposed and then rejected",
+      "a constraint or a workaround the code now depends on"
+    ]
+  },
   "hints": {
     "kind_retired": "kind must be correction, runbook, gotcha or decision. An incident's reusable clause is a gotcha; a fact with a command trigger is a gotcha; a state-of-the-world statement is not memory at all",
     "too_long": "content is one imperative sentence of at most 220 characters — put the reasoning, the exact commands and the paths in detail",
     "detail_too_long": "detail is at most 1200 characters — this is a memory, not a write-up",
     "not_one_sentence": "content is ONE sentence — everything after the first full stop belongs in detail",
-    "status_not_memory": "this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing",
+    "status_not_memory": "this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing",
     "not_imperative": "content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds",
     "no_trigger": "a runbook or gotcha nobody can be warned about is unreachable — pass the verbatim command or error keywords in triggers",
     "burst": "batch settled findings at the end of the task; one atom per fact",
     "not_a_decision": "alternatives and reason_status describe a decision: what was ruled out, and whether a reason was given. This kind has neither",
     "reason_missing": "a decision says why. Put the reason in detail. If there is none on record, say which case it is: reason_status=\"not_stated\" when nobody has answered why yet (not asked, or the question was skipped); reason_status=\"no_strong_reason\" when the developer was asked and said there was no particular reason",
     "reason_contradiction": "detail and reason_status disagree: stated needs a reason in detail, and not_stated means there is no reason to put in detail. no_strong_reason may carry the developer's own words about why there is none",
-    "alternatives_too_many": "alternatives holds at most 6 options of at most 220 characters each — one rejected option per entry, the reasoning in detail"
+    "alternatives_too_many": "alternatives holds at most 6 options of at most 220 characters each — one rejected option per entry, the reasoning in detail",
+    "leans_on_conversation": "a record is read by someone who never saw this conversation. Name the thing by what it is, in content, detail and every alternative; if this is its real name, put it in backticks. A real identifier that exists outside the conversation (a ticket id, a file path) stays. If you cannot say what the label stands for, do not store the record"
   },
   "examples": {
     "kind_retired": "kind=\"gotcha\", content=\"Never set EPHEMERAL in the runner compose file\", triggers=[\"EPHEMERAL\", \"fylgja-runner\"]",
     "too_long": "content=\"Run alembic upgrade head before starting the worker\" with the reasoning moved into detail",
     "detail_too_long": "detail: the exact command plus one paragraph of why — not the transcript",
     "not_one_sentence": "content=\"Use `just test-db` for the database tiers\" — the second sentence belongs in detail",
-    "status_not_memory": "nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\"",
+    "status_not_memory": "the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory",
     "not_imperative": "content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)",
     "no_trigger": "triggers=[\"docker volume rm\", \"fylgja-runner\"] — the words that appear in the command itself",
     "burst": "one call at the end of the task carrying the one thing that will still be true tomorrow",
     "not_a_decision": "kind=\"decision\" with the reason in detail — or leave alternatives and reason_status out",
     "reason_missing": "detail=\"Chosen because the worker already holds a Redis connection\", or reason_status=\"not_stated\", or reason_status=\"no_strong_reason\"",
     "reason_contradiction": "the reason in detail and no reason_status; or no detail and reason_status=\"not_stated\"; or reason_status=\"no_strong_reason\" with or without the developer's own words in detail",
-    "alternatives_too_many": "alternatives=[\"Postgres advisory locks\", \"a Redis lock\"] — the options really weighed"
+    "alternatives_too_many": "alternatives=[\"Postgres advisory locks\", \"a Redis lock\"] — the options really weighed",
+    "leans_on_conversation": "the thing itself. Instead of \"goes behind the P2 flag\": content=\"Reopening a closed thread goes behind the partial-sync flag\"; instead of \"go with option B\": content=\"Retry failed uploads with backoff\", alternatives=[\"failing the upload on the first error\"]"
   },
   "cases": [
     {
@@ -828,7 +858,7 @@
       "kind": "decision",
       "content": "Aktuell the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"aktuell\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Aktuell\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "decision",
@@ -846,13 +876,13 @@
       "kind": "decision",
       "content": "Currently the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"currently\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Currently\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "decision",
       "content": "Derzeit the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"derzeit\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Derzeit\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "decision",
@@ -948,7 +978,7 @@
       "kind": "decision",
       "content": "Momentan the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"momentan\", which starts an account of what happened or where things stand. Rule: a decision says what holds, in the present tense or as an instruction — not who decided it, when, or what was done. State the decision itself, for example \"<The thing> uses <the choice> for <the purpose>\" or \"Use <the choice> for <the purpose>, not <the other>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Momentan\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "decision",
@@ -1242,7 +1272,7 @@
       "kind": "decision",
       "content": "PLA-266 pending.",
       "triggers": [],
-      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
+      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "decision",
@@ -1878,7 +1908,7 @@
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:not_imperative — content opens with \"Aktuell\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always aktuell <…>\" or \"Use <…> to aktuell <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Aktuell\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "gotcha",
@@ -1902,7 +1932,7 @@
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:not_imperative — content opens with \"Currently\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always currently <…>\" or \"Use <…> to currently <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Currently\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "gotcha",
@@ -1910,7 +1940,7 @@
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:not_imperative — content opens with \"Derzeit\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always derzeit <…>\" or \"Use <…> to derzeit <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Derzeit\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "gotcha",
@@ -2038,7 +2068,7 @@
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:not_imperative — content opens with \"Momentan\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always momentan <…>\" or \"Use <…> to momentan <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Momentan\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "gotcha",
@@ -2430,7 +2460,7 @@
       "triggers": [
         "queue"
       ],
-      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
+      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "gotcha",
@@ -2914,7 +2944,7 @@
       "kind": "correction",
       "content": "Aktuell the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"Aktuell\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always aktuell <…>\" or \"Use <…> to aktuell <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Aktuell\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "correction",
@@ -2932,13 +2962,13 @@
       "kind": "correction",
       "content": "Currently the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"Currently\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always currently <…>\" or \"Use <…> to currently <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Currently\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "correction",
       "content": "Derzeit the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"Derzeit\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always derzeit <…>\" or \"Use <…> to derzeit <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Derzeit\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "correction",
@@ -3034,7 +3064,7 @@
       "kind": "correction",
       "content": "Momentan the queue uses Postgres.",
       "triggers": [],
-      "refusal": "refused:not_imperative — content opens with \"Momentan\", which is not an opener the gate knows as an instruction. Rule: content must start with an instruction (Use, Never, Always, Run, Check, Before, When …); a correction may instead read \"X is/must/stays Y\", and a decision may be any statement of what holds. Keep your sentence and open it with one it knows, for example \"Always momentan <…>\" or \"Use <…> to momentan <…>\". Acceptable instead: content=\"Never run terraform apply without -target on the GPU stack\" (runbook/gotcha), or content=\"The live database is fylgja_rebuild\" (decision/correction)"
+      "refusal": "refused:status_not_memory — \"Momentan\" says what something is right now. If a rule requires that state, say so (\"must stay disabled for … because …\"); otherwise say what it depends on. Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "correction",
@@ -3328,7 +3358,7 @@
       "kind": "correction",
       "content": "PLA-266 pending.",
       "triggers": [],
-      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today, not something that will still be true next month; write the rule you learned instead, or nothing. Acceptable instead: nothing — a PR status is not memory. If a rule came out of it, write that: content=\"Always rebase onto main before requesting review\", kind=\"runbook\""
+      "refusal": "refused:status_not_memory — \"pending\" reads as a report of where something stands. If it is part of a rule, say what the rule does with it (\"only after waiting for …\", \"never while … is pending\"). Rule: this is the state of the world today (the value a setting holds, where work or a review stands), and it can flip without anyone telling the knowledge base. Store the durable core instead — what the state depends on, what it requires or why it must be so — or nothing. Acceptable instead: the durable core, or nothing. Instead of \"The flag is disabled pending telemetry\": content=\"Enabling the flag is gated on telemetry metrics\", kind=\"decision\". A status that carries no rule and no constraint is not memory"
     },
     {
       "kind": "correction",

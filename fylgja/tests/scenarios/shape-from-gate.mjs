@@ -1,8 +1,9 @@
 // Writes hooks/scribe/shape.ts: the server's rules for the shape of a
-// record, as Scribe's instruction states them to its model, out of
-// server-gate.json (which gate-from-server.py writes out of the server's own
-// file). Nothing of them is typed by hand: run this after the gate file
-// changes.
+// record, as Scribe's instruction states them to its model, and
+// hooks/scribe/bar.ts: the server's bar of what is worth recording at all,
+// out of server-gate.json (which gate-from-server.py writes out of the
+// server's own files). Nothing of them is typed by hand: run this after the
+// gate file changes.
 //
 //   node shape-from-gate.mjs
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -74,5 +75,44 @@ export const SHAPE_LIMITS = {
   alternatives: ${gate.limits.alternatives},
   alternative: ${gate.limits.alternative},
 } as const
+`,
+)
+
+const bar = gate.bar
+writeFileSync(
+  new URL('../../hooks/scribe/bar.ts', import.meta.url),
+  `/**
+ * The bar a record clears before the knowledge base keeps it, in the words
+ * Fylgja's server states it in: to the coding assistant in its remember
+ * tool, and to the model that judges the assistant's decisions. Scribe's
+ * instruction states the same words, so the two hold one bar.
+ *
+ * Written by tests/scenarios/shape-from-gate.mjs out of the server's own
+ * text (domain/services/memory_bar.py) as it stood at its commit ${gate.commit}.
+ * Not edited by hand.
+ */
+
+/** The one test, as a question. */
+export const BAR_QUESTION = ${JSON.stringify(bar.question)}
+
+/** The default answer to it. */
+export const BAR_DEFAULT = ${JSON.stringify(bar.default)}
+
+/** How the work is organised: never a record, however carefully it was weighed. */
+export const WORK_ORGANISATION = ${JSON.stringify(bar.work_organisation)}
+
+/** Why work organisation never passes the test. */
+export const WORK_ORGANISATION_WHY = ${JSON.stringify(bar.work_organisation_why)}
+
+/** What else never clears the bar. */
+export const BAR_NEVER: readonly string[] = ${list(bar.never)}
+
+/** The exception: how changes ship, when it holds for every change of a kind. */
+export const STANDING_RULE = ${JSON.stringify(bar.standing_rule)}
+export const STANDING_RULE_EXAMPLES: readonly string[] = ${list(bar.standing_rule_examples)}
+export const STANDING_RULE_TEST = ${JSON.stringify(bar.standing_rule_test)}
+
+/** What a decision that clears the bar looks like. */
+export const BAR_EARNS: readonly string[] = ${list(bar.earns)}
 `,
 )

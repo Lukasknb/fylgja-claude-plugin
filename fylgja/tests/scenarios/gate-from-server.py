@@ -1,4 +1,5 @@
-"""Write server-gate.json: the word lists and refusal texts of Fylgja's memory gate, read out of the server's own file.
+"""Write server-gate.json: the word lists and refusal texts of Fylgja's memory gate, and the bar of what is worth
+recording (memory_bar.py, beside the gate), read out of the server's own files.
 
     python3 -I gate-from-server.py <path to apps/api/app/domain/services/memory_gate.py> <commit>
 
@@ -16,6 +17,10 @@ spec = importlib.util.spec_from_file_location("memory_gate", source)
 gate = importlib.util.module_from_spec(spec)
 sys.modules["memory_gate"] = gate
 spec.loader.exec_module(gate)
+bar_spec = importlib.util.spec_from_file_location("memory_bar", pathlib.Path(source).with_name("memory_bar.py"))
+bar = importlib.util.module_from_spec(bar_spec)
+sys.modules["memory_bar"] = bar
+bar_spec.loader.exec_module(bar)
 
 out = {
     "commit": commit,
@@ -38,6 +43,18 @@ out = {
         "hedges": sorted(getattr(gate, "HEDGES", [])),
         "rule": gate._DECISION_RULE,
         "rewrites": gate._DECISION_REWRITES,
+    },
+    # What is worth recording at all: the words the server's remember tool and its bar judge state.
+    "bar": {
+        "question": bar.QUESTION,
+        "default": bar.DEFAULT,
+        "work_organisation": bar.WORK_ORGANISATION,
+        "work_organisation_why": bar.WORK_ORGANISATION_WHY,
+        "never": list(bar.NEVER),
+        "standing_rule": bar.STANDING_RULE,
+        "standing_rule_examples": list(bar.STANDING_RULE_EXAMPLES),
+        "standing_rule_test": bar.STANDING_RULE_TEST,
+        "earns": list(bar.EARNS),
     },
     "hints": gate.HINT_BY_REASON,
     "examples": gate.EXAMPLE_BY_REASON,
