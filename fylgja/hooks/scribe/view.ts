@@ -78,6 +78,7 @@ export const NOTES = {
   holds: 'Leave it and it goes with your next prompt. The record stays as it is, marked as possibly out of date.',
   report: 'Leave it and it goes with your next prompt. Nothing is recorded.',
   plan: 'Leave it and it goes with your next prompt. Nothing in Fylgja is changed.',
+  requirement: 'Leave it and it goes with your next prompt. Nothing is recorded; it comes up once more after a later turn.',
   field: 'Enter saves it. Cancel leaves everything as it is.',
 } as const
 
@@ -378,6 +379,28 @@ function question(band: Band, item: Item & { kind: 'question' }): View {
     }
   }
 
+  if (item.form === 'requirement') {
+    // What a pasted report showed, now that its fix landed: kept only on the developer's word, twice.
+    return {
+      register: 'asks',
+      head: 'keep this as expected behaviour?',
+      note: NOTES.requirement,
+      rows: [
+        { parts: [mark('?'), { text: 'Expected: ', tone: 'strong' }, { text: drawn(item.content, MAX_CONTENT) }] },
+        { parts: [{ text: 'Reported: ', tone: 'dim' }, { text: drawn(item.observed, MAX_CONTENT) }] },
+        ...(item.quote === undefined ? [] : [{ parts: [{ text: 'In the image: ', tone: 'dim' } as const, { text: `“${drawn(item.quote, MAX_CONTENT)}”` }] }]),
+        ...(item.basis === 'concluded'
+          ? [{ parts: [{ text: 'Worded from Claude’s answer: nothing in the image or in your words says it.', tone: 'dim' } as const] }]
+          : []),
+      ],
+      keys: withAbout(band, [
+        twice(band, 'keep', '1', 'Keep'),
+        { key: 'wording', hotkey: '2', label: 'Fix wording' },
+        twice(band, 'not-requirement', '0', 'Not a requirement'),
+      ]),
+    }
+  }
+
   if (item.form === 'plan') {
     const isWithdraw = item.proposal.action === 'withdraw'
     const listed = item.planned.slice(0, MAX_PLANNED_SHOWN)
@@ -665,17 +688,30 @@ function untoned(band: Band, isWorking: boolean, destination?: string): View | u
             placeholder: 'one sentence',
             submitLabel: 'save',
           }
-        : {
-            key: 'reason-text',
-            label: 'Why',
-            value: '',
-            placeholder: 'the reason, in a line',
-            submitLabel: 'save',
-          }
+        : band.editing.what === 'wording'
+          ? {
+              key: 'wording-text',
+              label: 'Expected',
+              value: drawn(band.editing.value, MAX_CONTENT),
+              placeholder: 'one sentence: when this happens, the product does that',
+              submitLabel: 'keep',
+            }
+          : {
+              key: 'reason-text',
+              label: 'Why',
+              value: '',
+              placeholder: 'the reason, in a line',
+              submitLabel: 'save',
+            }
 
     return {
       register: 'asks',
-      head: band.editing.what === 'fix' ? 'the record, as it should read' : 'the reason, in your words',
+      head:
+        band.editing.what === 'fix'
+          ? 'the record, as it should read'
+          : band.editing.what === 'wording'
+            ? 'the expected behaviour, in your words'
+            : 'the reason, in your words',
       note: NOTES.field,
       rows: [{ parts: [], field }],
       keys: [{ key: 'cancel', hotkey: '0', label: 'Cancel' }],

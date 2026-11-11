@@ -77,7 +77,17 @@ export type Draft = {
   stage?: Stage
   /** The work package in Fylgja of the plan it was taken under, when Fylgja filed that plan as one. */
   workPackageId?: string
+  /**
+   * The image reading whose reported behaviour this decision states, kept by
+   * the developer's key: the reading by its key and, once Fylgja has it, its
+   * id, and where the sentence's words come from. Such a record is never
+   * dropped for a look's limit and nobody is asked why about it.
+   */
+  report?: ReportOf
 }
+
+/** The reading a kept requirement states: its key, its id on Fylgja (null until the server has it), and its basis. */
+export type ReportOf = { key: string; id: string | null; basis: 'transcribed' | 'stated' | 'concluded' }
 
 /** Where a file lies: its repository as `owner/name`, and its path from that repository's root. */
 export type Place = { repo: string; path: string }

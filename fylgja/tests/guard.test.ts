@@ -2,10 +2,13 @@ import type { On, TraceEntry } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine, Plugin } from 'claude-code/testing'
 
+import { FORK_PROMPT } from '../hooks/reader/prompt'
+import type { Upload } from '../hooks/reader/reader'
 import type { Row } from '../hooks/scribe/delta'
 import { endedBy, idOf, SESSION_ID } from './fixtures'
-import { boundary, claude, decision, dev, edit, NOTHING, press, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
+import { boundary, claude, decision, dev, edit, NOTHING, press, pressTwice, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
+import { endTurn, QUOTE, readingReply, reported, skuld } from './skuld-fixtures'
 import { frame, pane } from './window-fixtures'
 
 /** What the guard writes in the debug log for each hook of a person's plugin it sent an event on past. */
@@ -220,5 +223,72 @@ describe('beneath an organization’s guard', () => {
     await $.prompt.context({ blocks: [] } as never)
 
     expect(skipped(set)).toEqual([`${SKIPPED} northwind-notes at prompt.context`])
+  })
+})
+
+// What an image holds never leaves the machine by the plugin's hand. The engine's own reads of an attachment's
+// bytes (`$.prompt.media`) are not something the test kit can stand in for: no file of the plugin's names it, and
+// no host it hands its other files has a way to it. The rest is held here, by what the plugin does.
+
+/** The upload's shape has no field for the words in the image: one could not be sent if it were wanted. */
+type HasQuote = 'quote' extends keyof Upload ? true : false
+const UPLOAD_HAS_QUOTE: HasQuote = false
+
+/** An image as the conversation's rows would carry it inline: what must never reach a call to Fylgja. */
+const INLINE = `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA${'Q'.repeat(700)}`
+
+describe('the images a developer pastes stay on the machine', () => {
+  test('Scribe never forks, and never reads the conversation as the API takes it', async ($, on) => {
+    const set = skuld(on, { wake: () => verdict({ records: [decision()] }) })
+
+    await $.session.start(START)
+    await turn($, set, dev('lock the queue with Postgres'), claude('Done.', edit('src/queue/lock.ts')))
+
+    expect(set.of('remember'), 'a look was made').toHaveLength(1)
+    expect(set.forks).toEqual([])
+    expect(set.shapes.filter(shape => shape === 'api')).toEqual([])
+  })
+
+  test('the only fork is the image reader’s, and nothing of an image reaches a call to Fylgja', async ($, on) => {
+    const set = skuld(on)
+
+    await $.session.start(START)
+    set.rows.push(dev(INLINE))
+    await reported($, on, set)
+    await pressTwice($, 'keep')
+    await endTurn($, set, 'turn-next')
+
+    expect(set.forks).toEqual([FORK_PROMPT])
+    expect(set.shapes.filter(shape => shape === 'api')).toEqual([])
+    expect(set.of('remember')).toHaveLength(1)
+
+    const sent = JSON.stringify([...set.calls, ...set.reports])
+
+    expect(sent).not.toContain('iVBORw0KGgo')
+    expect(sent).not.toContain('data:image/')
+    expect(sent).not.toContain(QUOTE)
+  })
+
+  test('no upload carries the words in the image', async ($, on) => {
+    const set = skuld(on)
+
+    await $.session.start(START)
+    await reported($, on, set)
+
+    expect(UPLOAD_HAS_QUOTE).toBe(false)
+    expect(set.of('save_image_reading').map(args => Object.keys(args).filter(key => key === 'quote'))).toEqual([[]])
+  })
+
+  test('a fork reply carrying a base64 run is stopped before it is held: nothing of it is sent, logged or asked', async ($, on) => {
+    const set = skuld(on, { forks: () => ({ text: readingReply({ quote: INLINE.slice(22) }) }) })
+
+    await $.session.start(START)
+    await reported($, on, set)
+    await endTurn($, set, 'turn-next')
+
+    expect(set.forks).toHaveLength(1)
+    expect(set.of('save_image_reading')).toEqual([])
+    expect(JSON.stringify([...set.kept.values(), ...set.calls])).not.toContain('iVBORw0KGgo')
+    expect(await shown($)).not.toContain('Expected')
   })
 })

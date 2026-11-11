@@ -42,10 +42,10 @@ import { REFUSED } from './grant'
 import { leaningOf, leaningRefusal } from './labels'
 import type { Leaning } from './labels'
 import * as Ledger from './ledger'
-import { codeOf, MAX_ANCHORS, PASSING, teaches } from './gate'
+import { codeOf, MAX_ANCHORS, MAX_DETAIL_CHARS, PASSING, teaches } from './gate'
 import { fingerprintOf, isSecretFile, MAX_PRINT_BYTES, schemeOf } from './fingerprint'
 import type { Scheme } from './fingerprint'
-import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake } from './loop'
+import { correct, MAX_LOOKUPS, MAX_STEPS, reasonIn, relationOf, statementOf, STEP_TIMEOUT_MS, WAKE_DEADLINE_MS, wake, worthReading } from './loop'
 import type { LoopHost, NamingSession, Proposal, Usage } from './loop'
 import * as Plans from './plans'
 import { foldedBlock, MAX_SHOWN, pastBlock, planBlock, SYSTEM, wakeText } from './prompt'
@@ -53,7 +53,7 @@ import type { Block } from './prompt'
 import { relativeTo, repoNameOf } from './repo'
 import * as Journal from './journal'
 import { briefOf, isConfirmed, isStarted } from './reports'
-import { CADENCE_FIELD, CADENCE_STEP, cadenceOf, INVISIBLE_FIELD, isInvisibleOf, MODEL_FIELD, modelOf } from './settings'
+import { CADENCE_FIELD, CADENCE_STEP, cadenceOf, IMAGES_FIELD, INVISIBLE_FIELD, isInvisibleOf, isOnOf, MODEL_FIELD, modelOf } from './settings'
 import { cleared } from './staged'
 import type { Index } from './staged'
 import { CALL_TIMEOUT_MS, limited, TimedOut } from './time'
@@ -64,6 +64,13 @@ import type { Seen } from './verdict'
 import { NO_STRONG_REASON, NOT_STATED, provenanceOf, viewOf } from './view'
 import { queryOf } from './words'
 import type { View } from './view'
+import * as Reader from '../reader/reader'
+import type { Forked, Images, Reading as ImageReading } from '../reader/reader'
+import { holdsBytes } from '../reader/bytes'
+import { normalised, promptHash } from '../reader/key'
+import { concludedFrom, statedIn } from '../skuld/statement'
+import type { Statement } from '../skuld/statement'
+import { changed as changedSince, dirtyOf, landedIn, workStateOf } from '../skuld/work'
 
 /** The engine calls Scribe makes, bound from one hook's `$`. */
 export type ScribeHost = LoopHost & {
@@ -144,6 +151,12 @@ export type ScribeHost = LoopHost & {
   destination: () => string | undefined
   /** The plugin's own rows of `/config` as they stand now, by field (`$.config.list`). */
   settings: () => Promise<Readonly<Record<string, unknown>>>
+  /**
+   * `$.model.fork`: one tool-less completion over the main conversation as
+   * Claude last sent it, with `prompt` after it. Scribe's own looks never
+   * call it: only the image reader does (`reader/`).
+   */
+  fork: (prompt: string) => Promise<Forked>
 }
 
 /**
@@ -548,6 +561,8 @@ export type Scribe = {
   unsettled: { key: string; draft: Draft }[]
   /** Counts the proposals held: each its own key. */
   unsettledCount: number
+  /** The images pasted into the session, as the image reader read them (`reader/`), and what is asked about them (`skuld/`). */
+  images: Images
 }
 
 /** An agent's final report, as Scribe holds it until a turn's end has looked at it. */
@@ -806,6 +821,7 @@ export function create(options: Options): Scribe {
     handled: new Set(),
     unsettled: [],
     unsettledCount: 0,
+    images: Reader.create(),
   }
 }
 
@@ -898,6 +914,8 @@ export function startOver(scribe: Scribe): void {
   scribe.handled.clear()
   lapse(scribe)
   scribe.unsettledCount = 0
+  // Nothing of the images goes on into another conversation: one never resumed loses what it had still to send.
+  scribe.images = Reader.create()
 }
 
 /**
@@ -1015,9 +1033,10 @@ function leftLog(log: Log): void {
 /** The session as it is logged: what it kept, and what it is in the middle of (`journal.ts`). */
 function nowOf(scribe: Scribe): Journal.Now {
   const { band, log } = scribe
-  const pending = [band.current, ...band.queue].filter(
-    (item): item is Band.Question => item?.kind === 'question' && !(item.form === 'holds' && item.said !== undefined),
-  )
+  const pending = [band.current, ...band.queue]
+    .filter((item): item is Band.Question => item?.kind === 'question' && !(item.form === 'holds' && item.said !== undefined))
+    // The words in an image are held for its card in the running plugin, and never logged.
+    .map(item => (item.form === 'requirement' ? { ...item, quote: undefined } : item))
   const prompts = [...scribe.prompts].map(prompt => {
     const hash = log.hashes.get(prompt) ?? Journal.keyedHashOf(scribe.salt ?? '', prompt)
 
@@ -1084,6 +1103,13 @@ function nowOf(scribe: Scribe): Journal.Now {
         denied: [...scribe.denied],
       },
       reports: { reporters: [...scribe.reporters].slice(-Journal.MAX_LIST), handled: [...scribe.handled].slice(-Journal.MAX_LIST) },
+      images: {
+        readings: scribe.images.readings.flatMap(one => Journal.loggedReadingOf(one, !Reader.isAhead(one)) ?? []),
+        forks: scribe.images.forks,
+        isCold: scribe.images.isCold,
+        requirements: band.requirements,
+        typedPast: band.requirementsTypedPast,
+      },
     },
   }
 }
@@ -1098,7 +1124,8 @@ function isBlank(now: Journal.Now): boolean {
     groups.gone.length === 0 &&
     groups.band.pending.length === 0 &&
     groups.deferred.length === 0 &&
-    groups.work.toAttach.length === 0
+    groups.work.toAttach.length === 0 &&
+    groups.images.readings.length === 0
   )
 }
 
@@ -1401,9 +1428,10 @@ export async function recover(host: ScribeHost, scribe: Scribe): Promise<void> {
     const folded = Journal.fold(read.flatMap(one => one.segment ?? []))
     const { log } = scribe
 
-    // A conversation it went on from keeps its question and its writes that wait: they are that one's to ask and send.
+    // A conversation it went on from keeps its question, its writes that wait and its images: they are that one's to ask and send.
     if (picked !== own) {
       delete folded.groups.deferred
+      delete folded.groups.images
 
       if (folded.groups.band !== undefined) {
         folded.groups.band = { ...folded.groups.band, pending: [] }
@@ -1471,6 +1499,10 @@ function restore(host: ScribeHost, scribe: Scribe, folded: Journal.Folded, rows:
     scribe.ledger.gone = [...groups.gone.filter(one => !held.has(one.id)), ...scribe.ledger.gone].slice(-Ledger.MAX_GONE)
   }
 
+  if (groups.images !== undefined) {
+    restoreImages(scribe, groups.images)
+  }
+
   if (groups.band !== undefined) {
     restoreBand(scribe, groups.band)
   }
@@ -1536,8 +1568,12 @@ function restore(host: ScribeHost, scribe: Scribe, folded: Journal.Folded, rows:
 function restoreBand(scribe: Scribe, asking: Journal.Asking): void {
   const { band } = scribe
   const ids = new Set(scribe.written.map(one => one.id))
-  // A question about why a record was decided goes with the record.
-  const waiting = asking.pending.filter(item => item.form !== 'reason' || ids.has(item.id))
+  // A question about why a record was decided goes with the record, and one about a report with its reading, while it is unsettled.
+  const waiting = asking.pending.filter(
+    item =>
+      (item.form !== 'reason' || ids.has(item.id)) &&
+      (item.form !== 'requirement' || scribe.images.readings.some(one => one.key === item.reading && one.verdict === undefined)),
+  )
 
   band.told = new Set([...asking.told, ...band.told])
   band.rejected = new Set([...asking.rejected, ...band.rejected])
@@ -2464,6 +2500,20 @@ async function send(
   let refusal: string | undefined
   // The commit the code is at goes with a new decision; a confirmation writes nothing new.
   const base = recalled === undefined ? await baseFor(host, scribe, who, draft) : undefined
+  // A kept requirement goes with the reading it states: the reading is sent first when Fylgja has nothing of it yet.
+  const reportId = draft.report === undefined || recalled !== undefined ? undefined : await reportIdOf(host, scribe, draft.report)
+
+  // Never beside a confirmation of a recorded record: the server takes the reading only with a write of its own.
+  if (draft.report !== undefined && recalled === undefined) {
+    if (reportId === undefined) {
+      return { written: undefined, code: undefined, refusal: undefined, isTaken: false }
+    }
+
+    draft.report.id = reportId
+    args.report_id = reportId
+    args.basis = draft.report.basis
+  }
+
   // Where it holds goes with a new record, when the session said it holds for some organizations only.
   const scope: Scope | undefined =
     recalled === undefined && scribe.takesScope && (draft.appliesTo ?? []).length > 0 ? { applies_to: draft.appliesTo ?? [] } : undefined
@@ -2536,6 +2586,11 @@ async function send(
   }
 
   scribe.wrote += 1
+
+  // The reading it states is settled with the write, on the server too, when the server says the keep happened.
+  if (draft.report !== undefined && args.report_id !== undefined && answer?.kept === true) {
+    settledReading(scribe, draft.report.key, 'keep')
+  }
 
   // Its own is what it wrote as new. A record that came back from having been removed was somebody's before.
   const isOwn = outcome === 'created' && typeof answer?.atom_id === 'string'
@@ -2677,8 +2732,9 @@ function shownNow(host: ScribeHost, scribe: Scribe): void {
     host.report('tell', { action: 'shown', route: item.route.by })
   }
 
-  // A question about an agent's report has no word of its own on Fylgja's list yet, and is not reported.
-  if (item?.kind === 'question' && item.form !== 'report' && item.form !== 'plan' && !SHOWN.has(item)) {
+  // A question about an agent's report has no word of its own on Fylgja's list yet, and is not reported; one about an
+  // image's report is reported as the image's own (`image`).
+  if (item?.kind === 'question' && item.form !== 'report' && item.form !== 'plan' && item.form !== 'requirement' && !SHOWN.has(item)) {
     SHOWN.set(item, performance.now())
     host.report('question', { stage: 'shown', form: item.form })
   }
@@ -2688,7 +2744,7 @@ function shownNow(host: ScribeHost, scribe: Scribe): void {
 function answeredBy(host: ScribeHost, item: Band.Question, key: Word<'question', 'key'>): void {
   const since = SHOWN.get(item)
 
-  if (item.form === 'report' || item.form === 'plan') {
+  if (item.form === 'report' || item.form === 'plan' || item.form === 'requirement') {
     return
   }
 
@@ -2714,7 +2770,7 @@ function answerOf(item: Band.Question, key: string): Word<'question', 'key'> | u
     return key === 'holds' ? 'still_holds' : key === 'no-longer' ? 'no_longer_holds' : undefined
   }
 
-  if (item.form === 'report' || item.form === 'plan') {
+  if (item.form === 'report' || item.form === 'plan' || item.form === 'requirement') {
     return undefined
   }
 
@@ -2745,7 +2801,7 @@ function ask(host: ScribeHost, scribe: Scribe, question: Band.Question, about: s
           : undefined
   const isInLine = Band.offerQuestion(band, question, about)
 
-  if (!isInLine && by !== undefined && question.form !== 'report' && question.form !== 'plan') {
+  if (!isInLine && by !== undefined && question.form !== 'report' && question.form !== 'plan' && question.form !== 'requirement') {
     host.report('question', { stage: 'held_back', form: question.form, held_back_by: by })
   }
 
@@ -2771,6 +2827,11 @@ function settle(host: ScribeHost, scribe: Scribe): void {
   shownNow(host, scribe)
 
   for (const item of settled.dropped) {
+    // A question about a report that was let go unseen was never put: it is asked again later, and counts for nothing.
+    if (item.kind === 'question' && item.form === 'requirement') {
+      requirementDropped(scribe, item)
+    }
+
     // The question is let go; the decision it was about is still recorded,
     // beside the one it might have replaced.
     if (item.kind === 'question' && item.form === 'reversal') {
@@ -2866,6 +2927,23 @@ async function written(
     }
 
     return undefined
+  }
+
+  // A kept requirement is the sentence the developer confirmed: never reworded by a model. One that does not go
+  // through is asked about again later.
+  if (draft.report !== undefined) {
+    const sent = await send(host, scribe, who, draft)
+    const reading = scribe.images.readings.find(one => one.key === draft.report?.key)
+
+    const settled = settledVerdictOf(sent.code)
+
+    if (settled !== undefined && draft.report !== undefined) {
+      settledReading(scribe, draft.report.key, settled)
+    } else if (sent.written === undefined && !sent.isTaken && reading?.verdict === undefined && reading !== undefined) {
+      reading.asking = 'again'
+    }
+
+    return sent.written
   }
 
   // A label only the session knew is caught here, before anything is sent.
@@ -4381,6 +4459,7 @@ export async function stepped(
   scribe: Scribe,
   index: number,
   uses: readonly { name: string; input: unknown }[],
+  step?: { turnId: string; answer: string },
 ): Promise<void> {
   if (scribe.identity === null) {
     return
@@ -4393,6 +4472,11 @@ export async function stepped(
 
   if (who === null) {
     return
+  }
+
+  // The image prompt's turn: the files the step changed, and once the first step is back, whether its images are read.
+  if (step !== undefined) {
+    await imageStepped(host, scribe, who, step, uses)
   }
 
   const opened = filesOf(uses, who.root)
@@ -5105,6 +5189,9 @@ export async function agentStepped(
   // Bounded as in the main conversation's step; past the bound the files count as in no repository.
   const places = (await placed(host, scribe, who, files)) ?? []
 
+  // A fix an agent makes lands as one Claude makes does.
+  changedSince(scribe.images.readings, files)
+
   noteEdits(scribe, who, files, places)
   // The files an agent changes are the session's work as much as Claude's
   // own: what is recorded about them is looked up with the next lookup.
@@ -5172,6 +5259,10 @@ function pickModel(scribe: Scribe): void {
 export function configured(scribe: Scribe, field: string, value: unknown): void {
   scribe.settings = { ...scribe.settings, [field]: value }
   pickModel(scribe)
+
+  if (field === IMAGES_FIELD && !isOnOf(value)) {
+    imagesOff(scribe)
+  }
 }
 
 /**
@@ -5286,7 +5377,7 @@ export const INSIDE_WAIT_MS = 2000
  * are then read at the next turn's end, whoever begins that turn, and not
  * before.
  */
-export async function completed(host: ScribeHost, scribe: Scribe): Promise<void> {
+export async function completed(host: ScribeHost, scribe: Scribe, end?: { turnId: string; answer: string }): Promise<void> {
   scribe.band.isWorking = false
   // One question a turn: where a look inside the turn asked, that was it.
   scribe.band.hasAskedThisTurn = scribe.hasAskedInside
@@ -5300,9 +5391,15 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
   // The conversation the turn was in: one that starts over while Scribe gets ready is not looked at under it.
   const { epoch } = scribe
   let isRead = true
+  let isAsking = false
 
   try {
     const who = await reader(host, scribe)
+
+    // The images of the session: their last moment to be read, and what Fylgja has still to be sent. What is to be
+    // asked about them waits for Scribe's own look.
+    await imagesEnded(host, scribe, who, end).catch(() => undefined)
+    isAsking = who !== null
 
     if (who === null) {
       // No look is made of this turn, so none will take the rows held for one.
@@ -5338,6 +5435,10 @@ export async function completed(host: ScribeHost, scribe: Scribe): Promise<void>
 
     // The next turn may put its own question about an agent's choice.
     scribe.band.choicesThisTurn = 0
+
+    if (isAsking && epoch === scribe.epoch) {
+      imagesAsked(host, scribe)
+    }
   }
 }
 
@@ -6118,6 +6219,10 @@ export function prompted(host: ScribeHost, scribe: Scribe, text: string): void {
     answeredBy(host, item, 'expired')
   }
 
+  if (item?.kind === 'question' && item.form === 'requirement' && !item.isTouched) {
+    typedPastRequirement(scribe, item)
+  }
+
   scribe.hasPrompt = true
   // The newest last, so the one the developer sent latest is known.
   scribe.prompts.delete(plain(text))
@@ -6605,6 +6710,12 @@ async function pressedQuestion(host: ScribeHost, scribe: Scribe, who: Identity, 
     return
   }
 
+  if (item.form === 'requirement') {
+    await pressedRequirement(host, scribe, who, item, key)
+
+    return
+  }
+
   if (key === 'tell-claude') {
     // Nothing is written: the developer is taking it up with Claude.
     if (await tellClaude(host, REVERSAL_LEAD, item.prior)) {
@@ -6732,6 +6843,7 @@ function tellClaudeOfChoice(host: ScribeHost, draft: Draft): Promise<boolean> {
 function needsSecondPress(key: string): boolean {
   return (
     key === 'keep' ||
+    key === 'not-requirement' ||
     key === 'knew' ||
     key === 'not-relevant' ||
     key === 'off' ||
@@ -6770,6 +6882,785 @@ async function isSecondPress(host: ScribeHost, scribe: Scribe, holder: Band.Armi
   host.redraw()
 
   return false
+}
+
+// Pasted images. The reader (`reader/`) turns a prompt's images into text on
+// this machine, by a fork of the conversation, on Scribe's yes; what a report
+// showed is put to the developer to keep as expected behaviour once its fix
+// landed (`skuld/`). Their state is the session's `images`, and each of
+// Scribe's entry points does its part of it.
+//
+// Every fork is started from a hook Claude Code is waiting on (a step's
+// boundary, a turn's end): what it answers is taken whenever it comes, and
+// sent from the next such hook.
+
+/** The gate of each reading under way, for a turn's end to wait on. */
+const GATES = new WeakMap<ImageReading, Promise<void>>()
+
+/** The fork of each reading under way, for a turn's end to wait on before it owes the retry. */
+const FORKING = new WeakMap<ImageReading, Promise<void>>()
+
+/** The readings whose sentence is being worked out: one call each. */
+const STATING = new WeakSet<ImageReading>()
+
+/** How long a turn's end waits for Scribe's judgement, or a fork of a step, before its own last moment. */
+const TURN_END_WAIT_MS = 3000
+
+/** How many compactions have been counted, whether or not the window has been read since. */
+function compactionsOf(scribe: Scribe): number {
+  return scribe.compactions + scribe.compactionsDue
+}
+
+/** Whether images are read in this session: Scribe on for it, and the switch for images on. */
+function readsImages(scribe: Scribe): boolean {
+  return scribe.options.isOn && scribe.identity !== null && isOnOf(scribe.settings[IMAGES_FIELD])
+}
+
+/** The prompt about to enter, as the reader is told of it. */
+export type Submission = { text: string; images: number; turnId?: string; isOwn: boolean; isCommand: boolean; isMeta: boolean }
+
+/**
+ * A prompt is about to enter the main conversation. One of the developer's
+ * own that carries images, and is neither a command nor meta, arms a reading,
+ * before it enters: the turn may begin before the hook hears that it did.
+ * Nothing is awaited.
+ */
+export function submitting(scribe: Scribe, prompt: Submission): ImageReading | undefined {
+  if (!prompt.isOwn || prompt.isCommand || prompt.isMeta || prompt.images <= 0 || !readsImages(scribe)) {
+    return undefined
+  }
+
+  return Reader.arm(scribe.images, {
+    text: prompt.text,
+    imageCount: prompt.images,
+    turnId: prompt.turnId,
+    compactions: compactionsOf(scribe),
+    // The prompt itself is the first of the developer's words a statement may rest on.
+    spokenFrom: scribe.spoken.length + scribe.unspoken,
+    before: [...scribe.changedPlaces],
+  })
+}
+
+/**
+ * A prompt entered the main conversation as `entered`, or was turned back
+ * (undefined). Whoever sent it, an earlier image prompt is no longer the
+ * latest; a slash command is no prompt of the conversation's and changes
+ * nothing. The reading armed for it takes the words that entered, and its
+ * key, the time and what git says is changed in the tree are read beside
+ * the turn, waited for by nobody.
+ */
+export function submitted(host: ScribeHost, scribe: Scribe, reading: ImageReading | undefined, entered: string | undefined, isCommand = false): void {
+  const { images } = scribe
+  const serial = entered === undefined || isCommand ? images.prompts : Reader.prompted(images)
+
+  if (reading === undefined) {
+    return
+  }
+
+  if (entered === undefined) {
+    Reader.dropped(images, reading)
+
+    return
+  }
+
+  const words = normalised(entered)
+
+  reading.text = entered
+  reading.serial = serial
+  // No words, or the words of an earlier image prompt: an echo of them proves nothing about which message was read.
+  reading.isWeak = words === '' || images.texts.has(words)
+  images.texts.add(words)
+
+  void (async () => {
+    const [hash, at, sessionId] = await Promise.all([promptHash(entered), host.now(), host.sessionId()])
+
+    reading.promptHash = hash
+    reading.promptedAt = new Date(at).toISOString()
+    reading.sessionId = sessionId
+    reading.key = `${hash}@${reading.promptedAt}`
+  })().catch(() => Reader.dropped(images, reading))
+
+  void (async () => {
+    const root = (await host.repo())?.root
+
+    if (root !== undefined) {
+      const ran = await gitIn(host.run, host.after, root, ['status', '--porcelain', '-z'])
+
+      reading.dirty = ran === undefined || ran.exitCode !== 0 ? undefined : dirtyOf(ran.stdout)
+    }
+  })().catch(() => undefined)
+}
+
+/**
+ * Scribe's judgement whether the images of `reading` are worth reading, from
+ * the prompt and the start of the first reply: begun once, from a hook being
+ * waited on, and waited for by nobody. Off, signed out or not connected, it
+ * is a no.
+ */
+function judge(host: ScribeHost, scribe: Scribe, reading: ImageReading, reply: string): void {
+  if (reading.gate !== 'none') {
+    return
+  }
+
+  reading.gate = 'asking'
+
+  const judged = (async () => {
+    const who = await reader(host, scribe)
+    const isWorth =
+      who !== null && readsImages(scribe) && (await worthReading(host, { model: scribe.model, prompt: reading.text, reply, images: reading.imageCount }))
+
+    reading.gate = isWorth ? 'yes' : 'no'
+
+    host.report('image', isWorth ? { stage: 'gate' } : { stage: 'gate', outcome: 'gate_no' })
+
+    if (!isWorth && reading.status === 'armed') {
+      reading.status = 'given_up'
+    }
+  })().catch(() => {
+    reading.gate = 'no'
+  })
+
+  GATES.set(reading, judged)
+}
+
+/**
+ * Starts a fork for `reading` at `moment` when every guard holds: the call is
+ * made before this resolves, so from the hook that awaits it. Resolves with
+ * the fork's own end (`done`), to be waited for or not; undefined when none
+ * was made.
+ */
+async function readAt(host: ScribeHost, scribe: Scribe, reading: ImageReading, moment: Reader.Moment): Promise<{ done: Promise<void> } | undefined> {
+  const { images, epoch } = scribe
+
+  if (!Reader.isDue(images, reading, moment, await host.now(), compactionsOf(scribe)) || !readsImages(scribe)) {
+    return undefined
+  }
+
+  const done = Reader.fork(host, images, reading, moment).then(() => {
+    // The conversation started over meanwhile: what was read is not this one's.
+    if (epoch !== scribe.epoch) {
+      return
+    }
+
+    logged(host, scribe)
+
+    // Read after its turn ended: what landed in that turn is worked out now, and the upload waits for the next turn's end.
+    if (reading.isOver && reading.status === 'read') {
+      landed(scribe, reading)
+      askAbout(host, scribe, reading)
+    }
+  })
+
+  FORKING.set(reading, done)
+
+  return { done }
+}
+
+/**
+ * A step of the main conversation is about to begin. A reading of the
+ * turn's prompt may be forked for here, never right after the turn's first
+ * step: the fork starts now, from this hook, and is waited for by nobody.
+ */
+export async function boundary(host: ScribeHost, scribe: Scribe, turnId: string): Promise<void> {
+  const reading = Reader.armedFor(scribe.images, turnId)
+
+  if (reading === undefined || reading.turnId === undefined || !reading.hasStepped) {
+    return
+  }
+
+  const started = await readAt(host, scribe, reading, 'step')
+
+  void started?.done.catch(() => undefined)
+}
+
+/** A step of the main conversation came back: the reading of its turn's prompt is judged after the first, and the files it changed are noted. */
+async function imageStepped(host: ScribeHost, scribe: Scribe, who: Identity, step: { turnId: string; answer: string }, uses: readonly { name: string; input: unknown }[]): Promise<void> {
+  const { images } = scribe
+
+  images.respondedAt = await host.now()
+  changedSince(images.readings, changesOf(uses, who.root).files)
+
+  const reading = Reader.armedFor(images, step.turnId)
+
+  if (reading === undefined) {
+    return
+  }
+
+  reading.turnId ??= step.turnId
+
+  if (!reading.hasStepped) {
+    reading.hasStepped = true
+    judge(host, scribe, reading, step.answer)
+  }
+}
+
+/**
+ * Whether the fix of a reading landed, and what the code was: worked out at
+ * a turn's end, from the files changed since, while the report's window is
+ * open (its own turn and `FIX_TURNS` after it, until the next image prompt).
+ */
+function landed(scribe: Scribe, reading: ImageReading): void {
+  const who = scribe.identity
+
+  if (
+    who === null ||
+    who === undefined ||
+    reading.status !== 'read' ||
+    reading.verdict !== undefined ||
+    reading.workState !== 'unknown' ||
+    reading.turnsLeft <= 0
+  ) {
+    return
+  }
+
+  const places = landedIn(reading, scribe.places)
+
+  if (places.length > 0) {
+    reading.workState = workStateOf(reading, places, who.root, scribe.places)
+  }
+}
+
+/** The product files a fix landed in, in the repository most of them lie in: what a kept requirement is filed under and points at. */
+function fixOf(scribe: Scribe, reading: ImageReading): { repo: string; anchors: Anchor[] } | undefined {
+  const places = landedIn(reading, scribe.places)
+  const counts = new Map<string, number>()
+
+  for (const place of places) {
+    counts.set(place.repo, (counts.get(place.repo) ?? 0) + 1)
+  }
+
+  const repo = [...counts].sort((one, two) => two[1] - one[1])[0]?.[0]
+
+  return repo === undefined ? undefined : { repo, anchors: places.filter(place => place.repo === repo).slice(0, MAX_ANCHORS).map(place => ({ path: place.path })) }
+}
+
+/**
+ * Puts the question whether what `reading` reported is expected behaviour
+ * to keep, once its fix landed in code the report brought in: with its own
+ * expectation, or with a sentence worked out at the fix's turn, waited for by
+ * nobody. Never while the plugin is invisible, never for work in progress,
+ * never without a sentence, and never past the band's own share. A sentence
+ * that could not be worked out (the call failed) is tried again at a later
+ * turn's end; one the session holds nothing for is not.
+ */
+function askAbout(host: ScribeHost, scribe: Scribe, reading: ImageReading): void {
+  const { read } = reading
+
+  if (
+    read === undefined ||
+    reading.status !== 'read' ||
+    reading.workState !== 'brought_in' ||
+    reading.verdict !== undefined ||
+    (reading.asking !== 'not_yet' && reading.asking !== 'again') ||
+    reading.statement === null ||
+    isInvisible(scribe) ||
+    !readsImages(scribe) ||
+    STATING.has(reading)
+  ) {
+    return
+  }
+
+  const offer = (statement: Statement): void => {
+    const fix = fixOf(scribe, reading)
+
+    if (fix === undefined || reading.verdict !== undefined || isInvisible(scribe) || !readsImages(scribe)) {
+      return
+    }
+
+    const isAgain = reading.asking === 'again'
+    const isOffered = Band.offerRequirement(scribe.band, {
+      kind: 'question',
+      form: 'requirement',
+      reading: reading.key,
+      content: statement.text,
+      basis: statement.basis,
+      observed: read.observed,
+      ...(read.quote === undefined ? {} : { quote: read.quote }),
+      repo: fix.repo,
+      anchors: fix.anchors,
+      ...(isAgain ? { isAgain: true as const } : {}),
+      isTouched: false,
+    })
+
+    if (isOffered) {
+      reading.asking = 'asked'
+      host.report('image', { stage: 'ask', outcome: 'asked' })
+      settle(host, scribe)
+      logged(host, scribe)
+    }
+  }
+
+  if (reading.statement !== undefined) {
+    offer(reading.statement)
+
+    return
+  }
+
+  const stated = statedIn(read)
+
+  if (stated !== undefined) {
+    reading.statement = stated
+    offer(stated)
+
+    return
+  }
+
+  // The words in the image are gone with an earlier load: a sentence proposed now could not be held against them.
+  if (!reading.hasQuote) {
+    reading.statement = null
+
+    return
+  }
+
+  STATING.add(reading)
+
+  const { epoch } = scribe
+  const prompts = scribe.spoken.slice(Math.max(0, reading.spokenFrom - scribe.unspoken))
+  const answer = scribe.images.lastAnswer
+
+  void statementOf(host, { model: scribe.model, observed: read.observed, prompts, answer })
+    .then(proposed => {
+      // No answer at all: worked out again at a later turn's end.
+      if (epoch !== scribe.epoch || proposed === undefined) {
+        return
+      }
+
+      reading.statement = concludedFrom(proposed, prompts, answer, read.quote) ?? null
+      logged(host, scribe)
+
+      if (reading.statement !== null) {
+        offer(reading.statement)
+      }
+    })
+    .catch(() => undefined)
+    .finally(() => STATING.delete(reading))
+}
+
+/**
+ * Sends a reading as it now stands. True when Fylgja has it so. A refusal by
+ * a rule is not sent again as it stands; a reading the server took for an
+ * image's bytes is let go. Nothing that may hold bytes is ever sent.
+ */
+async function uploaded(host: ScribeHost, scribe: Scribe, reading: ImageReading): Promise<boolean> {
+  const upload = Reader.uploadOf(reading)
+
+  if (upload === undefined) {
+    return false
+  }
+
+  // Held against the guard once more, as it is sent: the bytes never leave the machine (L16).
+  if ([upload.observed, upload.expected ?? ''].some(holdsBytes)) {
+    reading.status = 'given_up'
+
+    return false
+  }
+
+  const text = JSON.stringify(upload)
+
+  try {
+    const { answer, refusal } = await tried(host, scribe, 'save_image_reading', upload)
+
+    if (answer !== undefined) {
+      if (typeof answer.id === 'string' && idsIn(answer.id)[0] === answer.id.toLowerCase()) {
+        reading.id = answer.id.toLowerCase()
+      }
+
+      reading.sent = text
+      logged(host, scribe)
+
+      return true
+    }
+
+    const code = codeOf(refusal)
+    const kind = failureOf('save_image_reading', refusal ?? '')
+
+    const settled = settledVerdictOf(code)
+
+    // The server's own trouble is tried again at a later turn's end; a refusal by a rule is not, as the reading stands.
+    // One the server holds as settled is settled here too.
+    if (settled !== undefined) {
+      settledReading(scribe, reading.key, settled)
+    } else if (code === 'image_bytes') {
+      reading.status = 'given_up'
+    } else if (!PASSING.includes(code ?? '') && kind !== 'server_fault' && kind !== 'rate_limited') {
+      reading.sent = text
+    }
+
+    logged(host, scribe)
+
+    return false
+  } catch {
+    return false
+  }
+}
+
+/** Sends, once, each reading Fylgja does not have as it now stands; nothing while images are off. */
+async function sendAhead(host: ScribeHost, scribe: Scribe): Promise<void> {
+  if (!readsImages(scribe)) {
+    return
+  }
+
+  for (const reading of scribe.images.readings.filter(Reader.isAhead)) {
+    await uploaded(host, scribe, reading)
+  }
+}
+
+/** `work`, waited for no longer than `ms`; never rejects. */
+function briefly(host: ScribeHost, work: Promise<unknown> | undefined, ms: number): Promise<void> {
+  return work === undefined ? Promise.resolve() : within(host, work.catch(() => undefined), ms)
+}
+
+/**
+ * A turn of the main conversation ended: the reading of its prompt has its
+ * last moment to be forked for, from this hook, once Scribe's judgement and
+ * any fork of a step are in (waited for a moment at most). Then every
+ * reading's fix is worked out, the reports' windows move on, and what Fylgja
+ * does not have is sent.
+ */
+async function imagesEnded(host: ScribeHost, scribe: Scribe, who: Identity | null, end: { turnId: string; answer: string } | undefined): Promise<void> {
+  const { images } = scribe
+
+  images.respondedAt = await host.now()
+  scribe.band.requirementsThisTurn = 0
+
+  if (end !== undefined) {
+    images.lastAnswer = end.answer
+  }
+
+  const reading = Reader.armedFor(images, end?.turnId)
+
+  if (reading !== undefined) {
+    reading.turnId ??= end?.turnId
+    reading.hasStepped = true
+    judge(host, scribe, reading, end?.answer ?? '')
+
+    try {
+      // Scribe's judgement and a fork of a step still out share one short wait: what the fork comes to decides
+      // whether the retry it may owe is made now.
+      const until = (await host.now()) + TURN_END_WAIT_MS
+
+      await briefly(host, GATES.get(reading), TURN_END_WAIT_MS)
+      await briefly(host, FORKING.get(reading), Math.max(0, until - (await host.now())))
+      void (await readAt(host, scribe, reading, 'turn_end'))?.done.finally(() => Reader.over(reading))
+    } finally {
+      // Not given up while a fork is still out: its answer is taken whenever it comes.
+      if (!images.isForking) {
+        Reader.over(reading)
+      } else {
+        reading.isOver = true
+      }
+    }
+  }
+
+  if (who === null) {
+    return
+  }
+
+  for (const one of images.readings) {
+    landed(scribe, one)
+    one.turnsLeft = Math.max(0, one.turnsLeft - 1)
+  }
+
+  await sendAhead(host, scribe)
+}
+
+/** What may be asked about the session's images is put in line, after whatever Scribe's own look of the turn asked. */
+function imagesAsked(host: ScribeHost, scribe: Scribe): void {
+  for (const one of scribe.images.readings) {
+    askAbout(host, scribe, one)
+  }
+}
+
+/** The images switch was turned off: what was put in line about them is taken down, and nothing more is sent or asked. */
+function imagesOff(scribe: Scribe): void {
+  const { band } = scribe
+  const isAbout = (item: Band.Item | null): boolean => item?.kind === 'question' && item.form === 'requirement'
+
+  band.queue = band.queue.filter(item => !isAbout(item))
+
+  if (isAbout(band.current)) {
+    Band.clear(band)
+  }
+}
+
+/** The reading a requirement question is about, by its key. */
+function readingAt(scribe: Scribe, key: string): ImageReading | undefined {
+  return scribe.images.readings.find(one => one.key === key)
+}
+
+/** A requirement question was sent past untouched: it comes up once more at a later turn's end, and then is let go. */
+function typedPastRequirement(scribe: Scribe, item: Band.RequirementQuestion): void {
+  const reading = readingAt(scribe, item.reading)
+
+  if (reading !== undefined && reading.verdict === undefined) {
+    reading.asking = item.isAgain === true ? 'done' : 'again'
+  }
+}
+
+/**
+ * A requirement question was let go unseen (the line was full, or offers were
+ * being held back): it was never put to the developer, so it is asked again
+ * later and does not count against the session's share.
+ */
+function requirementDropped(scribe: Scribe, item: Band.RequirementQuestion): void {
+  const reading = readingAt(scribe, item.reading)
+
+  Band.droppedRequirement(scribe.band, item)
+
+  if (reading !== undefined && reading.verdict === undefined && reading.asking === 'asked') {
+    reading.asking = item.isAgain === true ? 'again' : 'not_yet'
+  }
+}
+
+/** The reading's id on Fylgja for a kept requirement: sent first when the server has nothing of it yet. Undefined when it could not be. */
+async function reportIdOf(host: ScribeHost, scribe: Scribe, report: NonNullable<Draft['report']>): Promise<string | undefined> {
+  if (report.id !== null) {
+    return report.id
+  }
+
+  const reading = readingAt(scribe, report.key)
+
+  if (reading === undefined) {
+    return undefined
+  }
+
+  if (reading.id === undefined) {
+    await uploaded(host, scribe, reading)
+  }
+
+  return reading.id
+}
+
+/** The reason a kept requirement is written with: what the report showed. */
+function reportedOf(observed: string): string {
+  return `A report pasted into the session showed: ${observed}`.slice(0, MAX_DETAIL_CHARS).trim()
+}
+
+/** The refusals of a keep that are about the sentence: the developer words it, rather than a model rewording it unseen. */
+const SENTENCE_REFUSED: ReadonlySet<string> = new Set(['basis_mismatch'])
+
+/**
+ * What came of a keep's write. Written, the reading is settled. Refused as
+ * settled, the reading is so already. Refused for the sentence (by a content
+ * rule, or because the server no longer holds it as the reading's words,
+ * say after its scrub), the question comes back with the field open: only
+ * the developer rewords a sentence they are to confirm. Not got to Fylgja,
+ * it waits for the next turn's end as any record does, and the reading
+ * stays asked.
+ */
+function keepCame(host: ScribeHost, scribe: Scribe, item: Band.RequirementQuestion, draft: Draft, sent: Sent, missed: boolean): Written | undefined {
+  const reading = readingAt(scribe, item.reading)
+
+  if (sent.written !== undefined || sent.isTaken) {
+    return sent.written
+  }
+
+  // Settled already, as the server says: nothing to try again, and nothing more to ask.
+  const settled = settledVerdictOf(sent.code)
+
+  if (settled !== undefined) {
+    settledReading(scribe, item.reading, settled)
+
+    return undefined
+  }
+
+  if (sent.code !== undefined && (SENTENCE_REFUSED.has(sent.code) || teaches(sent.code, sent.refusal) !== undefined)) {
+    host.toast(refusalLine(sent.refusal ?? ''))
+
+    // Put back with its field open; behind whatever came up meanwhile, which it does not push aside.
+    if (scribe.band.current === null) {
+      scribe.band.current = { ...item, isTouched: true }
+      scribe.band.editing = { what: 'wording', value: draft.content }
+    } else {
+      scribe.band.queue = [{ ...item, isTouched: true }, ...scribe.band.queue].slice(0, Band.MAX_QUEUE)
+    }
+
+    return undefined
+  }
+
+  if (missed || PASSING.includes(sent.code ?? '')) {
+    defer(scribe, { draft })
+
+    return undefined
+  }
+
+  // Refused by a rule that is not about the sentence: the reading stays unsettled, to be asked again later.
+  if (reading !== undefined && reading.verdict === undefined) {
+    reading.asking = 'again'
+  }
+
+  return undefined
+}
+
+/**
+ * Keeps what a report showed as expected behaviour: one decision in Fylgja,
+ * written as every record of Scribe's is, filed on the fix's files, with the
+ * reading it states and where its words come from. The reading is sent
+ * first when Fylgja has nothing of it yet; either failing, the record waits
+ * for the next turn's end. The sentence is never put right by a model: it
+ * is the one the developer confirmed.
+ */
+async function keepRequirement(host: ScribeHost, scribe: Scribe, who: Identity, item: Band.RequirementQuestion, content: string, basis: Statement['basis']): Promise<void> {
+  const { band } = scribe
+  const reading = readingAt(scribe, item.reading)
+
+  Band.clear(band)
+  band.requirementsTypedPast = 0
+  host.report('image', { stage: 'answer', outcome: content === item.content ? 'keep' : 'fix_wording' })
+
+  if (reading !== undefined && reading.id === undefined) {
+    await uploaded(host, scribe, reading)
+  }
+
+  const draft: Draft = {
+    kind: 'decision',
+    content,
+    detail: reportedOf(item.observed),
+    alternatives: [],
+    anchors: item.anchors,
+    triggers: [],
+    reasonStatus: 'stated',
+    supersedes: null,
+    repo: item.repo,
+    updates: null,
+    stage: 'built',
+    fromChoice: true,
+    report: { key: item.reading, id: reading?.id ?? null, basis },
+  }
+
+  if (draft.report?.id === null) {
+    defer(scribe, { draft })
+
+    return
+  }
+
+  const missed = missedBy(host)
+  const sent = await send(host, scribe, who, draft)
+  const one = keepCame(host, scribe, item, draft, sent, missedBy(host) > missed)
+
+  if (one !== undefined) {
+    // Kept on their word: theirs from here on.
+    touched(scribe, one.id)
+    Band.receive(band, [one])
+  }
+}
+
+/** A key of the question whether a report is expected behaviour. */
+async function pressedRequirement(host: ScribeHost, scribe: Scribe, who: Identity, item: Band.RequirementQuestion, key: string): Promise<void> {
+  const { band } = scribe
+
+  if (key === 'keep') {
+    await keepRequirement(host, scribe, who, item, item.content, item.basis)
+
+    return
+  }
+
+  if (key === 'wording') {
+    band.editing = { what: 'wording', value: item.content }
+
+    return
+  }
+
+  if (key !== 'not-requirement') {
+    return
+  }
+
+  Band.clear(band)
+  band.requirementsTypedPast = 0
+  host.report('image', { stage: 'answer', outcome: 'not_requirement' })
+
+  const reading = readingAt(scribe, item.reading)
+
+  if (reading === undefined) {
+    return
+  }
+
+  // Nothing else is written: the verdict is the reading's, sent now, or at a later turn's end when this does not get through.
+  reading.verdict = 'not_requirement'
+  reading.asking = 'done'
+  await uploaded(host, scribe, reading)
+}
+
+/** The reading `key` is settled as `verdict`, on the server too: it is neither asked about nor sent again as anything else. */
+function settledReading(scribe: Scribe, key: string, verdict: 'keep' | 'not_requirement'): void {
+  const reading = readingAt(scribe, key)
+
+  if (reading !== undefined) {
+    reading.verdict = verdict
+    reading.asking = 'done'
+
+    // What the server holds is the settled reading; a not_requirement it holds is the reading as sent with that verdict.
+    if (verdict === 'not_requirement') {
+      reading.sent = JSON.stringify(Reader.uploadOf(reading))
+    }
+  }
+}
+
+/**
+ * The verdict a refusal says a reading has for good, read from its code
+ * alone and never from the words after it: `reading_kept`,
+ * `reading_not_requirement`; undefined for any other refusal.
+ */
+function settledVerdictOf(code: string | undefined): 'keep' | 'not_requirement' | undefined {
+  return code === 'reading_kept' ? 'keep' : code === 'reading_not_requirement' ? 'not_requirement' : undefined
+}
+
+/** Puts the readings a log kept into the session, beside those it holds already. */
+function restoreImages(scribe: Scribe, log: Journal.ImagesLog): void {
+  const { images, band } = scribe
+  const held = new Set(images.readings.map(one => one.key))
+  const back = log.readings.filter(one => !held.has(one.key)).map((one): ImageReading => {
+    const reading: ImageReading = {
+      key: one.key,
+      promptHash: one.promptHash,
+      promptedAt: one.promptedAt,
+      sessionId: one.sessionId,
+      imageCount: one.imageCount,
+      text: '',
+      status: 'read',
+      turnId: undefined,
+      hasStepped: true,
+      isOver: true,
+      gate: 'yes',
+      forks: 0,
+      isRetryOwed: false,
+      serial: -1,
+      compactions: 0,
+      read: {
+        shows: one.shows,
+        legibility: one.legibility,
+        reporterRole: one.reporterRole,
+        observed: one.observed,
+        expected: one.expected,
+        expectedBasis: one.expectedBasis,
+      },
+      workState: one.workState,
+      id: one.id ?? undefined,
+      sent: undefined,
+      verdict: one.verdict ?? undefined,
+      before: one.before,
+      dirty: one.dirty ?? undefined,
+      since: one.since,
+      spokenFrom: one.spokenFrom,
+      asking: one.asking,
+      // A sentence not worked out yet is worked out again.
+      statement: one.statement ?? (one.asking === 'not_yet' || one.asking === 'again' ? undefined : null),
+      isWeak: false,
+      turnsLeft: one.turnsLeft,
+      hasQuote: false,
+    }
+
+    // What Fylgja had, as the log says it had it.
+    reading.sent = one.isSynced ? JSON.stringify(Reader.uploadOf(reading)) : undefined
+
+    return reading
+  })
+
+  images.readings = [...back, ...images.readings].slice(-Reader.MAX_READINGS)
+  images.forks = Math.max(images.forks, log.forks)
+  images.isCold ||= log.isCold
+  band.requirements = Math.max(band.requirements, log.requirements)
+  band.requirementsTypedPast = Math.max(band.requirementsTypedPast, log.typedPast)
 }
 
 /** A key of the band was pressed. */
@@ -6860,6 +7751,15 @@ export async function entered(host: ScribeHost, scribe: Scribe, key: string, val
     band.editing = null
     touched(scribe, editing.id)
     await amend(host, scribe, { atom_id: editing.id, op: 'fix', content: text })
+  } else if (key === 'wording-text' && editing.what === 'wording' && band.current?.kind === 'question' && band.current.form === 'requirement') {
+    if (text === '' || text.length > MAX_CONTENT) {
+      host.toast(`One sentence of at most ${MAX_CONTENT} characters.`)
+
+      return
+    }
+
+    // In the developer's own words: theirs, whatever the reader or the answer said.
+    await keepRequirement(host, scribe, scribe.identity, band.current, text, 'stated')
   } else if (
     key === 'reason-text' &&
     editing.what === 'reason' &&

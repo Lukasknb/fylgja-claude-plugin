@@ -800,7 +800,7 @@ line down and works as ever once the pinned account answers.
 
 ### Scribe's settings
 
-Three rows of `/config`, under this plugin. A change in the menu applies at
+Four rows of `/config`, under this plugin. A change in the menu applies at
 the next step, look or key, with no reload and no new session; `/config`
 is also read once a turn, by the fifth step or the turn's end, for a
 change made another way.
@@ -837,7 +837,28 @@ change made another way.
   is told about the files in hand. While another account is signed in
   than this machine is set up for, the plugin stays out, as it does
   until you answer that question. Turned on in the menu, whatever is up
-  comes down at once.
+  comes down at once. Pasted images are still read and sent; nothing is
+  asked about them.
+- **Pasted images** (on by default): an image you paste into a prompt is
+  read on this machine, by one fork of the conversation on your own
+  plan, when Scribe judges from the words around it that it is worth
+  reading. The fork goes out at a step boundary of that turn (never right
+  after its first step) or at its end, only while the prompt is still
+  the latest, nothing was compacted since, Claude answered within the
+  last two minutes and no other fork is out; at most three forks a
+  session, retries included, and none after one found the prompt cache
+  cold. Its answer is kept only when it saw as many images as you pasted
+  and copied back the prompt it was meant to read; otherwise it is tried
+  once more at the turn's end and given up. Once the fix for what the
+  image reported has landed in product code (not a test) that the
+  session had not been changing before, the band asks whether to keep
+  the expected behaviour: `1 Keep` (pressed twice) records it as a
+  decision on the fix's files, `2 Fix wording` keeps your own sentence,
+  `0 Not a requirement` (pressed twice) says so and records nothing. One
+  such question a turn, two a session, none after two in a row were typed
+  past; one typed past comes up once more after a later turn. It takes
+  nothing from Scribe's own four questions. Off: nothing is forked and
+  nothing is asked.
 
 ### What an agent hands back
 
@@ -1259,8 +1280,9 @@ The events, each with every key it may carry. Any key may be left out.
 |-|-|-|
 | `session_started` | a session begins | `is_interactive`, `is_signed_in`, `is_scribe_on` (yes/no each) |
 | `look` | Scribe has looked at what happened, at a turn's end, after you answered a question of Claude's, or after so many steps (that look carries no `trigger`) | `trigger` (turn_end, answered_question); `ending` (verdict, unreadable, steps, deadline, no_reply, stopped, skipped_gate, skipped_cap, not_granted); `no_reply_reason` (stopped, unanswered, threw); `is_whole` (yes/no); numbers: `duration_ms`, `steps`, `lookups`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `rows_read`, `rows_held`, `drafts_proposed`, `drafts_written`, `drafts_refused`, `drafts_dropped`, `calls_missed`; `first_refusal_code` (a refusal code, below); `first_drop_reason` (about_work, label_stayed; a record let go for an agent's report counts in `drafts_dropped` and is not named) |
-| `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit); `outcome` (created, reconfirmed, duplicate, restored, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no); `lookup`, what a lookup of Scribe's own looked up by (path, named, query, probe, brief; none for any other call) |
+| `call` | Scribe called Fylgja | `tool` (one of the plugin's own tools; today recall, remember, amend_memory, attach_commit, save_image_reading); `outcome` (created, reconfirmed, duplicate, restored, saved, fixed, removed, unchanged, answered, refused, rate_limited, invalid_arguments, not_found, server_fault, failed, timed_out, not_connected, not_let_through), an error answer told apart by the fixed words it opens with; `refusal_code` (a refusal code, below); `duration_ms` (number); `is_retry` (yes/no); `lookup`, what a lookup of Scribe's own looked up by (path, named, query, probe, brief; none for any other call) |
 | `question` | a question of Scribe's was held back by a rule, came up, or was answered; one about an agent's report is not reported | `stage` (held_back, shown, answered); `form` (reason, reversal, holds); `held_back_by` (turn_asked, asked_before, session_share, unanswered); `key` (option, own_words, no_reason, skip, still_holds, no_longer_holds, replaces, different, told_claude, expired, withdrawn); `ms_until_answered` (number) |
+| `image` | a pasted image was judged worth reading, forked for, its echo did not match, a question about it was put, or that question was answered | `stage` (gate, fork, echo, upload, ask, answer); `outcome` (gate_no, read, not_visible, count_mismatch, echo_mismatch, unreadable, image_bytes, api_error, empty_reply, nothing_to_fork, asked, keep, not_requirement, fix_wording; none for a fork cut short); `moment` (step, turn_end); `cache_share`, how much of the conversation the fork read from the prompt cache (none, under_half, half_to_90, over_90). Never a word of the image, the reading or the prompt |
 | `tell` | a record Scribe told came up, or a key of its card was pressed; Tell agent on an agent's brief is not reported | `action` (shown, opened, told_claude, knew, not_relevant, dismissed); `route` (anchor, prompt, judge, doubted, brief) |
 | `window` | you asked for the window, with the mark or a command | `view` (kept, search); `opened_by` (click, command); `outcome` (opened, not_placed, failed); `records_listed` (number) |
 | `window_action` | a key of the window did something to a record | `view` (kept, search); `action` (reword, remove, put_back, open_record, cite); `outcome` (done, trouble) |
@@ -1276,11 +1298,11 @@ The events, each with every key it may carry. Any key may be left out.
 A refusal code is the name of the rule Fylgja refused a write by, read off
 the start of its refusal and never the words after it: `alternatives_too_many`,
 `anchor_cap`, `anchor_invalid`, `anchors_too_many`, `atom_content_removed`,
-`atom_content_taken`, `atom_ids_too_many`, `burst`, `commit_invalid`, `cursor_invalid`, `detail_too_long`,
-`edit_conflict`, `guardrail_refused`, `invalid_arguments`, `kind_retired`,
+`atom_content_taken`, `atom_ids_too_many`, `basis_mismatch`, `burst`, `commit_invalid`, `cursor_invalid`, `detail_too_long`,
+`edit_conflict`, `guardrail_refused`, `image_bytes`, `invalid_arguments`, `kind_retired`,
 `leans_on_conversation`, `no_trigger`, `not_a_decision`, `not_found`, `not_imperative`,
 `not_one_sentence`, `pass_unavailable`, `paths_too_many`, `project_state_error`, `rate_limited`,
-`read_bound_exceeded`, `reason_contradiction`, `reason_missing`, `recalled_gone`, `repo_mismatch`,
+`read_bound_exceeded`, `reading_kept`, `reading_not_requirement`, `reason_contradiction`, `reason_missing`, `recalled_gone`, `repo_mismatch`,
 `search_index_unavailable`, `server_validation`, `status_not_memory`,
 `structure_conflict`, `suggestion_state_error`, `supersedes_removed`,
 `too_long`, `validation_error`;
@@ -1298,6 +1320,13 @@ the start of its refusal and never the words after it: `alternatives_too_many`,
   send after pressing `Tell Claude`, and, once after a compaction, the
   block of the session's records (see "Across a compaction"). One reaches
   an agent of the session: the records you send it with `Tell agent`.
+- It never sends an image, or the words in one. A pasted image is read by
+  a fork of the conversation on your plan; the plugin never reads an
+  attachment's bytes, never asks for the conversation in the form that
+  holds the images, and Scribe's own looks never fork. A reading that
+  carries anything like an image's encoding is dropped before it is
+  held. The words the image holds are kept in the running plugin for the
+  card and nowhere else: neither sent nor logged on the machine.
 - It never delays a prompt. Putting the references back needs no network,
   and taking down an offer you typed past needs none either. If either
   fails, the prompt is sent as typed. The lookup for a message's chip is
@@ -1312,12 +1341,12 @@ the start of its refusal and never the words after it: `alternatives_too_many`,
 - Text from the session, from a plan and from Fylgja is handed to the model
   fenced as data with the instruction that it is never to be followed. A
   record that says "ignore the above" is a record that says so.
-- It lets through, without asking you, exactly its own calls of fourteen
+- It lets through, without asking you, exactly its own calls of fifteen
   tools (`whoami`, `recall`, `search`, `open`, `resolve`, `remember`,
   `amend_memory`, `attach_commit`, `push_work_package`,
   `get_work_package`, `withdraw_work_package`, `withdraw_decisions`,
-  `complete_work_package`, and `report_events` for the events about
-  itself) on the Fylgja server this plugin declares, where only your
+  `complete_work_package`, `save_image_reading` for what a pasted image
+  showed, and `report_events` for the events about itself) on the Fylgja server this plugin declares, where only your
   mode would have asked: never past a rule, hook, setting or ceiling of
   yours or your organization's that refuses them or asks. Claude's calls
   to the very same tools, and every other tool call, are decided as they
@@ -1334,6 +1363,21 @@ Chips, paint, receipts and the band are drawn in the terminal and the Claude
 desktop app. Elsewhere nothing is drawn, and Scribe does not run.
 
 ## What leaves your machine, and what is kept
+
+- **A pasted image, as a reading** (with `Pasted images` on). What goes
+  to Fylgja is the reader's own English description of what the image
+  shows, an expected behaviour in one sentence where the image or your
+  words beside it stated one, what kind of image it was, who reported it
+  by role (never a name), how legible it was, how many images, whether
+  the code fixed was brought in or work in progress, a hash of your
+  prompt's text (never the text) and when it was sent. It is stored for
+  you and your profile alone, and is used as context when Fylgja reads
+  the session. Never the image, never the verbatim words in it. Kept,
+  the one sentence on the card becomes a decision your team can read,
+  because you read and confirmed exactly that sentence. The session log
+  on the machine keeps the reading as last known, never the words in
+  the image or your prompt; a conversation never resumed loses what it
+  had still to send.
 
 - **Only through the plugin's own connection.** Everything below goes to
   Fylgja through the connection this plugin declares

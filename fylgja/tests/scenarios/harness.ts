@@ -153,6 +153,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     destination: () => undefined,
     // The run's own model stands; no other setting is read.
     settings: async () => ({}),
+    // The replay reads no images: nothing is forked.
+    fork: async () => ({ text: undefined, reason: 'nothing-to-fork', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }),
   }
 }
 

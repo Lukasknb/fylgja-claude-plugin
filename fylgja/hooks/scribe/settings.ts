@@ -62,3 +62,16 @@ export const INVISIBLE_FIELD = 'invisible'
 export function isInvisibleOf(value: unknown): boolean {
   return value === true
 }
+
+/**
+ * The `userConfig` field for pasted images: on, a prompt's images are read
+ * on this machine by a fork of the conversation, and the developer may be
+ * asked to keep what a report showed as expected behaviour; off, nothing is
+ * forked and nothing is asked.
+ */
+export const IMAGES_FIELD = 'images'
+
+/** Whether a value of a switch that is on by default leaves it on: anything but `false` does. */
+export function isOnOf(value: unknown): boolean {
+  return value !== false
+}

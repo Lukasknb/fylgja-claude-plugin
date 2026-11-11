@@ -7,15 +7,17 @@
  * before a receipt; a question never shows while Claude is working, and
  * nothing new comes up while the developer is typing.
  *
- * A question is one of four: why a decision was taken, whether a new
+ * A question is one of six: why a decision was taken, whether a new
  * decision replaces a recorded one, whether a recorded decision still
- * holds now that its code has changed, and whether a choice an agent's
- * report says it made is to be kept. The first three are held to the same
- * limits; the fourth has its own, one a turn, and never stands in the way
- * of another.
+ * holds now that its code has changed, whether a choice an agent's report
+ * says it made is to be kept, what to do with a plan, and whether what a
+ * pasted report showed is expected behaviour to keep. The first three are
+ * held to the same limits; each of the others has its own, and never stands
+ * in the way of another.
  */
 
-import type { Draft, Fact, PlanProposal, Written } from './types'
+import type { Basis } from '../skuld/statement'
+import type { Anchor, Draft, Fact, PlanProposal, Written } from './types'
 
 /**
  * How a record came to be told: anchored to a file the session opened (and
@@ -129,7 +131,34 @@ export type PlanQuestion = {
   isTouched: boolean
 }
 
-export type Question = ReasonQuestion | ReversalQuestion | HoldsQuestion | ReportQuestion | PlanQuestion
+/**
+ * Whether what a pasted image reported, now that its fix has landed, is
+ * expected behaviour to keep: one sentence, kept as a decision the team can
+ * read, or said to be no requirement. Unanswered, the reading stays as it is.
+ * It has its own share (`offerRequirement`) and takes nothing from the
+ * other questions' limits.
+ */
+export type RequirementQuestion = {
+  kind: 'question'
+  form: 'requirement'
+  /** The reading it is about, by its key. */
+  reading: string
+  /** The sentence that would be kept, and where its words come from. */
+  content: string
+  basis: Basis
+  /** What the reading says the image showed: one line of the card. */
+  observed: string
+  /** The words in the image, while the plugin still holds them: never logged. */
+  quote?: string
+  /** The repository the fix landed in, and its product files: where the record is filed and what it points at. */
+  repo: string
+  anchors: Anchor[]
+  /** Whether it was typed past once already and is shown this once more. */
+  isAgain?: true
+  isTouched: boolean
+}
+
+export type Question = ReasonQuestion | ReversalQuestion | HoldsQuestion | ReportQuestion | PlanQuestion | RequirementQuestion
 export type Item = Tell | Question
 
 /** One line saying what Scribe just wrote. It waits for nobody and nothing waits for it. */
@@ -141,8 +170,8 @@ export type Receipt = {
   serial: number
 }
 
-/** The one-line field the band holds: a record's sentence being put right, or a reason being typed. */
-export type Editing = { what: 'fix'; id: string; value: string } | { what: 'reason' }
+/** The one-line field the band holds: a record's sentence being put right, a reason being typed, or a requirement's sentence being worded. */
+export type Editing = { what: 'fix'; id: string; value: string } | { what: 'reason' } | { what: 'wording'; value: string }
 
 /** What is kept across sessions on this machine. Ids and counters only. */
 export type Kept = {
@@ -187,6 +216,10 @@ export type Band = {
   hasAskedThisTurn: boolean
   /** Questions about a choice an agent made, put in line in the turn in hand. */
   choicesThisTurn: number
+  /** Questions whether a report is expected behaviour: put in line in the turn in hand, in the session, and typed past in a row. */
+  requirementsThisTurn: number
+  requirements: number
+  requirementsTypedPast: number
   tellsThisTurn: number
   receipts: number
   isWorking: boolean
@@ -208,6 +241,13 @@ export const MAX_TELLS_PER_TURN = 1
 
 /** No more questions about a choice an agent made than this in one turn. */
 export const MAX_CHOICES_PER_TURN = 1
+
+/** No more questions whether a report is expected behaviour than this in one turn, and in one session. */
+export const MAX_REQUIREMENTS_PER_TURN = 1
+export const MAX_REQUIREMENTS = 2
+
+/** After this many of them in a row were typed past, none follows in the session. */
+export const MAX_REQUIREMENTS_TYPED_PAST = 2
 
 /** No more ids of known records are kept than this; the oldest go first. */
 export const MAX_KNOWN = 500
@@ -240,6 +280,9 @@ export function create(): Band {
     unanswered: 0,
     hasAskedThisTurn: false,
     choicesThisTurn: 0,
+    requirementsThisTurn: 0,
+    requirements: 0,
+    requirementsTypedPast: 0,
     tellsThisTurn: 0,
     receipts: 0,
     isWorking: false,
@@ -377,6 +420,41 @@ export function offerChoice(band: Band, question: ReportQuestion): boolean {
   enqueue(band, question)
 
   return true
+}
+
+/**
+ * Puts the question whether a report is expected behaviour in line, unless a
+ * rule says no: the turn has had its one, the session its two, or two in a
+ * row were typed past. One typed past once comes up once more (`isAgain`),
+ * and is not counted against the session twice. Counted apart, like the
+ * question about an agent's choice.
+ */
+export function offerRequirement(band: Band, question: RequirementQuestion): boolean {
+  if (
+    band.requirementsThisTurn >= MAX_REQUIREMENTS_PER_TURN ||
+    band.requirementsTypedPast >= MAX_REQUIREMENTS_TYPED_PAST ||
+    (question.isAgain !== true && band.requirements >= MAX_REQUIREMENTS) ||
+    [band.current, ...band.queue].some(item => item?.kind === 'question' && item.form === 'requirement' && item.reading === question.reading)
+  ) {
+    return false
+  }
+
+  band.requirementsThisTurn += 1
+  band.requirements += question.isAgain === true ? 0 : 1
+  enqueue(band, question)
+
+  return true
+}
+
+/**
+ * A question about a report was let go unseen (the line was full): it was
+ * never put, so its place in the session's share is given back. One shown
+ * once more was never counted.
+ */
+export function droppedRequirement(band: Band, question: RequirementQuestion): void {
+  if (question.isAgain !== true) {
+    band.requirements = Math.max(0, band.requirements - 1)
+  }
 }
 
 /** What a plan question is asked under: the package, or the records, it is about, and what it would do. */
@@ -549,8 +627,8 @@ export function settle(band: Band): Settled {
 
   while (band.current === null && !band.isTyping) {
     // A question comes before a tell; while Claude works, only a tell may come up.
-    // A question about an agent's choice comes after any other.
-    const other = band.queue.findIndex(item => item.kind === 'question' && item.form !== 'report')
+    // A question about an agent's choice, or about a report, comes after any other.
+    const other = band.queue.findIndex(item => item.kind === 'question' && item.form !== 'report' && item.form !== 'requirement')
     const asks = band.isWorking ? -1 : other !== -1 ? other : band.queue.findIndex(item => item.kind === 'question')
     const at = asks === -1 ? band.queue.findIndex(item => item.kind === 'tell') : asks
 
@@ -562,7 +640,8 @@ export function settle(band: Band): Settled {
 
     band.queue = band.queue.filter((_, index) => index !== at)
 
-    if (band.kept.skip > 0) {
+    // Offers held back for having been ignored never take a question about a report: it is counted apart.
+    if (band.kept.skip > 0 && !(item.kind === 'question' && item.form === 'requirement')) {
       band.kept.skip -= 1
       settled.isKeptChanged = true
       settled.dropped.push(item)
@@ -617,11 +696,16 @@ export function submitted(band: Band): Item | undefined {
   const item = band.editing === null ? band.current : null
 
   if (item !== null) {
-    if (!item.isTouched) {
+    // A question about a report has its own share: typing past it holds back none of the other offers.
+    if (!item.isTouched && !(item.kind === 'question' && item.form === 'requirement')) {
       band.kept.typedPast += 1
       band.kept.skip = skipsAfter(band.kept.typedPast)
-      // One about an agent's choice, or about a plan, is counted apart, and not here.
-      band.unanswered += item.kind === 'question' && item.form !== 'report' && item.form !== 'plan' ? 1 : 0
+    }
+
+    if (!item.isTouched) {
+      // One about an agent's choice, a plan or a report is counted apart, and not here.
+      band.unanswered += item.kind === 'question' && item.form !== 'report' && item.form !== 'plan' && item.form !== 'requirement' ? 1 : 0
+      band.requirementsTypedPast += item.kind === 'question' && item.form === 'requirement' ? 1 : 0
     }
 
     clear(band)
@@ -633,6 +717,7 @@ export function submitted(band: Band): Item | undefined {
   // What was asked about a plan lapses with the prompt, shown or still waiting: the developer moved on without a yes.
   lapsePlans(band)
   band.tellsThisTurn = 0
+  band.requirementsThisTurn = 0
   band.isTyping = false
   band.isWorking = true
 

@@ -115,7 +115,7 @@ describe('what the plugin may report about itself', () => {
 
         if (kind.oneOf !== undefined) {
           expect(kind.oneOf.length, `${name}.${key}`).toBeGreaterThan(0)
-          expect(kind.oneOf.length, `${name}.${key}`).toBeLessThanOrEqual(40)
+          expect(kind.oneOf.length, `${name}.${key}`).toBeLessThanOrEqual(50)
           expect(kind.oneOf.filter(word => !PLAIN.test(word)), `${name}.${key}`).toEqual([])
         } else if (kind.whole !== undefined) {
           expect(kind.whole[0], `${name}.${key}`).toBeGreaterThanOrEqual(0)

@@ -189,6 +189,22 @@ function scribeHostOf($: EngineInterface, session: Session.Session, report: Repo
     })),
     destination: () =>
       session.account.state === 'pinned' && session.account.who !== undefined ? destinationOf(session.account.who) : undefined,
+    // The image reader's alone (`reader/`): Scribe's own looks never fork.
+    fork: async prompt => {
+      const reply = await $.model.fork({ prompt })
+      const usage = 'usage' in reply ? reply.usage : undefined
+
+      return {
+        text: reply.isAnswered ? reply.text : undefined,
+        reason: reply.isAnswered ? undefined : reply.reason,
+        usage: {
+          input: usage?.input_tokens ?? 0,
+          output: usage?.output_tokens ?? 0,
+          cacheRead: usage?.cache_read_input_tokens ?? 0,
+          cacheWrite: usage?.cache_creation_input_tokens ?? 0,
+        },
+      }
+    },
   }
 }
 
@@ -1044,9 +1060,32 @@ export function register(on: On, options: PluginOptions = {}): void {
   on('prompt.submit', async ($, e, next) => {
     await caughtUp($, held)
 
+    // A prompt of the developer's own that carries images arms a reading of them before it enters; nothing is awaited.
+    let reading: ReturnType<typeof Scribe.submitting>
+
+    try {
+      reading = Scribe.submitting(scribe, {
+        text: e.text,
+        images: (e.attachments ?? []).filter(one => one.type === 'image').length,
+        turnId: e.turnId,
+        isOwn: isOwnPrompt(e.origin),
+        isCommand: e.command !== undefined,
+        isMeta: e.isMeta === true,
+      })
+    } catch {
+      reading = undefined
+    }
+
     const entered = (done: PromptSubmitResult, context: readonly string[] | undefined): PromptSubmitResult => {
       if (context !== undefined && done.drop === undefined) {
         Scribe.takenIn(scribeHostOf($, session, report), scribe)
+      }
+
+      // Whatever entered, the image prompt before it is no longer the latest; the armed reading takes the words that entered.
+      try {
+        Scribe.submitted(scribeHostOf($, session, report), scribe, reading, done.drop === undefined ? done.text : undefined, e.command !== undefined)
+      } catch {
+        // The prompt has entered as it would have.
       }
 
       return done
@@ -1218,6 +1257,8 @@ export function register(on: On, options: PluginOptions = {}): void {
       void serve(calls, live, callerOf($))
 
       if (e.agentId === undefined) {
+        // A step boundary of the image prompt's turn: its images may be read from here, beside the step.
+        await Scribe.boundary(scribeHostOf($, session, report), scribe, e.turnId).catch(() => undefined)
         // Claude is working from here until the turn ends, whoever began the turn.
         Scribe.began(scribe)
         // A compaction just made, or about to be, has Scribe look now, whatever the developer's setting.
@@ -1233,7 +1274,7 @@ export function register(on: On, options: PluginOptions = {}): void {
 
       try {
         if (e.agentId === undefined) {
-          await Scribe.stepped(scribeHostOf($, session, report, live), scribe, e.index, stepped.toolUses)
+          await Scribe.stepped(scribeHostOf($, session, report, live), scribe, e.index, stepped.toolUses, { turnId: e.turnId, answer: stepped.answer })
         } else {
           // An agent's step: the paths of the files it changes, and whether it commits. Nothing else of it.
           await Scribe.agentStepped(scribeHostOf($, session, report, live), scribe, stepped.toolUses)
@@ -1315,7 +1356,7 @@ export function register(on: On, options: PluginOptions = {}): void {
       await briefly(host.after, flush(host, session), SHORT_WAIT_MS)
 
       if (e.agentId === undefined) {
-        await Scribe.completed(scribeHostOf($, session, report, live), scribe)
+        await Scribe.completed(scribeHostOf($, session, report, live), scribe, { turnId: e.turnId, answer: e.answer })
         // Claude answered: the window's reading now is what a later one is told from.
         await watchWindow($, held, report, 'end')
       } else {

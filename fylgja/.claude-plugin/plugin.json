@@ -37,6 +37,13 @@
       "required": false,
       "default": "Sonnet"
     },
+    "images": {
+      "type": "boolean",
+      "title": "Pasted images",
+      "description": "An image you paste into a prompt is read on this machine by a fork of the conversation, on your own Claude plan, when Scribe judges it worth reading: what it shows, in Scribe's words, goes to Fylgja as context for the session, never the image and never the words in it. Once the fix for a report it showed has landed, Scribe may ask whether to keep the expected behaviour as a decision. Off: nothing is forked and nothing is asked.",
+      "required": false,
+      "default": true
+    },
     "invisible": {
       "type": "boolean",
       "title": "Invisible",

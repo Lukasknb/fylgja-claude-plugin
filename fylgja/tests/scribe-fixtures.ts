@@ -193,6 +193,8 @@ export type Stage = {
   settings: Record<string, string | boolean>
   /** Every time the plugin read a conversation: the agent's id when it asked for an agent's, undefined for the main one. */
   conversations: (string | undefined)[]
+  /** Every time the plugin read a conversation: the shape it asked for it in (`api` holds the images), undefined for the plain rows. */
+  shapes: (string | undefined)[]
 }
 
 /**
@@ -223,6 +225,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   const clock = mock.clock(on)
   const settings: Record<string, string | boolean> = { ...options.settings }
   const conversations: (string | undefined)[] = []
+  const shapes: (string | undefined)[] = []
   let written = 0
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -386,11 +389,12 @@ export function stage(on: On, options: StageOptions = {}): Stage {
   })
 
   on('session.messages', async ($, e) => {
-    const asked = e as { agentId?: string } | undefined
+    const asked = e as { agentId?: string; as?: string } | undefined
     const wait = options.rowsWait?.() ?? 0
     const held = wait === 0 ? rows : [...rows]
 
     conversations.push(asked?.agentId)
+    shapes.push(asked?.as)
 
     if (wait > 0) {
       await clock.sleep(wait)
@@ -535,6 +539,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
     of: tool => calls.filter(call => call.tool === tool).map(call => call.args),
     settings,
     conversations,
+    shapes,
   }
 }
 

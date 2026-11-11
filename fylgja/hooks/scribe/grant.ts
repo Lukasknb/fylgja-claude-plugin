@@ -22,6 +22,8 @@ export const OWN_TOOLS: readonly string[] = [
   'withdraw_work_package',
   'withdraw_decisions',
   'complete_work_package',
+  // What a pasted image showed, read on this machine (`reader/`), and the developer's verdict on it.
+  'save_image_reading',
   // The plugin's own events about itself (`telemetry.ts`); Scribe never calls it.
   'report_events',
 ]

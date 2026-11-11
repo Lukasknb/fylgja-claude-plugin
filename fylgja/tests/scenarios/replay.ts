@@ -342,6 +342,8 @@ function hostOf($: EngineInterface, world: World): ScribeHost {
     destination: () => undefined,
     // The run's own model stands; no other setting is read.
     settings: async () => ({}),
+    // The replay reads no images: nothing is forked.
+    fork: async () => ({ text: undefined, reason: 'nothing-to-fork', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }),
   }
 }
 
@@ -381,6 +383,8 @@ function noteItems(scribe: Scribe.Scribe, seen: Set<Band.Item>, step: Step, show
       step.questions.push({ form: 'report', text: item.draft.content, options: [], prior: null })
     } else if (item.form === 'plan') {
       step.questions.push({ form: 'plan', text: item.title, options: [], prior: null })
+    } else if (item.form === 'requirement') {
+      step.questions.push({ form: 'requirement', text: item.content, options: [], prior: null })
     } else {
       step.questions.push({ form: 'reversal', text: item.draft.content, options: item.options, prior: item.prior.content })
     }

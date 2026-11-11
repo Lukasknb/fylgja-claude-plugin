@@ -44,7 +44,9 @@
  * own to rewrite), the records taken out that can be put back, the
  * question waiting for an answer, what waits to be sent to Fylgja, how far
  * Scribe has read the conversation, the commits it saw and what the shell
- * staged for the next, and its counts. Never a word of a prompt, a reply,
+ * staged for the next, its counts, and each image reading as last known
+ * (the reader's description, never the words in the image) with whether
+ * Fylgja has it as it stands. Never a word of a prompt, a reply,
  * a file or a plan: the prompts the session sent are kept as hashes keyed
  * with a salt of this machine's own (`keyedHashOf`), and found again among
  * the conversation's rows.
@@ -56,6 +58,11 @@
  */
 
 import { isRecord } from '../payload'
+import type { Asking as ReadingAsking, Reading, WorkState } from '../reader/reader'
+import { BASES, LEGIBILITY, MAX_EXPECTED, MAX_OBSERVED, ROLES, SHOWS } from '../reader/reply'
+import type { ExpectedBasis, Legibility, Role, Shows } from '../reader/reply'
+import type { Basis } from '../skuld/statement'
+import { MAX_PATHS } from '../skuld/work'
 import { SCHEMA } from '../telemetry-schema'
 import type { Question } from './band'
 import type { Row } from './delta'
@@ -189,6 +196,47 @@ export type Counts = {
   denied: [string, { content: string; date: string | null; since: number }][]
 }
 
+/**
+ * One image reading as the log keeps it: as last known, with whether Fylgja
+ * has it as it stands. Never the words in the image, never the prompt.
+ */
+export type LoggedReading = {
+  key: string
+  promptHash: string
+  promptedAt: string
+  sessionId: string
+  imageCount: number
+  shows: Shows
+  legibility: Legibility
+  reporterRole: Role
+  observed: string
+  expected: string | null
+  expectedBasis: ExpectedBasis | null
+  workState: WorkState
+  id: string | null
+  isSynced: boolean
+  verdict: 'keep' | 'not_requirement' | null
+  asking: ReadingAsking
+  before: string[]
+  dirty: string[] | null
+  since: string[]
+  /** The sentence it would be kept as, once worked out; null for none or not yet. */
+  statement: { text: string; basis: Basis } | null
+  /** Where the developer's words a statement may rest on begin, and how many turns' ends its fix may still land at. */
+  spokenFrom: number
+  turnsLeft: number
+}
+
+/** The session's image readings and what keeps their forks and questions within bounds. */
+export type ImagesLog = {
+  readings: LoggedReading[]
+  forks: number
+  isCold: boolean
+  /** Questions whether a report is expected behaviour put in the session, and typed past in a row. */
+  requirements: number
+  typedPast: number
+}
+
 /** The parts of a log other than its records, each written and read as a whole. */
 export type Groups = {
   recorded: { id: string | null; content: string }[]
@@ -203,6 +251,7 @@ export type Groups = {
   counts: Counts
   /** What came of agents' reports: never a word of a report, only what is done with. */
   reports: Handled
+  images: ImagesLog
 }
 
 /** The agents whose report was taken, by id, and what a look took out of reports, by its sentence in lower case: none of it twice. */
@@ -243,6 +292,11 @@ const OUTCOMES: readonly string[] = ['created', 'restored', 'reasoned', 'held', 
 const STATUSES: readonly string[] = ['stated', 'not_stated', 'no_strong_reason'] satisfies ReasonStatus[]
 const RULES: readonly string[] = SCHEMA.events.commit.rule.oneOf
 const SAID: readonly string[] = ['given-up', 'unconfirmed', 'gone', 'unchecked']
+const READING_KEY = /^[0-9a-f]{64}@[0-9TZ:.+-]{10,40}$/
+const PROMPT_HASH = /^[0-9a-f]{64}$/
+const WORK_STATES: readonly string[] = ['unknown', 'brought_in', 'work_in_progress'] satisfies WorkState[]
+const ASKINGS: readonly string[] = ['not_yet', 'asked', 'again', 'done'] satisfies ReadingAsking[]
+const BASIS: readonly string[] = ['transcribed', 'stated', 'concluded'] satisfies Basis[]
 
 /** The longest text of any one part that is read back; anything longer is no part of a record. */
 const MAX_TEXT = 4000
@@ -510,7 +564,20 @@ function draftOf(value: unknown): Draft | undefined {
     ...(value.fromChoice === true ? { fromChoice: true } : {}),
     ...(namesOf(value.appliesTo).length === 0 ? {} : { appliesTo: namesOf(value.appliesTo) }),
     ...filedOf(value),
+    ...reportIn(value.report),
   }
+}
+
+/** The reading a kept requirement states, as a write that waits holds it; nothing when it does not read as one. */
+function reportIn(value: unknown): Pick<Draft, 'report'> {
+  if (!isRecord(value) || typeof value.key !== 'string' || !READING_KEY.test(value.key)) {
+    return {}
+  }
+
+  const basis = typeof value.basis === 'string' && BASIS.includes(value.basis) ? (value.basis as Basis) : undefined
+  const id = typeof value.id === 'string' && ID.test(value.id) ? value.id : null
+
+  return basis === undefined ? {} : { report: { key: value.key, id, basis } }
 }
 
 /** A record as Fylgja returned it, as a question holds it. */
@@ -589,6 +656,30 @@ function questionOf(value: unknown): Question | undefined {
     return draft === undefined ? undefined : { kind: 'question', form: 'report', draft, isTouched: false }
   }
 
+  if (value.form === 'requirement') {
+    const reading = typeof value.reading === 'string' && READING_KEY.test(value.reading) ? value.reading : undefined
+    const content = text(value.content, MAX_EXPECTED)
+    const basis = typeof value.basis === 'string' && BASIS.includes(value.basis) ? (value.basis as Basis) : undefined
+    const observed = text(value.observed, MAX_OBSERVED)
+    const repo = text(value.repo, 400)
+
+    // The words in the image are never logged: the card comes up again without them.
+    return reading === undefined || content === undefined || basis === undefined || observed === undefined || repo === undefined
+      ? undefined
+      : {
+          kind: 'question',
+          form: 'requirement',
+          reading,
+          content,
+          basis,
+          observed,
+          repo,
+          anchors: anchorsOf(value.anchors),
+          ...(value.isAgain === true ? { isAgain: true as const } : {}),
+          isTouched: false,
+        }
+  }
+
   if (value.form === 'holds') {
     const fact = factOf(value.fact)
     const repo = text(value.repo, 400)
@@ -600,6 +691,116 @@ function questionOf(value: unknown): Question | undefined {
   }
 
   return undefined
+}
+
+function wordIn<W extends string>(words: readonly W[], value: unknown): W | undefined {
+  return typeof value === 'string' && (words as readonly string[]).includes(value) ? (value as W) : undefined
+}
+
+/** An image reading as the log holds it, or undefined when it does not read as one. */
+function readingOf(value: unknown): LoggedReading | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+
+  const key = typeof value.key === 'string' && READING_KEY.test(value.key) ? value.key : undefined
+  const promptHash = typeof value.promptHash === 'string' && PROMPT_HASH.test(value.promptHash) ? value.promptHash : undefined
+  const promptedAt = text(value.promptedAt, 40)
+  const sessionId = typeof value.sessionId === 'string' && CONV.test(value.sessionId) ? value.sessionId : undefined
+  const imageCount = typeof value.imageCount === 'number' && Number.isInteger(value.imageCount) && value.imageCount >= 1 && value.imageCount <= 1000 ? value.imageCount : undefined
+  const shows = wordIn(SHOWS, value.shows)
+  const legibility = wordIn(LEGIBILITY, value.legibility)
+  const reporterRole = wordIn(ROLES, value.reporterRole)
+  const observed = text(value.observed, MAX_OBSERVED)
+  const expected = value.expected === null ? null : text(value.expected, MAX_EXPECTED)
+  const expectedBasis = value.expectedBasis === null ? null : wordIn(BASES, value.expectedBasis)
+  const workState = wordIn(WORK_STATES as readonly WorkState[], value.workState)
+  const asking = wordIn(ASKINGS as readonly ReadingAsking[], value.asking)
+  const verdict = value.verdict === null ? null : wordIn(['keep', 'not_requirement'] as const, value.verdict)
+
+  if (
+    key === undefined ||
+    promptHash === undefined ||
+    promptedAt === undefined ||
+    sessionId === undefined ||
+    imageCount === undefined ||
+    shows === undefined ||
+    legibility === undefined ||
+    reporterRole === undefined ||
+    observed === undefined ||
+    expected === undefined ||
+    expectedBasis === undefined ||
+    (expected === null) !== (expectedBasis === null) ||
+    workState === undefined ||
+    asking === undefined ||
+    verdict === undefined
+  ) {
+    return undefined
+  }
+
+  return {
+    key,
+    promptHash,
+    promptedAt,
+    sessionId,
+    imageCount,
+    shows,
+    legibility,
+    reporterRole,
+    observed,
+    expected,
+    expectedBasis,
+    workState,
+    id: typeof value.id === 'string' && ID.test(value.id) ? value.id : null,
+    isSynced: value.isSynced === true,
+    verdict,
+    asking,
+    before: texts(value.before, 1400).slice(-MAX_PATHS),
+    dirty: value.dirty === null ? null : texts(value.dirty, 1000).slice(-MAX_PATHS),
+    since: texts(value.since, 1000).slice(-MAX_PATHS),
+    statement: statementOf(value.statement),
+    spokenFrom: count(value.spokenFrom),
+    turnsLeft: count(value.turnsLeft),
+  }
+}
+
+function statementOf(value: unknown): { text: string; basis: Basis } | null {
+  const said = isRecord(value) ? text(value.text, MAX_EXPECTED) : undefined
+  const basis = isRecord(value) && typeof value.basis === 'string' && BASIS.includes(value.basis) ? (value.basis as Basis) : undefined
+
+  return said === undefined || basis === undefined ? null : { text: said, basis }
+}
+
+/** A reading of the session as the log keeps it; undefined for one that was not read, which the log never holds. */
+export function loggedReadingOf(reading: Reading, isSynced: boolean): LoggedReading | undefined {
+  const { read } = reading
+
+  return reading.status !== 'read' || read === undefined || reading.key === ''
+    ? undefined
+    : {
+        key: reading.key,
+        promptHash: reading.promptHash,
+        promptedAt: reading.promptedAt,
+        sessionId: reading.sessionId,
+        imageCount: reading.imageCount,
+        shows: read.shows,
+        legibility: read.legibility,
+        reporterRole: read.reporterRole,
+        observed: read.observed,
+        expected: read.expected,
+        expectedBasis: read.expectedBasis,
+        workState: reading.workState,
+        id: reading.id ?? null,
+        isSynced,
+        verdict: reading.verdict ?? null,
+        asking: reading.asking,
+        before: reading.before.slice(-MAX_PATHS),
+        dirty: reading.dirty === undefined ? null : reading.dirty.slice(-MAX_PATHS),
+        since: reading.since.slice(-MAX_PATHS),
+        statement: reading.statement ?? null,
+        spokenFrom: reading.spokenFrom,
+        turnsLeft: reading.turnsLeft,
+      }
 }
 
 function doubtedOf(value: unknown): Doubted | undefined {
@@ -747,6 +948,16 @@ const GROUPS: { [K in keyof Groups]: (value: unknown) => Groups[K] | undefined }
       : undefined,
   places: value => (Array.isArray(value) ? pairsOf(value, placeOf) : undefined),
   reports: value => (isRecord(value) ? { reporters: texts(value.reporters, 200), handled: texts(value.handled) } : undefined),
+  images: value =>
+    isRecord(value)
+      ? {
+          readings: each(value.readings, readingOf, 20),
+          forks: count(value.forks),
+          isCold: value.isCold === true,
+          requirements: count(value.requirements),
+          typedPast: count(value.typedPast),
+        }
+      : undefined,
   counts: value =>
     isRecord(value)
       ? {
