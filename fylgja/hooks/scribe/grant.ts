@@ -127,12 +127,17 @@ function isPlainAsk(verdict: Verdict): boolean {
  * handed back as it came. A refusal is never turned into anything else, nor
  * reworded: a refusal from beneath of a call of the reporting tool that is
  * not the plugin's own stands in its own words.
+ *
+ * @param lift the session's word on letting the plugin's own calls through
+ *   (see `Lift`): once it is off, the plugin's own call is handed back as it
+ *   came too
  */
 export function verdictFor<V extends Verdict>(
   verdict: V,
   e: Checked,
   raisedBy: string | undefined,
   server: string | undefined,
+  lift?: Lift,
 ): V {
   const isOwn = isOwnCall(e, raisedBy, server)
 
@@ -140,5 +145,73 @@ export function verdictFor<V extends Verdict>(
     return { ...verdict, decision: 'deny', reason: 'Fylgja: this tool is the plugin’s own, for its reports about itself' }
   }
 
-  return isPlainAsk(verdict) && isOwn ? { ...verdict, decision: 'allow', reason: 'Fylgja: the plugin’s own call to its own server' } : verdict
+  if (!isPlainAsk(verdict) || !isOwn || lift?.isOff === true) {
+    return verdict
+  }
+
+  if (lift !== undefined) {
+    lifted(lift, e.tool_use_id)
+  }
+
+  return { ...verdict, decision: 'allow', reason: 'Fylgja: the plugin’s own call to its own server' }
+}
+
+/**
+ * Whether the plugin still lets its own calls through in this session, and
+ * which of its calls it let through that have not yet run.
+ *
+ * Where an organization's guard sits ahead of a person's plugins, it may run
+ * a check this plugin answered once more without the plugin, take that
+ * verdict instead, and say so in a line of its own, call after call. The
+ * engine tells the plugin nothing of being passed over; the guard's line is
+ * the one sign of it the plugin can hear. So a line from a plugin seated
+ * above the person's (`prepend`) that names this plugin, heard while a call
+ * it let through has not yet run, turns the lift off for the rest of the
+ * session: every verdict is then handed back as it came, so the guard has
+ * nothing to run again and nothing to say. Hearing it only ever takes the
+ * lift away, so a line that is not about the lift costs no more than the
+ * question the guard would have put in any case.
+ */
+export type Lift = {
+  isOff: boolean
+  /** The ids of the plugin's own calls it let through that have not run yet, newest last. */
+  pending: string[]
+}
+
+/** No more pending calls are remembered than this; the oldest are let go. */
+const MAX_PENDING = 16
+
+/** How a line names this plugin: its own name, as a word. */
+const NAMES_PLUGIN = /(?:^|[^a-z0-9_-])fylgja(?:$|[^a-z0-9_-])/i
+
+export function liftOf(): Lift {
+  return { isOff: false, pending: [] }
+}
+
+function lifted(lift: Lift, id: string | undefined): void {
+  lift.pending = [...lift.pending, id ?? ''].slice(-MAX_PENDING)
+}
+
+/** A call of the plugin's own has run, however it ended. */
+export function ran(lift: Lift, id: string | undefined): void {
+  lift.pending = lift.pending.filter(one => one !== id)
+}
+
+/**
+ * A line logged by `by`, seated in `tier`: the lift is off for the rest of
+ * the session when it is a guard's word about this plugin while a call the
+ * plugin let through has not yet run (see `Lift`). Answers whether it was
+ * turned off just now.
+ */
+export function heard(lift: Lift, by: string | undefined, tier: string | undefined, text: string): boolean {
+  const isOurs = by === 'fylgja' || by?.startsWith('fylgja@') === true
+
+  if (lift.isOff || lift.pending.length === 0 || tier !== 'prepend' || isOurs || !NAMES_PLUGIN.test(text)) {
+    return false
+  }
+
+  lift.isOff = true
+  lift.pending = []
+
+  return true
 }

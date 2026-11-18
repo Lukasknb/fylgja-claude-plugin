@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { PREFIX } from '../hooks/scribe/journal'
 import { STORE } from '../hooks/scribe/scribe'
+import { KEPT_PREFIX } from '../hooks/telemetry'
 import { SCHEMA } from '../hooks/telemetry-schema'
 import { answer, eventsOf, idOf, NEEDS_SIGN_IN } from './fixtures'
 import type { Reported } from './fixtures'
@@ -38,8 +39,13 @@ const RECORDS = verdict({ records: [decision()] })
 const UNEXPLAINED = decision({ detail: '', reason_status: 'not_stated' })
 const ASKING = verdict({ records: [UNEXPLAINED], question: { form: 'reason', record: 0, options: ['One less service to run'] } })
 
-/** A turn in which nothing is worth a look: it ends, and what waits is sent. */
+/** A turn in which nothing is worth a look: its prompt sends what waited. */
 const QUIET = [dev('ok'), claude('k')]
+
+/** The developer sends the next prompt: what the plugin noted about its own working until now is sent with it. */
+async function onward($: Engine): Promise<void> {
+  await send($, 'and on')
+}
 
 const KEPT = { command: 'fylgja-kept', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } } as never
 const searching = (args: string) =>
@@ -139,13 +145,13 @@ function nothingPrivateIn(set: Stage): void {
   expect(PRIVATE.filter(word => said.toLowerCase().includes(word.toLowerCase()))).toEqual([])
 }
 
-describe('each event is noted where the thing happens, and sent when the turn ends', () => {
+describe('each event is noted where the thing happens, and sent with the next prompt', () => {
   test('a session that began says where it is drawn, that Fylgja is signed in and that Scribe is on', async ($, on) => {
     const set = stage(on)
 
     await $.session.start(START)
 
-    expect(set.reports, 'nothing is sent before a turn ends').toEqual([])
+    expect(set.reports, 'nothing is sent before a prompt').toEqual([])
 
     await turn($, set, ...QUIET)
 
@@ -159,6 +165,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
     await $.session.start(START)
     await turn($, set, ...TALK)
+    await onward($)
 
     const [look] = propsOf(set, 'look')
 
@@ -194,6 +201,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
     await $.session.start(START)
     await turn($, set, ...QUIET)
+    await onward($)
 
     expect(set.asked).toEqual([])
     expect(propsOf(set, 'look')).toMatchObject([{ trigger: 'turn_end', ending: 'skipped_gate', steps: 0, drafts_proposed: 0 }])
@@ -216,6 +224,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
     await turn($, set, ...TALK)
     await stepped('read the retry', [{ name: 'Bash', input: { command: `sed -n 1,40p ${RETRY}` } }])
     await stepped('have an agent do the policy', [{ name: 'Agent', input: { description: 'Policy', prompt: `Rewrite ${POLICY}.` } }])
+    await onward($)
 
     // The agent's turn has no file of its own left to look up by at its end: its prompt's words are.
     expect(propsOf(set, 'call').map(call => call.lookup)).toEqual(['probe', 'query', 'path', 'named', 'brief', 'query'])
@@ -228,6 +237,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
     await $.session.start(START)
     await turn($, set, ...TALK)
+    await onward($)
 
     expect(propsOf(set, 'look')).toMatchObject([{ ending: 'unreadable', is_whole: false, drafts_written: 0 }])
   })
@@ -240,6 +250,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
     await $.session.start(START)
     await turn($, set, ...TALK)
+    await onward($)
 
     expect(propsOf(set, 'call').filter(call => call.tool === 'remember')).toMatchObject([
       { outcome: 'refused', refusal_code: 'status_not_memory' },
@@ -255,6 +266,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
     await $.session.start(START)
     await turn($, set, dev('split it up'), claude('- L1: the lock\n- L4: its callers', edit(FILE)))
+    await onward($)
 
     expect(set.of('remember')).toEqual([])
     expect(propsOf(set, 'look')).toMatchObject([{ ending: 'verdict', drafts_written: 0, drafts_dropped: 2, first_drop_reason: 'about_work' }])
@@ -271,6 +283,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
       await $.session.start(START)
       await turn($, set, ...TALK)
+      await onward($)
 
       expect(propsOf(set, 'call').filter(call => call.tool === 'remember')).toMatchObject([{ outcome: 'refused', refusal_code: code }])
       expect(propsOf(set, 'look')).toMatchObject([{ drafts_refused: 1, first_refusal_code: code }])
@@ -325,6 +338,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
     await turn($, set, ...TALK)
     expect(await shown($)).toMatch('Why')
     await turn($, set, ...QUIET)
+    await onward($)
 
     expect(propsOf(set, 'question').map(one => [one.stage, one.key])).toEqual([
       ['shown', undefined],
@@ -362,6 +376,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
     await $.session.start(START)
     await turn($, set, ...TALK)
     await turn($, set, dev('Lock the mail queue the very same way, in the same file.'), claude('Done.', edit(FILE)))
+    await onward($)
 
     expect(propsOf(set, 'question').filter(one => one.stage === 'held_back')).toEqual([
       { stage: 'held_back', form: 'reason', held_back_by: 'asked_before' },
@@ -382,6 +397,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
       ...TALK,
       claude('Committed.', { tool: 'Bash', input: { command: 'git add -A && git commit -m "queue lock"' }, text: '[main 1a2b3c4] queue lock\n 1 file changed' }),
     )
+    await onward($)
 
     expect(set.of('attach_commit')).toMatchObject([{ sha: '1a2b3c4', paths: [FILE] }])
     expect(propsOf(set, 'commit')).toEqual([
@@ -395,6 +411,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
 
     await $.session.start(START)
     await turn($, set, ...TALK, claude('Committed.', { tool: 'Bash', input: { command: 'git commit -am chore' }, text: '[main 0a1b2c3] chore' }))
+    await onward($)
 
     expect(propsOf(set, 'commit')).toMatchObject([{ rule: 'none_count_unknown', files_sent: 0, is_attached: true }])
   })
@@ -511,6 +528,7 @@ describe('each event is noted where the thing happens, and sent when the turn en
     // Until Claude next answers, the context window has no reading.
     set.window.hasReading = false
     await turn($, set, ...QUIET)
+    await onward($)
 
     expect(propsOf(set, 'compaction')).toEqual([{ is_scribe_running: true, records_carried: 1 }])
     nothingPrivateIn(set)
@@ -531,6 +549,7 @@ describe('what an error answer was, and why a wake had no reply', () => {
 
       await $.session.start(START)
       await turn($, set, ...TALK)
+      await onward($)
 
       const [call] = propsOf(set, 'call').filter(one => one.tool === 'remember')
 
@@ -545,6 +564,7 @@ describe('what an error answer was, and why a wake had no reply', () => {
 
     await $.session.start(START)
     await turn($, set, ...TALK)
+    await onward($)
 
     expect(propsOf(set, 'look')).toMatchObject([{ ending: 'no_reply', no_reply_reason: 'unanswered' }])
   })
@@ -553,31 +573,124 @@ describe('what an error answer was, and why a wake had no reply', () => {
     let isOut = false
     const set = stage(on, { connect: () => (isOut ? NEEDS_SIGN_IN : { isConnected: true, server: 'plugin:fylgja:fylgja' }) })
 
+    // A turn in which Claude takes a step: who is signed in is asked as it begins.
+    const worked = async (): Promise<void> => {
+      await send($, 'ok')
+      await step($, 0, [])
+      await finish($, set, ...QUIET)
+    }
+
     await $.session.start(START)
-    await turn($, set, ...QUIET)
+    await worked()
     isOut = true
-    await turn($, set, ...QUIET)
-    await turn($, set, ...QUIET)
+    await worked()
+    await worked()
     isOut = false
-    await turn($, set, ...QUIET)
-    await turn($, set, ...QUIET)
+    await worked()
+    await worked()
+    await onward($)
 
     expect(propsOf(set, 'sign_in').map(one => one.state)).toEqual(['needs_sign_in', 'here'])
   })
 })
 
 describe('reporting never stands in Scribe’s way', () => {
-  test('an agent’s turn sends nothing: its call would not be the plugin’s own to the permission check', async ($, on) => {
+  test('no turn’s end sends anything, an agent’s or the main conversation’s: Claude is done by then', async ($, on) => {
     const set = stage(on)
 
     await $.session.start(START)
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'turn-agent', reason: 'answer', agentId: 'agent-1' } as never)
+    await finish($, set, ...QUIET)
 
     expect(set.reports).toEqual([])
 
-    await turn($, set, ...QUIET)
+    await onward($)
 
     expect(set.reports).toHaveLength(1)
+  })
+
+  test('the events of a turn go with the next prompt, and nothing is called on Fylgja as that turn ends', async ($, on) => {
+    const set = stage(on, { replies: [RECORDS] })
+
+    await $.session.start(START)
+    await send($, TALK[0]?.text ?? '')
+
+    expect(propsOf(set, 'session_started'), 'the prompt sends what waited before it').toHaveLength(1)
+
+    const calls = set.calls.length
+    const whoamis = set.whoamis.length
+    const reports = set.reports.length
+
+    await finish($, set, ...TALK)
+
+    // Scribe's own look at the turn is the one thing that calls Fylgja then.
+    expect([...new Set(set.calls.slice(calls).map(call => call.tool))]).toEqual(['recall', 'remember'])
+    expect(set.reports.length, 'nothing of the turn is sent as it ends').toBe(reports)
+    expect(set.whoamis.length).toBe(whoamis)
+
+    await onward($)
+
+    expect(set.reports.length).toBe(reports + 1)
+    expect(propsOf(set, 'look')).toMatchObject([{ trigger: 'turn_end', ending: 'verdict', drafts_written: 1 }])
+  })
+
+  for (const reason of ['prompt_input_exit', 'other', 'clear'] as const) {
+    test(`what a session that ends by “${reason}” has not sent waits on the machine, and the first prompt of the next session sends it`, async ($, on) => {
+      const set = stage(on, { replies: [RECORDS] })
+
+      await $.session.start(START)
+      await turn($, set, ...TALK)
+
+      const before = set.reports.length
+      const looked = set.reports.at(-1)?.session
+
+      await $.session.end({ reason, sessionId: SESSION_ID, resume: { id: SESSION_ID } })
+
+      const waiting = [...set.kept.keys()].filter(key => key.startsWith(KEPT_PREFIX))
+
+      expect(set.reports.length, 'nothing is sent as the session ends').toBe(before)
+      expect(waiting).toHaveLength(1)
+      expect(JSON.stringify(set.kept.get(waiting[0] ?? '')), 'nothing of the session’s own words').not.toMatch(/Postgres|redis|lock\.ts|acme/i)
+
+      if (reason !== 'clear') {
+        await $.session.start(START)
+      }
+
+      await onward($)
+
+      const carried = set.reports.slice(before).filter(report => report.session === looked).flatMap(eventsOf)
+
+      expect(carried.map(event => event.name), 'sent under the id of the session it was noted in').toContain('look')
+      expect([...set.kept.keys()].filter(key => key.startsWith(KEPT_PREFIX)), 'and sent once').toEqual([])
+      sent(set)
+
+      await onward($)
+
+      expect(set.events('look'), 'once').toHaveLength(1)
+    })
+  }
+
+  test('signed out, what a session left waits on the machine for a session that is signed in', async ($, on) => {
+    let isOut = false
+    const set = stage(on, { replies: [RECORDS], connect: () => (isOut ? NEEDS_SIGN_IN : { isConnected: true, server: 'plugin:fylgja:fylgja' }) })
+
+    await $.session.start(START)
+    await turn($, set, ...TALK)
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: SESSION_ID, resume: { id: SESSION_ID } })
+    isOut = true
+    await $.session.start(START)
+    await turn($, set, ...QUIET)
+
+    const before = set.reports.length
+
+    expect([...set.kept.keys()].filter(key => key.startsWith(KEPT_PREFIX))).toHaveLength(1)
+
+    isOut = false
+    await $.session.start(START)
+    await onward($)
+
+    expect(set.reports.length).toBeGreaterThan(before)
+    expect([...set.kept.keys()].filter(key => key.startsWith(KEPT_PREFIX))).toEqual([])
   })
 
   test('a server without the tool is asked once: nothing more is sent, and Scribe records as before', async ($, on) => {
@@ -635,7 +748,7 @@ describe('reporting never stands in Scribe’s way', () => {
     expect(set.of('remember')).toHaveLength(1)
   })
 
-  test('nothing of it is kept on the machine: what is stored is what Scribe stored before', async ($, on) => {
+  test('nothing of it is kept on the machine while the session runs: what is stored is what Scribe stored before', async ($, on) => {
     const set = stage(on, { replies: [ASKING, NOTHING] })
 
     await $.session.start(START)

@@ -11,6 +11,7 @@ import {
   decision,
   dev,
   edit,
+  finish,
   press,
   QUIET,
   shown,
@@ -256,6 +257,38 @@ describe('the account this machine is set up for', () => {
 
     expect(set.of('remember').length).toBe(1)
     expect(set.whoamis.length, 'and once it is known it is not asked again').toBe(3)
+  })
+
+  test('who is signed in is never asked as a turn ends: an account not known yet is asked about at the next step', async ($, on) => {
+    let isUp = false
+    const set = stage(on, {
+      tools: RESOLVING,
+      replies: [RECORDING],
+      whoami: () => (isUp ? answer(ACCOUNT) : Promise.reject(new Error('refused'))),
+    })
+
+    await $.session.start(START)
+
+    expect(set.whoamis.length).toBe(1)
+
+    isUp = true
+    await finish($, set, ...WORK)
+
+    expect(set.whoamis.length, 'Claude is done: nothing is asked').toBe(1)
+    expect(set.calls, 'and nothing else is called').toEqual([])
+
+    const stepped = step($, 0, [])
+
+    await set.clock.advance(1500)
+    await stepped
+
+    expect(set.whoamis.length, 'the next step asks').toBe(2)
+    expect(set.kept.get('fylgja.account')).toEqual(PIN)
+
+    await turn($, set, dev('and the retry policy'), claude('Three tries.', edit('src/queue/retry.ts')))
+
+    expect(set.of('remember').length, 'and the turn that ends after it is looked at').toBe(1)
+    expect(set.whoamis.length).toBe(2)
   })
 
   test('the account line shows while the prompt box holds text, and takes no key until it is empty', async ($, on) => {

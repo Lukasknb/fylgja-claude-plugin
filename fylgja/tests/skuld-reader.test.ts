@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { FORK_PROMPT } from '../hooks/reader/prompt'
 import { MAX_FORKS, WARM_MS } from '../hooks/reader/reader'
 import { NEEDS_SIGN_IN } from './fixtures'
-import { dev, START } from './scribe-fixtures'
+import { dev, send, START } from './scribe-fixtures'
 import { EXPECTED, FIXED, OBSERVED, paste, PASTED, QUOTE, READING_ID, readingReply, reported, endTurn, skuld, stepIn } from './skuld-fixtures'
 
 /** The upload of the screenshot read as the fork reads it by default. */
@@ -74,6 +74,8 @@ describe('the fork goes out only when every guard holds', () => {
 
     await $.session.start(START)
     await reported($, on, set)
+    // What the plugin noted about its own working goes with the next prompt.
+    await send($, 'and on')
 
     expect(set.gates).toHaveLength(1)
     expect(set.forks).toEqual([])

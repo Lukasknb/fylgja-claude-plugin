@@ -8,7 +8,7 @@ import * as Ledger from '../hooks/scribe/ledger'
 import * as Search from '../hooks/search'
 import { PANE, RINGLESS } from '../hooks/window'
 import { answer, idOf, MEETING_ID, NEEDS_SIGN_IN, token } from './fixtures'
-import { claude, decision, dev, edit, finish, MARK, press, send, shown, stage, START, turn, verdict } from './scribe-fixtures'
+import { claude, decision, dev, edit, finish, MARK, press, send, shown, stage, START, step, turn, verdict } from './scribe-fixtures'
 import type { StageOptions } from './scribe-fixtures'
 import { all, frame, pane, ringOn, scrolled } from './window-fixtures'
 import type { Node } from './window-fixtures'
@@ -459,8 +459,10 @@ describe('Fylgja is searched on Enter and at no other time', () => {
     expect(await ui.rows()).toEqual([])
     expect(await ui.lines()).toContain(Search.QUIET.away)
 
+    // Who is signed in now is asked at the next step, never as a turn ends.
     state = { isConnected: true, server: 'plugin:fylgja:fylgja' }
     await finish($, set)
+    await step($, 0, [])
     await ui.keyed(true)
 
     expect(await ui.rows(), 'nothing of the search before').toEqual([])

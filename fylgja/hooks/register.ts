@@ -7,7 +7,7 @@ import * as Draft from './draft'
 import { restored } from './known'
 import type { Host } from './host'
 import { keyed } from './listing'
-import { briefly, called, close, line, LINE_WAIT_MS, open, passed, REFUSAL, serve, SHORT_WAIT_MS } from './live'
+import { briefly, called, close, line, LINE_WAIT_MS, open, openAtTurnEnd, passed, REFUSAL, serve, SHORT_WAIT_MS } from './live'
 import type { Line, Live } from './live'
 import { flush, want } from './lookups'
 import { isOwnPrompt } from './origin'
@@ -15,7 +15,7 @@ import { decorationsOf } from './paint'
 import { isLeftToPlugin } from './project'
 import { receiptOf } from './receipts'
 import { drawn } from './plain'
-import { OWN_SERVER, REFUSED, REPORT_TOOL, verdictFor } from './scribe/grant'
+import { heard, liftOf, OWN_SERVER, ran, REFUSED, REPORT_TOOL, verdictFor } from './scribe/grant'
 import * as Ledger from './scribe/ledger'
 import * as Scribe from './scribe/scribe'
 import type { ScribeHost } from './scribe/scribe'
@@ -45,6 +45,7 @@ function hostOf($: EngineInterface, session: Session.Session, live?: Live): Host
     connect: () => $.mcp.connect('fylgja'),
     call: (server, tool, args) => called(live, () => $.mcp.call(server, tool, args)),
     isLive: () => live?.isOpen === true,
+    mayPin: () => live?.isOpen === true && live.isTurnEnd !== true,
     // The line under the prompt has one owner. Sign-in comes first; when it
     // has nothing to say, the line shows what the plugin left there, if anything.
     // An invisible plugin says nothing there, and takes down what it said before.
@@ -230,9 +231,29 @@ function doorOf($: EngineInterface, session: Session.Session, live: Live): Telem
   }
 }
 
-/** Sends one batch of what waits, for a moment at most; what it started goes on. Never fails. */
-function sendEvents($: EngineInterface, session: Session.Session, telemetry: Telemetry.Telemetry, live: Live): Promise<void> {
-  return briefly((ms, fn) => $.clock.after(ms, fn), Telemetry.send(telemetry, doorOf($, session, live)), SHORT_WAIT_MS)
+/** The plugin's own store on this machine, where a batch an ended session left unsent waits (`Telemetry.putAway`). */
+function shelfOf($: EngineInterface): Telemetry.Shelf {
+  return {
+    keys: () => $.store.keys(),
+    get: key => $.store.get(key),
+    set: (key, value) => $.store.set(key, value),
+    delete: key => $.store.delete(key),
+  }
+}
+
+/**
+ * Sends one batch of what waits, and the batches ended sessions put away on
+ * this machine, from a hook of its own that is open only until the calls
+ * are started: their answers are not waited for, and what was started goes
+ * on. A moment at most, and it never fails.
+ */
+function sendEvents($: EngineInterface, session: Session.Session, telemetry: Telemetry.Telemetry): Promise<void> {
+  const live = open()
+  const started = new Promise<void>(resolve => {
+    void Telemetry.send(telemetry, { ...doorOf($, session, live), started: resolve }, shelfOf($))
+  })
+
+  return briefly((ms, fn) => $.clock.after(ms, fn), started, SHORT_WAIT_MS).finally(() => close(live))
 }
 
 /** Brings the mark above the prompt up to date; see `Session.remark`. No call to Fylgja is started for it. */
@@ -800,9 +821,12 @@ export function register(on: On, options: PluginOptions = {}): void {
   const lines: string[] = []
   // The calls to Fylgja of a look that outlived the hook it began in.
   const calls = line<Caller>()
+  // Whether the plugin's own calls are still let through without a question in this session (see the permission hook).
+  const lift = liftOf()
   const held: Held = { session, draft, scribe, win, conversation: { id: undefined, seen: undefined, left: undefined, ending: undefined } }
 
   on('session.start', async ($, e, next) => {
+    Object.assign(lift, liftOf())
     Session.startOver(session)
     Session.located(session, e.cwd)
     Session.revet(session)
@@ -955,6 +979,21 @@ export function register(on: On, options: PluginOptions = {}): void {
     return {}
   })
 
+  // However a session ends, what the plugin noted about its own working and
+  // has not sent is put away on this machine, for the first prompt of a later
+  // session to send. Nothing is sent from here: the end has one short while
+  // that every hook on it shares, and a call made then comes after Claude is
+  // done.
+  on('session.end', async ($, e, next) => {
+    try {
+      await Telemetry.putAway(telemetry, shelfOf($), await $.clock.now())
+    } catch {
+      // The session ends as it would have.
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   // A conversation that ends by a `/clear` or a resume, while the session
   // goes on with another: everything held of it is dropped as it ends, and
   // the one that begins is taken up once the session reads its id, which may
@@ -1057,8 +1096,15 @@ export function register(on: On, options: PluginOptions = {}): void {
   // beside it (see `Scribe.handed`), unless a tool result took them first; a
   // slash command does not. They are owed until the prompt has entered: one
   // that a hook beneath turns back leaves them for the next.
+  //
+  // What the plugin noted about its own working is sent here, a batch a
+  // prompt, with what an ended session put away: Claude is about to work in
+  // any case, and a prompt is the main conversation's, so the call is the
+  // plugin's own to the permission check. The prompt waits only until the
+  // calls are started, never for Fylgja's answer.
   on('prompt.submit', async ($, e, next) => {
     await caughtUp($, held)
+    await sendEvents($, session, telemetry)
 
     // A prompt of the developer's own that carries images arms a reading of them before it enters; nothing is awaited.
     let reading: ReturnType<typeof Scribe.submitting>
@@ -1190,7 +1236,11 @@ export function register(on: On, options: PluginOptions = {}): void {
   // person's plugins it runs such a check once more without them; the
   // person's mode asked and nothing stands behind the ask, so the allow
   // stands, and Claude Code says that this hook was skipped in that second
-  // run. No other way to spare the person the question exists.
+  // run. A guard that takes the second verdict instead says so as well, call
+  // after call; once it has, the plugin stops letting its own calls through
+  // for the rest of the session and hands every verdict back as it came, so
+  // that guard has nothing to run again (see `Lift`). No other way to spare
+  // the person the question exists, and none is looked for.
   // The tool the plugin reports its own working to is for the plugin alone: it waits behind ToolSearch,
   // out of the prompt's list, and a call of it that is not the plugin's own is refused. That only ever
   // tightens a verdict, so a guard runs nothing again for it.
@@ -1198,11 +1248,19 @@ export function register(on: On, options: PluginOptions = {}): void {
     next(e),
   )
 
-  on('tool.check', async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server)).catch(
+  on('tool.check', async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server, lift)).catch(
     // Asked here when the engine keeps the hook out of a call raised beneath
     // the plugin's own code: the same rule, from the event alone.
-    async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server),
+    async ($, e, next) => verdictFor(await next(e), e, next.origin?.plugin, session.server, lift),
   )
+
+  // Only listened to, for a guard's word that it ran a check this plugin
+  // answered again without it; every line goes on as it came.
+  on('ui.log', ($, e, next) => {
+    heard(lift, next.origin?.plugin, next.origin?.tier, e.text)
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   // A compaction in the middle of a turn: the records the session kept go
   // to Claude with the first result of a tool of the main conversation's
@@ -1211,7 +1269,8 @@ export function register(on: On, options: PluginOptions = {}): void {
   // compaction was seen cannot take them: nothing a person's plugin may hook
   // adds to it. The call itself, and its result, are handed on as they came.
   on('tool.call', async ($, e, next) => {
-    const done = await next(e)
+    // A call the plugin let through has run, or was refused, by the time this hands back.
+    const done = await next(e).finally(() => ran(lift, e.tool_use_id))
 
     if (done.deny !== undefined || e.agentId !== undefined) {
       return done
@@ -1338,7 +1397,10 @@ export function register(on: On, options: PluginOptions = {}): void {
   // against them, where waiting for its own calls does not.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
-    const live = open()
+    // Who is signed in is not asked from here, nor is anything sent of the plugin's own working: Claude is done, and
+    // a call made now reads to a program that watches the session as Claude working again. Both wait for the next
+    // prompt.
+    const live = openAtTurnEnd()
 
     // A hook Claude Code has stopped waiting on starts nothing more.
     next.signal.addEventListener('abort', () => close(live))
@@ -1368,12 +1430,6 @@ export function register(on: On, options: PluginOptions = {}): void {
       // The turn ended as it would have without the plugin.
       report('error', { component: 'turn_end', kind: 'threw', cause: Telemetry.causeOf(error) })
     } finally {
-      // Last, once Scribe is done with the turn: what the plugin noted about its own working is sent, a batch a turn.
-      // Only from the main conversation's turn: a call raised inside an agent's turn is not the plugin's own to the
-      // permission check, and would be put to the person.
-      if (e.agentId === undefined) {
-        await sendEvents($, session, telemetry, live)
-      }
       close(live)
       // The look at the turn's end has ended by here, however it ended.
       refresh($, session, noteSignIn)

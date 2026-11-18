@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { fingerprintOf } from '../hooks/scribe/fingerprint'
 import { answer, idOf } from './fixtures'
-import { claude, decision, dev, edit, fact, gitStatus, NOTHING, pressTwice, REPO, ROOT, SESSION_ID, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
+import { claude, decision, dev, edit, fact, gitStatus, NOTHING, pressTwice, REPO, ROOT, send, SESSION_ID, shown, stage, START, turn, use, verdict } from './scribe-fixtures'
 
 const LOCK = 'src/queue/lock.ts'
 const WORKER = 'src/queue/worker.ts'
@@ -199,6 +199,8 @@ describe('every commit is attached where it was made, or said not to be', () => 
       dev('fix the other service'),
       claude('Done.', use('Edit', { file_path: '/work/other/lib/y.ts', old_string: 'a', new_string: 'b' }), bash('git commit -am fix', '[main 1a2b3c4] fix\n 1 file changed')),
     )
+    // What the plugin noted about its own working goes with the next prompt.
+    await send($, 'and on')
 
     expect(set.of('attach_commit')).toEqual([])
     expect(set.events('commit').map(event => event.props)).toEqual([{ rule: 'none_no_repo', files_sent: 0, is_attached: false }])
@@ -219,6 +221,8 @@ describe('every commit is attached where it was made, or said not to be', () => 
         bash('git -C /work/elsewhere commit -am fix', '[main 2b3c4d5] fix\n 1 file changed'),
       ),
     )
+    // What the plugin noted about its own working goes with the next prompt.
+    await send($, 'and on')
 
     expect(set.of('attach_commit'), 'and none where the session changed nothing').toEqual([{ repo: 'acme/other', sha: '1a2b3c4', session_id: SESSION_ID }])
     expect(set.events('commit').map(event => event.props)).toMatchObject([{ rule: 'none_away', files_sent: 0, is_attached: true }])
@@ -235,6 +239,8 @@ describe('the places a record was not given are counted', () => {
 
     await $.session.start(START)
     await turn($, set, dev('Use Postgres advisory locks for the job queue.'), claude('Done.', edit(LOCK), use('Write', { file_path: `${ROOT}/${PLAN}`, content: '# Queue' })))
+    // What the plugin noted about its own working goes with the next prompt.
+    await send($, 'and on')
 
     expect(set.of('remember')[0]?.anchors).toEqual([{ path: LOCK }])
     expect(set.events('anchors_dropped').map(event => event.props)).toEqual([

@@ -13,13 +13,18 @@
  * holds the same list and takes nothing outside it.
  *
  * Events wait in memory, no more than a fixed number of them, and are sent
- * to Fylgja a batch at a time by a hook Claude Code is waiting on, through
- * the session's own connection. Nothing is written to this machine. Nothing
- * is sent while Fylgja is signed out, or with the plugin's option for it
- * off. A batch is sent once: one that did not arrive is let go, never sent
- * again. A server that does not know the tool is asked once and not again
- * in the session, and so is one whose answers keep failing. None of this
- * touches Scribe: it runs the same whether or not an event was ever sent.
+ * to Fylgja a batch at a time as a prompt is submitted, through the
+ * session's own connection: never as a turn ends, since a call made after
+ * Claude is done reads to a program that watches the session as Claude
+ * working again. What waits when the session ends is put away on this
+ * machine as one batch, under a key of its own and with nothing in it but
+ * the events, and the first prompt of a later session sends it beside its
+ * own; nothing else is written to this machine. Nothing is sent while
+ * Fylgja is signed out, or with the plugin's option for it off. A batch is
+ * sent once: one that did not arrive is let go, never sent again. A server
+ * that does not know the tool is asked once and not again in the session,
+ * and so is one whose answers keep failing. None of this touches Scribe: it
+ * runs the same whether or not an event was ever sent.
  */
 import { DETACHED, REFUSAL } from './live'
 import { isRecord } from './payload'
@@ -56,6 +61,12 @@ type Value = number | boolean | string
 
 /** One event waiting to be sent; `at` is undefined until the time is known. */
 type Waiting = { name: EventName; at: number | undefined; props: Record<string, Value> }
+
+/** One event as it is sent. */
+type Sent = { name: string; at: number; props: Record<string, Value> }
+
+/** One batch as the server's tool takes it: what sent it, and its events. */
+type Batch = { plugin_version: string; engine_version: string; surface: Surface; session: string; events: Sent[] }
 
 /** Why nothing more is sent in a session. */
 export type Stopped = 'old-server' | 'not-let-through' | 'failing'
@@ -96,6 +107,12 @@ export const SEND_TIMEOUT_MS = 10_000
 
 /** After this many batches in a row that did not arrive, no more are sent in the session. */
 const MAX_FAILURES = 3
+
+/** The start of the key a batch a session left unsent is put away under; the rest is made up at random. */
+export const KEPT_PREFIX = 'fylgja.unsent.'
+
+/** No more batches wait on the machine than this; the oldest is let go first. */
+const MAX_KEPT = 5
 
 /** Sent for a version that is not known, or not spelled as one. */
 export const NO_VERSION = '0.0.0'
@@ -245,6 +262,8 @@ export type Door = {
   call: (server: string, tool: string, args: Record<string, unknown>) => Promise<unknown>
   now: () => Promise<number>
   after: (ms: number, fn: () => void) => { cancel: () => void }
+  /** Told once the batches' calls are started, or that none will be: the hook may hand back from then on. */
+  started?: () => void
 }
 
 function stop(telemetry: Telemetry, why: Stopped): void {
@@ -274,26 +293,166 @@ function wordsOf(result: unknown): string {
   return blocks.map(block => (isRecord(block) && typeof block.text === 'string' ? block.text : '')).join('')
 }
 
-/**
- * Sends one batch of what waits, when there is any and Fylgja is signed in.
- * Call it from a hook that is being waited on. It never rejects. A batch the
- * hook could not start any more (it stopped being waited on) stays in line
- * for the next hook, and is no failure. A batch that was started and did not
- * arrive is gone: it is not sent again.
- *
- * A server that answers that it has no such tool is an older one: nothing
- * more is sent in this session. So it is when the call is not let through,
- * and after `MAX_FAILURES` batches in a row that did not arrive, with one
- * last batch to say so.
- */
-export async function send(telemetry: Telemetry, door: Door): Promise<void> {
-  const { server } = door
+/** The plugin's own key-value store on this machine (`$.store`), as far as batches put away use it. */
+export type Shelf = {
+  keys: () => Promise<string[]>
+  get: (key: string) => Promise<unknown>
+  set: (key: string, value: unknown) => Promise<void>
+  delete: (key: string) => Promise<void>
+}
 
-  if (!telemetry.isOn || telemetry.stopped !== undefined || telemetry.isSending || server === undefined) {
+/** What waits, as one batch of at most the server's own number of events, taken out of the line. */
+function batchOf(telemetry: Telemetry, now: number): Batch {
+  const lost = telemetry.dropped
+  const taken = telemetry.waiting.splice(0, SCHEMA.maxBatch - (lost > 0 ? 1 : 0))
+
+  telemetry.dropped = 0
+
+  return {
+    plugin_version: telemetry.plugin ?? NO_VERSION,
+    engine_version: telemetry.engine ?? NO_VERSION,
+    surface: telemetry.surface,
+    session: telemetry.session,
+    events: [
+      ...(lost > 0 ? [{ name: 'events_dropped', at: now, props: fitted('events_dropped', { count: lost }) }] : []),
+      ...taken.map(event => ({ name: event.name, at: event.at ?? now, props: event.props })),
+    ],
+  }
+}
+
+/**
+ * A batch read back from the machine, as it is sent again: its envelope as
+ * it was spelled, and of its events only those of a listed name, each with
+ * its values made to fit their keys once more. Anything else is no batch.
+ */
+function keptBatchOf(value: unknown): Batch | undefined {
+  if (!isRecord(value) || !Array.isArray(value.events)) {
+    return undefined
+  }
+
+  const { plugin_version, engine_version, surface, session } = value
+  const isSpelled =
+    typeof plugin_version === 'string' &&
+    new RegExp(`^${SCHEMA.patterns.plugin_version}$`).test(plugin_version) &&
+    typeof engine_version === 'string' &&
+    new RegExp(`^${SCHEMA.patterns.engine_version}$`).test(engine_version) &&
+    typeof session === 'string' &&
+    new RegExp(`^${SCHEMA.patterns.session}$`).test(session) &&
+    typeof surface === 'string' &&
+    (SCHEMA.surfaces as readonly string[]).includes(surface)
+
+  if (!isSpelled) {
+    return undefined
+  }
+
+  const events = value.events.flatMap((event: unknown): Sent[] => {
+    if (!isRecord(event) || typeof event.name !== 'string' || !Object.hasOwn(SCHEMA.events, event.name) || !Number.isInteger(event.at)) {
+      return []
+    }
+
+    const name = event.name as EventName
+
+    return [{ name, at: event.at as number, props: fitted(name, isRecord(event.props) ? event.props : {}) }]
+  })
+
+  return events.length === 0
+    ? undefined
+    : { plugin_version, engine_version, surface: surface as Surface, session, events: events.slice(0, SCHEMA.maxBatch) }
+}
+
+/**
+ * The session ends: what waits is put away on this machine as one batch,
+ * for the first prompt of a later session to send (see `send`). With more
+ * batches already waiting there than are kept, the oldest are let go. Never
+ * rejects; a batch that could not be put away is let go.
+ */
+export async function putAway(telemetry: Telemetry, shelf: Shelf, now: number): Promise<void> {
+  if (!telemetry.isOn || telemetry.stopped !== undefined || (telemetry.waiting.length === 0 && telemetry.dropped === 0)) {
     return
   }
 
-  if (telemetry.waiting.length === 0 && telemetry.dropped === 0) {
+  anchored(telemetry, now)
+
+  const batch = batchOf(telemetry, Math.round(now))
+
+  // Whatever waited beyond the one batch is let go with the session.
+  telemetry.waiting = []
+  telemetry.dropped = 0
+
+  try {
+    const kept = (await shelf.keys()).filter(key => key.startsWith(KEPT_PREFIX))
+
+    for (const oldest of kept.slice(0, Math.max(0, kept.length - (MAX_KEPT - 1)))) {
+      await shelf.delete(oldest)
+    }
+
+    await shelf.set(`${KEPT_PREFIX}${crypto.randomUUID()}`, batch)
+  } catch {
+    // Let go.
+  }
+}
+
+/** The batches put away on this machine, taken off it: each is sent once, whatever comes of it. */
+async function takenOff(shelf: Shelf): Promise<{ key: string; batch: Batch }[]> {
+  const taken: { key: string; batch: Batch }[] = []
+
+  try {
+    for (const key of (await shelf.keys()).filter(one => one.startsWith(KEPT_PREFIX)).slice(0, MAX_KEPT)) {
+      const batch = keptBatchOf(await shelf.get(key))
+
+      await shelf.delete(key)
+
+      if (batch !== undefined) {
+        taken.push({ key, batch })
+      }
+    }
+  } catch {
+    // What was taken is sent; the rest waits.
+  }
+
+  return taken
+}
+
+/** What came of one batch's call. */
+type Outcome = 'arrived' | 'detached' | 'old-server' | 'not-let-through' | 'failed'
+
+async function outcomeOf(door: Door, answering: Promise<unknown>): Promise<Outcome> {
+  try {
+    const result = await limited(door.after, answering, SEND_TIMEOUT_MS)
+
+    if (isRecord(result) && result.isError === true) {
+      return UNKNOWN_TOOL.test(wordsOf(result)) ? 'old-server' : 'failed'
+    }
+
+    return 'arrived'
+  } catch (error) {
+    const words = error instanceof Error ? error.message : ''
+
+    return words === DETACHED ? 'detached' : REFUSAL.test(words) ? 'not-let-through' : UNKNOWN_TOOL.test(words) ? 'old-server' : 'failed'
+  }
+}
+
+/**
+ * Sends one batch of what waits, and beside it each batch an ended session
+ * put away on this machine (`shelf`), when there is any and Fylgja is
+ * signed in. Call it from a hook that is being waited on. It never rejects.
+ * The calls are all started at once, and `door.started` is told as soon as
+ * they are, or that none will be; only then may the hook hand back. A batch
+ * the hook could not start any more (it stopped being waited on) stays in
+ * line for the next hook, and is no failure. A batch that was started and
+ * did not arrive is gone: it is not sent again.
+ *
+ * A server that answers that it has no such tool is an older one: nothing
+ * more is sent in this session. So it is when the call is not let through,
+ * and after `MAX_FAILURES` sends in a row in which no batch arrived, with
+ * one last batch to say so.
+ */
+export async function send(telemetry: Telemetry, door: Door, shelf?: Shelf): Promise<void> {
+  const { server } = door
+
+  if (!telemetry.isOn || telemetry.stopped !== undefined || telemetry.isSending || server === undefined) {
+    door.started?.()
+
     return
   }
 
@@ -301,70 +460,74 @@ export async function send(telemetry: Telemetry, door: Door): Promise<void> {
 
   let now = 0
   let isStarted = false
+  let isTold = false
+  const told = (): void => {
+    if (!isTold) {
+      isTold = true
+      door.started?.()
+    }
+  }
   const isLast = telemetry.isLast
 
   try {
+    const kept = shelf === undefined ? [] : await takenOff(shelf)
+
     now = Math.round(await door.now())
     anchored(telemetry, now)
 
     // The hook stopped being waited on meanwhile: nothing can be started, and nothing is taken from the line.
     if (!door.isOpen()) {
+      for (const { key, batch } of kept) {
+        await shelf?.set(key, batch).catch(() => undefined)
+      }
+
+      return
+    }
+
+    const hasOwn = telemetry.waiting.length > 0 || telemetry.dropped > 0
+
+    if (!hasOwn && kept.length === 0) {
       return
     }
 
     const lost = telemetry.dropped
-    const batch = telemetry.waiting.splice(0, SCHEMA.maxBatch - (lost > 0 ? 1 : 0))
-    const events = [
-      ...(lost > 0 ? [{ name: 'events_dropped', at: now, props: fitted('events_dropped', { count: lost }) }] : []),
-      ...batch.map(event => ({ name: event.name, at: event.at ?? now, props: event.props })),
-    ]
+    const own = hasOwn ? batchOf(telemetry, now) : undefined
+    const ownAnswer = own === undefined ? undefined : door.call(server, TOOL, own)
+    const keptAnswers = kept.map(({ batch }) => door.call(server, TOOL, batch))
 
-    telemetry.dropped = 0
+    told()
 
-    const answering = door.call(server, TOOL, {
-      plugin_version: telemetry.plugin ?? NO_VERSION,
-      engine_version: telemetry.engine ?? NO_VERSION,
-      surface: telemetry.surface,
-      session: telemetry.session,
-      events,
-    })
+    const outcomes = await Promise.all([
+      ...(ownAnswer === undefined ? [] : [outcomeOf(door, ownAnswer)]),
+      ...keptAnswers.map(answering => outcomeOf(door, answering)),
+    ])
+    const ownOutcome = ownAnswer === undefined ? undefined : outcomes[0]
 
-    isStarted = true
+    isStarted = outcomes.some(outcome => outcome !== 'detached')
 
-    const result = await limited(door.after, answering, SEND_TIMEOUT_MS).catch((error: unknown) => {
-      // Refused for being asked outside a hook that is waited on: never started, so it waits for the next one.
-      if (error instanceof Error && error.message === DETACHED) {
-        isStarted = false
-        telemetry.waiting = [...batch, ...telemetry.waiting]
-        telemetry.dropped += lost
-      }
+    // Refused for being asked outside a hook that is waited on: never started, so it waits for the next one.
+    if (own !== undefined && ownOutcome === 'detached') {
+      const back = own.events.slice(lost > 0 ? 1 : 0).map(event => ({ ...event, name: event.name as EventName }))
 
-      throw error
-    })
-
-    if (isRecord(result) && result.isError === true) {
-      if (UNKNOWN_TOOL.test(wordsOf(result))) {
-        stop(telemetry, 'old-server')
-      } else {
-        failed(telemetry, now)
-      }
-    } else {
-      telemetry.failures = 0
+      telemetry.waiting = [...back, ...telemetry.waiting]
+      telemetry.dropped += lost
     }
-  } catch (error) {
-    const words = error instanceof Error ? error.message : ''
 
-    if (words === DETACHED) {
-      // Not a failure of the batch: it is still in line.
-    } else if (REFUSAL.test(words)) {
-      stop(telemetry, 'not-let-through')
-    } else if (UNKNOWN_TOOL.test(words)) {
+    if (outcomes.includes('old-server')) {
       stop(telemetry, 'old-server')
-    } else {
+    } else if (outcomes.includes('not-let-through')) {
+      stop(telemetry, 'not-let-through')
+    } else if (outcomes.includes('arrived')) {
+      telemetry.failures = 0
+    } else if (outcomes.includes('failed')) {
       failed(telemetry, now)
     }
+  } catch {
+    failed(telemetry, now)
   } finally {
     telemetry.isSending = false
+
+    told()
 
     if (isLast && isStarted && telemetry.stopped === undefined) {
       stop(telemetry, 'failing')

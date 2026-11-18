@@ -498,9 +498,10 @@ export async function serverOf(host: Host, session: Session, isFirst = false): P
   // Before anything else is asked of Fylgja: is this the account the machine is set up for?
   if (answered !== undefined) {
     if (session.pin === 'unknown') {
-      // Asked only from a hook that is being waited on. From anywhere else
-      // it stays unknown, nothing is called, and the next such hook asks.
-      if (session.pinning === undefined && !host.isLive()) {
+      // Asked only from a hook that is being waited on, and never from the
+      // end of a turn. From anywhere else it stays unknown, nothing is
+      // called, and the next such hook asks.
+      if (session.pinning === undefined && !host.mayPin()) {
         return undefined
       }
 

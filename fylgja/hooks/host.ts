@@ -13,6 +13,13 @@ export type Host = {
   call: (server: string, tool: string, args: Record<string, unknown>) => Promise<unknown>
   /** Whether a call to Fylgja may be started now: the hook this host was made in is being waited on. */
   isLive: () => boolean
+  /**
+   * Whether who is signed in may be asked now: as `isLive`, but never from
+   * the end of a turn. A call made after Claude is done reads to a watching
+   * program as Claude working again, so that question waits for the next
+   * prompt or step.
+   */
+  mayPin: () => boolean
   /** `$.ui.status`: the plugin's one line under the prompt; undefined removes it. */
   status: (text: string | undefined) => void
   /** `$.ui.invalidate('ui.render')`: the rows this plugin draws are drawn again. */

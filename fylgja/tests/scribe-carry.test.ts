@@ -183,6 +183,8 @@ describe('how Scribe learns that the conversation was compacted', () => {
     await boundary($, 'boundary-1')
     await compact($, set)
     await turn($, set, ...MORE)
+    // What the plugin noted about its own working goes with the next prompt.
+    await send($, 'and on')
 
     expect(set.events('compaction')).toHaveLength(1)
   })
@@ -197,6 +199,8 @@ describe('how Scribe learns that the conversation was compacted', () => {
     set.rows.splice(0, set.rows.length, SUMMARY)
     await boundary($, 'boundary-2')
     await turn($, set, dev('and on'), claude('Sure.'))
+    // What the plugin noted about its own working goes with the next prompt.
+    await send($, 'and on')
 
     expect(set.events('compaction')).toHaveLength(2)
   })
@@ -209,6 +213,8 @@ describe('how Scribe learns that the conversation was compacted', () => {
     await set.clock.advance(10 * 60_000)
     await compact($, set, 'auto')
     await turn($, set, ...MORE)
+    // What the plugin noted about its own working goes with the next prompt.
+    await send($, 'and on')
 
     expect(set.events('compaction')).toHaveLength(2)
     expect(set.beside.filter(one => one !== undefined)).toHaveLength(1)
@@ -222,8 +228,12 @@ describe('how Scribe learns that the conversation was compacted', () => {
     await boundary($, 'boundary-1')
     await turn($, set, ...MORE)
 
-    expect(set.events('compaction')).toHaveLength(1)
     expect(beside(set)).toEqual([BOTH])
+
+    // What the plugin noted about its own working goes with the next prompt.
+    await send($, 'and on')
+
+    expect(set.events('compaction')).toHaveLength(1)
   })
 
   test('a summary in the first row and a window with no reading, with nothing said by Claude Code, is no compaction', async ($, on) => {

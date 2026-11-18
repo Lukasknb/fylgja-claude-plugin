@@ -14,9 +14,10 @@
 /**
  * One hook being waited on: open from when it begins its work until it hands
  * back. `left` is called as it hands back, when something of its own waits
- * to hear of it.
+ * to hear of it. `isTurnEnd` marks the end of a turn: Claude is done by then,
+ * and who is signed in is not asked from there (see `Session.serverOf`).
  */
-export type Live = { isOpen: boolean; left?: () => void }
+export type Live = { isOpen: boolean; left?: () => void; isTurnEnd?: true }
 
 /** What a call rejects with when it was asked for outside a hook that is being waited on. */
 export const DETACHED = 'detached'
@@ -34,6 +35,11 @@ export const SHORT_WAIT_MS = 1500
 
 export function open(): Live {
   return { isOpen: true }
+}
+
+/** The hook at a turn's end: open as any other, but who is signed in is not asked from it. */
+export function openAtTurnEnd(): Live {
+  return { isOpen: true, isTurnEnd: true }
 }
 
 /** The hook hands back: nothing more is started in its name. */

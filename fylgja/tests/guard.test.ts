@@ -4,8 +4,9 @@ import type { Engine, Plugin } from 'claude-code/testing'
 
 import { FORK_PROMPT } from '../hooks/reader/prompt'
 import type { Upload } from '../hooks/reader/reader'
+import { register } from '../hooks/register'
 import type { Row } from '../hooks/scribe/delta'
-import { endedBy, idOf, SESSION_ID } from './fixtures'
+import { ACCOUNT, answer, endedBy, idOf, SESSION_ID } from './fixtures'
 import { boundary, claude, decision, dev, edit, NOTHING, press, pressTwice, QUIET, shown, stage, START, turn, verdict } from './scribe-fixtures'
 import type { Stage } from './scribe-fixtures'
 import { endTurn, QUOTE, readingReply, reported, skuld } from './skuld-fixtures'
@@ -224,6 +225,111 @@ describe('beneath an organization’s guard', () => {
 
     expect(skipped(set)).toEqual([`${SKIPPED} northwind-notes at prompt.context`])
   })
+})
+
+/** The hooks the plugin registers, by event, as the engine would call them: the first of each. */
+function hooksOf(): Map<string, (...args: never[]) => unknown> {
+  const found = new Map<string, (...args: never[]) => unknown>()
+  const on = (event: string, ...rest: unknown[]) => {
+    if (!found.has(event)) {
+      found.set(event, rest.at(-1) as (...args: never[]) => unknown)
+    }
+
+    return { catch: () => undefined }
+  }
+
+  register(on as unknown as On)
+
+  return found
+}
+
+type Hook = ($: unknown, e: unknown, next: unknown) => Promise<unknown>
+
+/** A `next` as the engine hands it, answering `value` and naming who raised the event. */
+function nextOf(value: unknown, plugin: string, tier: string): unknown {
+  return Object.assign(() => Promise.resolve(value), { origin: { plugin, tier } })
+}
+
+/**
+ * The plugin, its session started with Fylgja connected as its own server,
+ * and the three of its hooks that decide whether it lets its own calls
+ * through: the permission check, the run of a call, and the lines logged.
+ */
+async function lifting(): Promise<{ check: (id: string) => Promise<unknown>; ran: (id: string) => Promise<unknown>; log: (by: string, tier: string, text: string) => Promise<unknown>; start: () => Promise<unknown> }> {
+  const hooks = hooksOf()
+  const $ = {
+    mcp: { connect: () => Promise.resolve({ isConnected: true, server: 'plugin:fylgja:fylgja' }), call: () => Promise.resolve(answer(ACCOUNT)) },
+    ui: { status: () => undefined, invalidate: () => undefined },
+    clock: { every: () => ({ cancel: () => undefined }), now: () => Promise.resolve(0), after: () => ({ cancel: () => undefined }) },
+    store: { get: () => Promise.resolve(undefined), set: () => Promise.resolve() },
+    fs: { stat: () => Promise.reject(new Error('no such file')), read: () => Promise.reject(new Error('no such file')) },
+    plugin: { root: '/plugin' },
+  }
+  const hook = (event: string): Hook => hooks.get(event) as unknown as Hook
+  const start = async (): Promise<unknown> => {
+    const started = await hook('session.start')($, START, (e: unknown) => e)
+
+    // The session's start does not wait for the server's answer.
+    for (let turn = 0; turn < 200; turn += 1) {
+      await Promise.resolve()
+    }
+
+    return started
+  }
+
+  await start()
+
+  return {
+    // The mode's own ask, beneath, of the plugin's own call of one of its tools.
+    check: async id =>
+      ((await hook('tool.check')($, { tool: 'mcp__plugin_fylgja_fylgja__recall', input: {}, tool_use_id: id }, nextOf({ decision: 'ask', reason: 'core' }, 'fylgja', 'user'))) as { decision: string })
+        .decision,
+    ran: id => hook('tool.call')($, { tool: 'mcp__plugin_fylgja_fylgja__recall', tool_use_id: id }, nextOf({ result: {} }, 'fylgja', 'user')),
+    log: (by, tier, text) => hook('ui.log')($, { text, to: 'debug' }, nextOf({ value: undefined }, by, tier)),
+    start,
+  }
+}
+
+// The test kit raises no permission check for a call the plugin makes itself, and none that a guard runs again
+// without it: so the plugin's own hooks are run here as the engine runs them around such a call.
+describe('beneath a guard that runs the plugin’s own call’s check again without it', () => {
+  test('the guard’s word about it while the call is under way ends the lift for the session: every later verdict is handed back as it came', async () => {
+    const plugin = await lifting()
+
+    expect(await plugin.check('toolu_plugin_01'), 'let through, as ever').toBe('allow')
+
+    await plugin.log('org-guard', 'prepend', 'org-guard: skipped fylgja at tool.check')
+    await plugin.ran('toolu_plugin_01')
+
+    expect(await plugin.check('toolu_plugin_02'), 'so the guard has nothing to run again, and nothing to say').toBe('ask')
+
+    await plugin.ran('toolu_plugin_02')
+
+    expect(await plugin.check('toolu_plugin_03')).toBe('ask')
+
+    await plugin.start()
+
+    expect(await plugin.check('toolu_plugin_04'), 'a new session tries once more').toBe('allow')
+  })
+
+  for (const [what, act] of [
+    ['a line of a plugin that is not seated above the person’s', plugin => plugin.log('northwind-notes', 'user', 'skipped fylgja at tool.check')],
+    ['a guard’s line that does not name the plugin', plugin => plugin.log('org-guard', 'prepend', 'org-guard: skipped fylgjax at tool.check')],
+    ['a guard’s line once the call the plugin let through has run', async plugin => {
+      await plugin.ran('toolu_plugin_01')
+      await plugin.log('org-guard', 'prepend', 'org-guard: skipped fylgja at tool.check')
+    }],
+  ] as const satisfies readonly (readonly [string, (plugin: Awaited<ReturnType<typeof lifting>>) => Promise<unknown>])[]) {
+    test(`${what} leaves the lift as it is`, async () => {
+      const plugin = await lifting()
+
+      expect(await plugin.check('toolu_plugin_01')).toBe('allow')
+
+      await act(plugin)
+
+      expect(await plugin.check('toolu_plugin_02')).toBe('allow')
+    })
+  }
 })
 
 // What an image holds never leaves the machine by the plugin's hand. The engine's own reads of an attachment's
