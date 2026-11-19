@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { On, RenderComponent } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
@@ -141,7 +141,7 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
   })
 
-  on('ui.render', ($, e) => {
+  on('ui.render', { component: STAND_IN_SITES }, ($, e) => {
     const props = e.props as { text?: string; tool?: string }
 
     return { type: 'Text', props: {}, children: [`engine: ${props.text ?? props.tool ?? ''}`] }
@@ -229,6 +229,31 @@ export function scene(on: On, options: SceneOptions = {}): Scene {
 
   return { calls, reports, statuses, forbidden, connects: () => connects, whoamis: () => whoamis, clock }
 }
+
+/**
+ * The sites where the test's stand-in draws Claude Code's own rows: every one
+ * but the band above the prompt. The band is a row per plugin, so a stand-in
+ * answering there would be a row of the test's own beside the plugin's, not
+ * what lies beneath it; beneath the plugin's row is the node Claude Code draws.
+ */
+export const STAND_IN_SITES: RenderComponent[] = [
+  'AskUserQuestion',
+  'UserMessage',
+  'AssistantMessage',
+  'ToolUse',
+  'ToolResult',
+  'ToolGroup',
+  'ToolProgress',
+  'CommandOutput',
+  'Spinner',
+  'TurnDuration',
+  'InfoNotice',
+  'SessionMode',
+  'PromptHint',
+  'Pane',
+  'Placed',
+  'Backdrop',
+]
 
 /**
  * A row as Claude Code's own stand-in drew it, showing `text`: Claude Code

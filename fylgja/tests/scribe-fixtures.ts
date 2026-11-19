@@ -6,7 +6,7 @@ import { isRecord } from '../hooks/payload'
 import type { Ran } from '../hooks/scribe/git'
 import type { Row } from '../hooks/scribe/delta'
 import { HEADLINES, NOTES } from '../hooks/scribe/view'
-import { ACCOUNT, answer, CONNECTED, eventsOf, idOf, MANIFEST, MANIFEST_PATH, REPORT, SESSION_ID } from './fixtures'
+import { ACCOUNT, answer, CONNECTED, eventsOf, idOf, MANIFEST, MANIFEST_PATH, REPORT, SESSION_ID, STAND_IN_SITES } from './fixtures'
 
 export { SESSION_ID }
 import type { Reported } from './fixtures'
@@ -79,7 +79,10 @@ export function carded(line: string): string {
   return `ᚠ fylgja${head}${rows}${NOTES.receipt}${keys}`
 }
 
-/** The band as the stand-in for Claude Code draws it when the plugin draws nothing there at all. */
+/**
+ * The band as Claude Code draws it when the plugin draws nothing there at all:
+ * the node Claude Code draws beneath the plugin's row, read as these words.
+ */
 export const EMPTY = 'engine: AbovePrompt'
 
 /** The mark at rest, as the band above the prompt draws it while it has nothing of its own to show. */
@@ -279,7 +282,7 @@ export function stage(on: On, options: StageOptions = {}): Stage {
       usage: null,
     }
   })
-  on('ui.render', ($, e) => {
+  on('ui.render', { component: STAND_IN_SITES }, ($, e) => {
     const props = e.props as { text?: string }
 
     return { type: 'Text', props: {}, children: [`engine: ${props.text ?? e.component}`] }
@@ -671,6 +674,9 @@ const BAND = {
 function words(node: unknown, into: string[]): void {
   if (typeof node === 'string') {
     into.push(node)
+  } else if (typeof node === 'object' && node !== null && (node as { type?: unknown }).type === 'engine') {
+    // What Claude Code draws beneath the plugin's row, where the plugin passed it on.
+    into.push(EMPTY)
   } else if (typeof node === 'object' && node !== null) {
     const { type, props, children } = node as {
       type?: unknown

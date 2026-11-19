@@ -349,7 +349,16 @@ describe('Scribe does nothing at all', () => {
   test('before a session has started', async ($, on) => {
     const set = stage(on)
 
-    await idle($, set)
+    // Who is signed in is never asked as a turn ends, so nothing vouches for the account yet: the band is Claude Code's.
+    await idle($, set, EMPTY)
+
+    // It is asked at the next step, and the mark rests; still nothing of Scribe's was asked or called.
+    await step($, 0, [])
+
+    expect(set.whoamis).toHaveLength(1)
+    expect(set.asked, 'no model call').toEqual([])
+    expect(set.calls, 'no call to Fylgja').toEqual([])
+    expect(await shown($)).toBe(QUIET)
   })
 
   test('for an agent’s turn', async ($, on) => {

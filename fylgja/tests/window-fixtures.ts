@@ -38,7 +38,8 @@ export function frame(on: On, answers: () => 'placed' | 'unplaced' | 'refused' =
 
     return { value: undefined } as never
   })
-  on('ui.focus', () => ({}))
+  // The ring moves onto the plugin's own elements, so the stand-in hears every plugin's.
+  on('ui.focus', { plugin: '*' }, () => ({}))
   on('ui.scroll', () => {
     seen.scrolls += 1
 

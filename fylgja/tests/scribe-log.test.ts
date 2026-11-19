@@ -396,6 +396,8 @@ describe('a background job that goes on with the conversation as a fork', () => 
     await turn($, set, dev('six retries'), claude('Changed.', edit(FILE)))
 
     expect(set.of('amend_memory')).toEqual([expect.objectContaining({ atom_id: SECOND, op: 'fix', content: 'Cap retries at six.' })])
+    // The log is written apart from the hook that changed the session, once that hook has handed back.
+    await set.clock.settle()
     expect(foldedOf(set, JOB).records.at(-1)?.content).toBe('Cap retries at six.')
     expect(foldedOf(set, SESSION_ID).records.at(-1)?.content, 'what the job changed is its own').toBe('Cap retries at five.')
   })

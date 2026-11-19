@@ -82,7 +82,7 @@ describe('the mark above the prompt', () => {
     const ui = await $.ui.mount(BAND as never)
     const drawing = JSON.stringify(await ui.drawn())
 
-    expect(await ui.find({ type: 'Text', text: 'engine: AbovePrompt' }), 'what is beneath is passed on as it came').toBeDefined()
+    expect(await ui.keepsBeneath(), 'what is beneath is passed on as it came').toBe(true)
     // Drawn without chrome and dim, it reads as the line of text it was; a press on it is the one thing it takes.
     const marks = await ui.findAll({ type: 'Button' })
 
